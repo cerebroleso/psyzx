@@ -1,0 +1,11 @@
+bin/
+obj/
+*.db
+*.db-shm
+*.db-wal
+appsettings.json
+appsettings.Development.json
+.vscode/
+.idea/
+Music/
+Downloads/
