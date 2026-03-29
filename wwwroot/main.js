@@ -134,7 +134,10 @@ document.addEventListener('touchend', e => {
         DOM.rightSidebar.classList.remove('mobile-active');
     }
 
-    if (DOM.player.contains(e.target) && diffY > 50 && Math.abs(diffX) < 50) DOM.fullPlayer.classList.add('active');
+    if (DOM.player.contains(e.target) && diffY > 50 && Math.abs(diffX) < 50) {
+        DOM.fullPlayer.classList.add('active');
+        setTimeout(() => import('./player.js').then(p => p.recalcMarquees()), 300);
+    }
     
     if (DOM.fullPlayer.classList.contains('active') && e.target.type !== 'range') {
         if (isDesktop && diffX < -50 && Math.abs(diffY) < 50) DOM.fullPlayer.classList.remove('active');
@@ -145,6 +148,7 @@ document.addEventListener('touchend', e => {
 DOM.playerMain.addEventListener('click', (e) => {
     if (e.target.closest('button') || e.target.closest('input')) return;
     DOM.fullPlayer.classList.add('active');
+    setTimeout(() => import('./player.js').then(p => p.recalcMarquees()), 300);
 });
 DOM.fpBtnClose.addEventListener('click', () => DOM.fullPlayer.classList.remove('active'));
 
