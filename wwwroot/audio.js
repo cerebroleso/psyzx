@@ -1,48 +1,26 @@
 import { DOM } from './dom.js';
 
-export const audioState = {
-    audioCtx: null,
-    source: null,
-    f60: null,
-    f250: null,
-    f1k: null,
-    f4k: null,
-    f8k: null,
-    f14k: null,
-    eqInitialized: false
+export let audioCtx;
+export let gainNode;
+
+export const initAudioEngine = () => {
+    if (audioCtx) return;
+    try {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        gainNode = audioCtx.createGain();
+        const source = audioCtx.createMediaElementSource(DOM.audioEl);
+        source.connect(gainNode);
+        gainNode.connect(audioCtx.destination);
+        
+        const savedBoost = localStorage.getItem('psyzx_boost') || '1.0';
+        gainNode.gain.value = parseFloat(savedBoost);
+    } catch (e) {
+        console.error("Audio Engine bloccato o non supportato", e);
+    }
 };
 
-export const initEQ = () => {
-    if (audioState.eqInitialized) return;
-    try {
-        audioState.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        audioState.source = audioState.audioCtx.createMediaElementSource(DOM.audioEl);
-        
-        const createFilter = (freq, type = 'peaking') => {
-            const f = audioState.audioCtx.createBiquadFilter();
-            f.type = type;
-            f.frequency.value = freq;
-            if (type === 'peaking') f.Q.value = 1;
-            return f;
-        };
-
-        audioState.f60 = createFilter(60, 'lowshelf');
-        audioState.f250 = createFilter(250);
-        audioState.f1k = createFilter(1000);
-        audioState.f4k = createFilter(4000);
-        audioState.f8k = createFilter(8000);
-        audioState.f14k = createFilter(14000, 'highshelf');
-        
-        audioState.source.connect(audioState.f60);
-        audioState.f60.connect(audioState.f250);
-        audioState.f250.connect(audioState.f1k);
-        audioState.f1k.connect(audioState.f4k);
-        audioState.f4k.connect(audioState.f8k);
-        audioState.f8k.connect(audioState.f14k);
-        audioState.f14k.connect(audioState.audioCtx.destination);
-        
-        audioState.eqInitialized = true;
-    } catch (e) {}
+export const setVolumeBoost = (val) => {
+    if (gainNode) gainNode.gain.value = parseFloat(val);
 };
 
 export const syncVolume = (val) => {
@@ -52,25 +30,20 @@ export const syncVolume = (val) => {
 };
 
 export const setupAudioEvents = () => {
-    const sliders = [
-        { el: DOM.eq60, filter: 'f60' },
-        { el: DOM.eq250, filter: 'f250' },
-        { el: DOM.eq1k, filter: 'f1k' },
-        { el: DOM.eq4k, filter: 'f4k' },
-        { el: DOM.eq8k, filter: 'f8k' },
-        { el: DOM.eq14k, filter: 'f14k' }
-    ];
-
-    sliders.forEach(s => {
-        if (!s.el) return;
-        s.el.addEventListener('input', (e) => {
-            initEQ();
-            if(audioState.audioCtx && audioState.audioCtx.state === 'suspended') audioState.audioCtx.resume();
-            const val = parseFloat(e.target.value);
-            if (audioState[s.filter]) audioState[s.filter].gain.value = val;
-        });
+    const init = () => {
+        initAudioEngine();
+        if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+        document.removeEventListener('click', init);
+        document.removeEventListener('touchstart', init);
+    };
+    
+    document.addEventListener('click', init);
+    document.addEventListener('touchstart', init, {passive: true});
+    
+    DOM.audioEl.addEventListener('play', () => {
+        if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
     });
 
-    if(DOM.volSlider) DOM.volSlider.addEventListener('input', (e) => syncVolume(e.target.value));
-    if(DOM.fpVolSlider) DOM.fpVolSlider.addEventListener('input', (e) => syncVolume(e.target.value));
+    if (DOM.volSlider) DOM.volSlider.addEventListener('input', e => syncVolume(e.target.value));
+    if (DOM.fpVolSlider) DOM.fpVolSlider.addEventListener('input', e => syncVolume(e.target.value));
 };

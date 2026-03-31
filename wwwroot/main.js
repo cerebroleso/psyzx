@@ -3,7 +3,7 @@ import { state } from './state.js';
 import { api } from './api.js';
 import { setupAudioEvents } from './audio.js';
 import { setupPlayerEvents, loadState } from './player.js';
-import { navigateTo } from './views.js';
+import { navigateTo } from './router.js';
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 
@@ -180,7 +180,7 @@ document.addEventListener('touchend', e => {
     const diffY = touchStartY - e.changedTouches[0].clientY;
     const isDesktop = window.innerWidth > 850;
 
-    if (!isDesktop && touchStartX > 15 && touchStartX < window.innerWidth * 0.7 && diffX < -40 && Math.abs(diffY) < 40) {
+    if (!isDesktop && touchStartX > 20 && touchStartX < window.innerWidth * 0.7 && diffX < -40 && Math.abs(diffY) < 40) {
         DOM.sidebar.classList.add('mobile-active');
     }
     if (!isDesktop && DOM.sidebar.classList.contains('mobile-active') && diffX > 40 && Math.abs(diffY) < 40) {
@@ -221,12 +221,6 @@ window.addEventListener('keydown', (e) => {
     }
     if (e.key === 'l') { 
         import('./player.js').then(p => p.playNext()); 
-    }
-    if (e.key === 'k') { 
-        import('./audio.js').then(a => a.syncVolume(Math.min(100, DOM.audioEl.volume * 100 + 10))); 
-    }
-    if (e.key === 'j') { 
-        import('./audio.js').then(a => a.syncVolume(Math.max(0, DOM.audioEl.volume * 100 - 10))); 
     }
 });
 

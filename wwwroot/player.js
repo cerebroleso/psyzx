@@ -1,7 +1,7 @@
 import { DOM } from './dom.js';
 import { state } from './state.js';
 import { formatTime, updateThemeColor, showToast } from './utils.js';
-import { renderTracks, renderTopPlayed, renderAllTracks, renderSearch, navigateTo } from './views.js';
+import { navigateTo } from './router.js';
 
 export const updatePositionState = () => {
     if ('mediaSession' in navigator && navigator.mediaSession.setPositionState) {
@@ -60,25 +60,17 @@ export const recalcMarquees = () => {
 };
 
 export const attachTrackEvents = (item, track, sourcePlaylist, index) => {
-    const contentHTML = item.innerHTML;
-    item.innerHTML = '';
-    const bg = document.createElement('div');
-    bg.className = 'swipe-bg';
-    bg.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>';
-    const content = document.createElement('div');
-    content.className = 'list-item-wrapper'; 
-    content.style.position = 'relative';
-    content.style.zIndex = '1';
-    content.innerHTML = contentHTML;
-    item.appendChild(bg);
-    item.appendChild(content);
-
+    const content = item.querySelector('.list-item-content');
+    if(!content) return;
+    
     let startX = 0, currentX = 0, isSwiping = false, hasVibrated = false;
 
     content.addEventListener('touchstart', e => {
         startX = e.touches[0].clientX;
         isSwiping = false; hasVibrated = false;
-        content.style.transition = 'none'; bg.style.transition = 'none';
+        content.style.transition = 'none';
+        const bg = item.querySelector('.swipe-bg');
+        if(bg) bg.style.transition = 'none';
     }, {passive: true});
 
     content.addEventListener('touchmove', e => {
@@ -86,6 +78,8 @@ export const attachTrackEvents = (item, track, sourcePlaylist, index) => {
         if (Math.abs(currentX) > 10) isSwiping = true;
         if (currentX > 0 && currentX < 100) {
             content.style.transform = `translateX(${currentX}px)`;
+            const bg = item.querySelector('.swipe-bg');
+            if(!bg) return;
             bg.style.width = `${currentX}px`;
             const icon = bg.querySelector('svg');
             if (currentX > 60) {
@@ -102,10 +96,14 @@ export const attachTrackEvents = (item, track, sourcePlaylist, index) => {
 
     content.addEventListener('touchend', () => {
         content.style.transition = 'transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1)';
-        bg.style.transition = 'width 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), background-color 0.3s';
-        content.style.transform = 'translateX(0)'; bg.style.width = '0px';
-        const icon = bg.querySelector('svg');
-        if (icon) icon.style.transform = 'translate(-50%, -50%) scale(1)';
+        content.style.transform = 'translateX(0)';
+        const bg = item.querySelector('.swipe-bg');
+        if(bg) {
+            bg.style.transition = 'width 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), background-color 0.3s';
+            bg.style.width = '0px';
+            const icon = bg.querySelector('svg');
+            if (icon) icon.style.transform = 'translate(-50%, -50%) scale(1)';
+        }
         if (currentX > 60) queueTrack(track);
         setTimeout(() => { isSwiping = false; currentX = 0; }, 50);
     });
