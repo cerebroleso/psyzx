@@ -1,45 +1,169 @@
+import { state } from './state.js';
+
 export const api = {
-    checkAuth: async () => {
-        const res = await fetch('/api/auth/check');
-        return res.status !== 401;
-    },
-    login: async (fd) => {
-        return await fetch('/api/auth/login', { method: 'POST', body: fd });
-    },
-    getTracks: async () => {
-        const res = await fetch('/api/Tracks');
-        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-        return await res.json();
-    },
-    scanLibrary: async () => {
-        return await fetch('/api/System/scan', { method: 'POST' });
-    },
-    getStats: async () => {
-        const res = await fetch('/api/System/stats');
-        return await res.json();
-    },
-    getQueue: async () => {
-        const res = await fetch('/api/System/queue');
-        if (res.ok) return await res.json();
-        return null;
-    },
-    ytdlp: async (body) => {
-        const res = await fetch('/api/System/ytdlp', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-        });
-        return { ok: res.ok, data: await res.json() };
-    },
-    stopQueue: async () => {
-        const res = await fetch('/api/System/stop', { method: 'POST' });
-        return await res.json();
-    },
-    getLyrics: async (id) => {
+    baseUrl: '/api',
+
+    async fetchWithTimeout(endpoint, options = {}) {
+        const timeout = 5000;
+        const controller = new AbortController();
+        const id = setTimeout(() => controller.abort(), timeout);
+
         try {
-            const res = await fetch(`/api/Tracks/lyrics/${id}`);
-            if (res.ok) return await res.text();
+            const response = await fetch(`${this.baseUrl}${endpoint}`, {
+                credentials: 'same-origin',
+                ...options,
+                signal: controller.signal
+            });
+            clearTimeout(id);
+            return response;
+        } catch (error) {
+            clearTimeout(id);
+            if (error.name === 'AbortError') {
+                throw new Error('TIMEOUT');
+            }
+            throw new Error('NETWORK_ERROR');
+        }
+    },
+
+    async checkAuth() {
+        try {
+            const res = await this.fetchWithTimeout('/Auth/check');
+            return res.ok;
+        } catch {
+            return false;
+        }
+    },
+
+    async login(formData) {
+        try {
+            return await this.fetchWithTimeout('/Auth/login', {
+                method: 'POST',
+                body: new URLSearchParams(formData),
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+            });
+        } catch {
+            return { ok: false };
+        }
+    },
+
+    async getTracks() {
+        try {
+            const res = await this.fetchWithTimeout('/Tracks');
+            if (!res.ok) {
+                if (res.status === 503) {
+                    const data = await res.json();
+                    if (data.offlineMode) return [];
+                }
+                throw new Error('Errore server');
+            }
+            return await res.json();
+        } catch (e) {
+            if (e.message === 'TIMEOUT' || e.message === 'NETWORK_ERROR') {
+                document.body.classList.add('offline-mode');
+                try {
+                    const cache = await caches.open('psyzx-data-v7');
+                    const cachedRes = await cache.match(`${this.baseUrl}/Tracks`, { ignoreSearch: true });
+                    if (cachedRes) {
+                        return await cachedRes.json();
+                    }
+                } catch (cacheErr) {}
+                throw new Error('Sei offline e non ci sono dati in cache.');
+            }
+            throw e;
+        }
+    },
+
+    async scanLibrary() {
+        try {
+            return await this.fetchWithTimeout('/System/scan', { method: 'POST' });
+        } catch (e) {
+            throw new Error('Impossibile scansionare offline');
+        }
+    },
+
+    async getStats() {
+        try {
+            const res = await this.fetchWithTimeout('/Tracks/stats');
+            if (!res.ok) throw new Error();
+            return await res.json();
+        } catch {
+            throw new Error('Offline');
+        }
+    },
+
+    async getQueue() {
+        try {
+            const res = await this.fetchWithTimeout('/System/queue');
+            if (!res.ok) throw new Error();
+            return await res.json();
+        } catch {
+            throw new Error('Offline');
+        }
+    },
+
+    async ytdlp(data) {
+        try {
+            const res = await this.fetchWithTimeout('/System/ytdlp', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+            const json = await res.json();
+            return { ok: res.ok, data: json };
+        } catch {
+            throw new Error('NETWORK_ERROR');
+        }
+    },
+
+    async stopQueue() {
+        try {
+            const res = await this.fetchWithTimeout('/System/stop', { method: 'POST' });
+            return await res.json();
+        } catch {
+            throw new Error('NETWORK_ERROR');
+        }
+    },
+
+    async getLyrics(id) {
+        try {
+            const track = state.allTracks.find(t => t.id === id);
+            if (!track) return null;
+            const album = state.albumsMap.get(track.albumId);
+            const artist = album ? album.artistName : '';
+            const title = track.title;
+            const url = `/System/lyrics?artist=${encodeURIComponent(artist)}&title=${encodeURIComponent(title)}`;
+            const res = await this.fetchWithTimeout(url);
+            if (!res.ok) return null;
+            const data = await res.json();
+            return data.lrc;
+        } catch {
             return null;
-        } catch { return null; }
+        }
+    },
+
+    async updateArtist(id, name, imagePath) {
+        try {
+            const res = await this.fetchWithTimeout(`/System/artist/${id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, imagePath })
+            });
+            return res.ok;
+        } catch {
+            return false;
+        }
+    },
+
+    async updateAlbum(id, title, coverPath) {
+        try {
+            const res = await this.fetchWithTimeout(`/System/album/${id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ title, coverPath })
+            });
+            return res.ok;
+        } catch {
+            return false;
+        }
     }
 };

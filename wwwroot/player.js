@@ -14,6 +14,21 @@ export const updatePositionState = () => {
     }
 };
 
+export const syncPlayState = () => {
+    const isPaused = DOM.audioEl.paused || !DOM.audioEl.src;
+    if (isPaused) {
+        DOM.iconPlay.classList.remove('hidden');
+        DOM.iconPause.classList.add('hidden');
+        DOM.fpIconPlay.classList.remove('hidden');
+        DOM.fpIconPause.classList.add('hidden');
+    } else {
+        DOM.iconPlay.classList.add('hidden');
+        DOM.iconPause.classList.remove('hidden');
+        DOM.fpIconPlay.classList.add('hidden');
+        DOM.fpIconPause.classList.remove('hidden');
+    }
+};
+
 export const queueTrack = (track) => {
     if (state.currentPlaylist.length === 0) {
         state.currentPlaylist.push(track);
@@ -51,7 +66,9 @@ export const attachTrackEvents = (item, track, sourcePlaylist, index) => {
     bg.className = 'swipe-bg';
     bg.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>';
     const content = document.createElement('div');
-    content.className = 'list-item-content';
+    content.className = 'list-item-wrapper'; 
+    content.style.position = 'relative';
+    content.style.zIndex = '1';
     content.innerHTML = contentHTML;
     item.appendChild(bg);
     item.appendChild(content);
@@ -110,17 +127,17 @@ export const updatePlayerUI = (track, album) => {
 
     recalcMarquees();
 
-    const imgUrl = album.coverPath ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&v=${state.appSessionVersion}` : '';
+    const imgUrl = album.coverPath ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}` : '';
     const defImg = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxIDEiPjxyZWN0IHdpZHRoPSIxIiBoZWlnaHQ9IjEiIGZpbGw9IiMzMzMiLz48L3N2Zz4=';
     
+    DOM.npCover.onerror = () => { DOM.npCover.src = defImg; };
+    DOM.fpBigCover.onerror = () => { DOM.fpBigCover.src = defImg; };
+
     DOM.npCover.src = imgUrl || defImg;
     DOM.fpBigCover.src = imgUrl || defImg;
     updateThemeColor(imgUrl);
 
-    DOM.iconPlay.classList.add('hidden');
-    DOM.iconPause.classList.remove('hidden');
-    DOM.fpIconPlay.classList.add('hidden');
-    DOM.fpIconPause.classList.remove('hidden');
+    syncPlayState();
     
     const extMatch = track.filePath.match(/\.([a-zA-Z0-9]+)$/);
     const ext = extMatch ? extMatch[1].toUpperCase() : 'UNK';
@@ -168,7 +185,6 @@ export const saveState = () => {
 export const loadState = () => {
     const savedPlaylist = localStorage.getItem('psyzx_playlist');
     const savedIndex = localStorage.getItem('psyzx_index');
-    const savedTime = localStorage.getItem('psyzx_time');
     if (savedPlaylist && savedIndex) {
         state.currentPlaylist = JSON.parse(savedPlaylist);
         state.currentIndex = parseInt(savedIndex);
@@ -178,18 +194,14 @@ export const loadState = () => {
             updatePlayerUI(track, album);
             DOM.audioEl.src = `/api/Tracks/stream/${track.id}`;
             
-            DOM.iconPlay.classList.remove('hidden');
-            DOM.iconPause.classList.add('hidden');
-            DOM.fpIconPlay.classList.remove('hidden');
-            DOM.fpIconPause.classList.add('hidden');
+            syncPlayState();
             
-            if (savedTime) {
-                DOM.audioEl.currentTime = parseFloat(savedTime);
-                DOM.timeCurrentEl.textContent = formatTime(parseFloat(savedTime));
-                DOM.fpTimeCurrent.textContent = formatTime(parseFloat(savedTime));
+            const savedTime = localStorage.getItem('psyzx_time');
+            if (savedTime && parseFloat(savedTime) > 0) {
                 DOM.audioEl.addEventListener('loadedmetadata', () => {
                     DOM.audioEl.currentTime = parseFloat(savedTime);
-                    updatePositionState();
+                    DOM.timeCurrentEl.textContent = formatTime(parseFloat(savedTime));
+                    DOM.fpTimeCurrent.textContent = formatTime(parseFloat(savedTime));
                 }, { once: true });
             }
         }
@@ -204,8 +216,12 @@ export const playTrack = (index) => {
     const track = state.currentPlaylist[state.currentIndex];
     const album = state.albumsMap.get(track.albumId);
 
+    const streamUrl = `/api/Tracks/stream/${track.id}`;
+
+    localStorage.removeItem('psyzx_time');
     DOM.audioEl.pause();
-    DOM.audioEl.src = `/api/Tracks/stream/${track.id}`;
+    DOM.audioEl.currentTime = 0;
+    DOM.audioEl.src = streamUrl;
     DOM.audioEl.load();
     
     const startTime = performance.now();
@@ -215,26 +231,22 @@ export const playTrack = (index) => {
         playPromise.then(() => {
             state.lastFetchTime = Math.round(performance.now() - startTime);
             updatePositionState();
+            syncPlayState();
         }).catch(err => {
-            showToast('Tocca Play per avviare (iOS Policy)');
+            showToast('Tocca Play per avviare');
+            syncPlayState();
         });
     }
 
     updatePlayerUI(track, album);
     saveState();
-
-    const hash = window.location.hash;
-    if (hash.startsWith('#album/')) renderTracks(track.albumId);
-    else if (hash === '#top') renderTopPlayed();
-    else if (hash === '#all') renderAllTracks();
-    else if (hash.startsWith('#search/')) renderSearch(decodeURIComponent(hash.split('/')[1]));
-    else if (hash === '#lyrics') navigateTo('#lyrics');
 };
 
 export const togglePlay = () => {
     if (!DOM.audioEl.src && state.currentPlaylist.length > 0) return playTrack(state.currentIndex > -1 ? state.currentIndex : 0);
     if (!DOM.audioEl.src) return;
     if (DOM.audioEl.paused) DOM.audioEl.play(); else DOM.audioEl.pause();
+    syncPlayState();
 };
 
 export const playNext = (isPreSwiped = false) => {
@@ -273,13 +285,13 @@ export const toggleRepeat = () => {
 };
 
 export const setupPlayerEvents = () => {
+    const defImg = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxIDEiPjxyZWN0IHdpZHRoPSIxIiBoZWlnaHQ9IjEiIGZpbGw9IiMzMzMiLz48L3N2Zz4=';
+    DOM.npCover.addEventListener('error', (e) => { e.target.src = defImg; });
+    DOM.fpBigCover.addEventListener('error', (e) => { e.target.src = defImg; });
+
     DOM.audioEl.addEventListener('play', () => {
         if ('mediaSession' in navigator) navigator.mediaSession.playbackState = "playing";
-        DOM.iconPlay.classList.add('hidden');
-        DOM.iconPause.classList.remove('hidden');
-        DOM.fpIconPlay.classList.add('hidden');
-        DOM.fpIconPause.classList.remove('hidden');
-        
+        syncPlayState();
         if (window.extractedColor) {
             document.documentElement.style.setProperty('--accent-color', window.extractedColor);
             document.documentElement.style.setProperty('--accent-dark', window.extractedDark);
@@ -289,11 +301,7 @@ export const setupPlayerEvents = () => {
 
     DOM.audioEl.addEventListener('pause', () => {
         if ('mediaSession' in navigator) navigator.mediaSession.playbackState = "paused";
-        DOM.iconPause.classList.add('hidden');
-        DOM.iconPlay.classList.remove('hidden');
-        DOM.fpIconPause.classList.add('hidden');
-        DOM.fpIconPlay.classList.remove('hidden');
-        
+        syncPlayState();
         document.documentElement.style.setProperty('--accent-color', '#d946ef');
         document.documentElement.style.setProperty('--accent-dark', 'rgba(217, 70, 239, 0.2)');
     });
@@ -301,22 +309,16 @@ export const setupPlayerEvents = () => {
     DOM.audioEl.addEventListener('ended', () => state.isRepeat ? (DOM.audioEl.currentTime = 0, DOM.audioEl.play()) : playNext());
 
     DOM.audioEl.addEventListener('timeupdate', () => {
-        if (!DOM.audioEl.duration) return;
+        if (!DOM.audioEl.duration || DOM.audioEl.currentTime < 2) return;
         const current = DOM.audioEl.currentTime, total = DOM.audioEl.duration;
         DOM.timeCurrentEl.textContent = formatTime(current); DOM.fpTimeCurrent.textContent = formatTime(current);
-        DOM.progressBar.style.width = `${(current / total) * 100}%`; DOM.fpProgressBar.style.width = `${(current / total) * 100}%`;
+        
+        const pct = Math.min(100, (current / total) * 100);
+        DOM.progressBar.style.width = `${pct}%`; 
+        DOM.fpProgressBar.style.width = `${pct}%`;
+        
         localStorage.setItem('psyzx_time', current);
         if (Math.floor(current) % 5 === 0) updatePositionState();
-        if (window.location.hash === '#lyrics') {
-            const lines = document.querySelectorAll('.lrc-line');
-            let activeLine = null;
-            lines.forEach(line => { if (current >= parseFloat(line.dataset.time)) activeLine = line; });
-            if (activeLine && !activeLine.classList.contains('active')) {
-                lines.forEach(l => l.classList.remove('active'));
-                activeLine.classList.add('active');
-                activeLine.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            }
-        }
     });
 
     DOM.audioEl.addEventListener('loadedmetadata', () => {
@@ -328,8 +330,7 @@ export const setupPlayerEvents = () => {
     const seek = (e, container) => {
         if (!DOM.audioEl.duration) return;
         const rect = container.getBoundingClientRect();
-        const percent = (e.clientX - rect.left) / rect.width;
-        DOM.audioEl.currentTime = percent * DOM.audioEl.duration;
+        DOM.audioEl.currentTime = ((e.clientX - rect.left) / rect.width) * DOM.audioEl.duration;
         updatePositionState();
     };
     DOM.progressContainer.addEventListener('click', (e) => seek(e, DOM.progressContainer));
@@ -339,8 +340,16 @@ export const setupPlayerEvents = () => {
     DOM.fpBtnPlay.addEventListener('click', togglePlay); DOM.fpBtnNext.addEventListener('click', () => playNext()); DOM.fpBtnPrev.addEventListener('click', () => playPrev());
     DOM.btnShuffle.addEventListener('click', () => toggleShuffle()); DOM.fpBtnShuffle.addEventListener('click', () => toggleShuffle());
     DOM.btnRepeat.addEventListener('click', () => toggleRepeat()); DOM.fpBtnRepeat.addEventListener('click', () => toggleRepeat());
-    if(DOM.btnLyrics) DOM.btnLyrics.addEventListener('click', () => window.location.hash = '#lyrics');
     
+    if (DOM.fpEqMaster) {
+        DOM.fpEqMaster.addEventListener('input', (e) => {
+            const val = e.target.value;
+            [DOM.eq60, DOM.eq250, DOM.eq1k, DOM.eq4k, DOM.eq8k, DOM.eq14k].forEach(eq => {
+                if(eq) { eq.value = val; eq.dispatchEvent(new Event('input', { bubbles: true })); }
+            });
+        });
+    }
+
     if(DOM.btnDownload) DOM.btnDownload.addEventListener('click', () => {
         if (state.currentIndex < 0) return;
         const track = state.currentPlaylist[state.currentIndex];

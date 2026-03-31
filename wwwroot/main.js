@@ -6,9 +6,6 @@ import { setupPlayerEvents, loadState } from './player.js';
 import { navigateTo } from './views.js';
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
-window.addEventListener('online', () => document.body.classList.remove('offline-mode'));
-window.addEventListener('offline', () => document.body.classList.add('offline-mode'));
-if (!navigator.onLine) document.body.classList.add('offline-mode');
 
 const processData = (data) => {
     state.artistsMap.clear();
@@ -81,6 +78,50 @@ if (DOM.loginForm) {
     });
 }
 
+if (DOM.btnCancelEdit) {
+    DOM.btnCancelEdit.addEventListener('click', () => {
+        DOM.editModal.classList.add('hidden');
+    });
+}
+
+if (DOM.editName && DOM.editImage) {
+    DOM.editName.addEventListener('input', (e) => {
+        const oldName = e.target.dataset.oldName;
+        const newName = e.target.value;
+        if (oldName && newName && DOM.editImage.value.includes(oldName)) {
+            DOM.editImage.value = DOM.editImage.value.replace(oldName, newName);
+        }
+        e.target.dataset.oldName = newName;
+    });
+}
+
+if (DOM.editForm) {
+    DOM.editForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const id = parseInt(DOM.editId.value);
+        const type = DOM.editType.value;
+        const name = DOM.editName.value;
+        const image = DOM.editImage.value;
+        
+        DOM.editModal.classList.add('hidden');
+        DOM.loaderOverlay.classList.add('active');
+        
+        let success = false;
+        if (type === 'artist') {
+            success = await api.updateArtist(id, name, image);
+        } else if (type === 'album') {
+            success = await api.updateAlbum(id, name, image);
+        }
+        
+        if (success) {
+            window.location.reload(); 
+        } else {
+            alert('Errore di salvataggio. Controlla che il backend Arch sia in ascolto sui nuovi endpoint.');
+            DOM.loaderOverlay.classList.remove('active');
+        }
+    });
+}
+
 if (DOM.searchInput) {
     DOM.searchInput.addEventListener('input', (e) => {
         const query = e.target.value.trim().toLowerCase();
@@ -91,7 +132,19 @@ if (DOM.searchInput) {
 if (DOM.btnRefreshLib) {
     DOM.btnRefreshLib.addEventListener('click', async () => {
         DOM.loaderOverlay.classList.add('active');
-        try { await api.scanLibrary(); await bootstrapApp(); } catch(e) {}
+        try { await api.scanLibrary(); window.location.reload(); } catch(e) {}
+    });
+}
+
+if (DOM.btnLeftSidebar) {
+    DOM.btnLeftSidebar.addEventListener('click', () => {
+        if (DOM.sidebar) DOM.sidebar.classList.toggle('mobile-active');
+    });
+}
+
+if (DOM.btnCloseSidebar) {
+    DOM.btnCloseSidebar.addEventListener('click', () => {
+        if (DOM.sidebar) DOM.sidebar.classList.remove('mobile-active');
     });
 }
 
@@ -127,8 +180,12 @@ document.addEventListener('touchend', e => {
     const diffY = touchStartY - e.changedTouches[0].clientY;
     const isDesktop = window.innerWidth > 850;
 
-    if (touchStartX < 30 && diffX < -50 && Math.abs(diffY) < 50) DOM.sidebar.classList.add('mobile-active');
-    if (DOM.sidebar.classList.contains('mobile-active') && diffX > 50 && Math.abs(diffY) < 50) DOM.sidebar.classList.remove('mobile-active');
+    if (!isDesktop && touchStartX > 15 && touchStartX < window.innerWidth * 0.7 && diffX < -40 && Math.abs(diffY) < 40) {
+        DOM.sidebar.classList.add('mobile-active');
+    }
+    if (!isDesktop && DOM.sidebar.classList.contains('mobile-active') && diffX > 40 && Math.abs(diffY) < 40) {
+        DOM.sidebar.classList.remove('mobile-active');
+    }
     
     if (DOM.rightSidebar && DOM.rightSidebar.classList.contains('mobile-active') && diffY < -50 && Math.abs(diffX) < 50) {
         DOM.rightSidebar.classList.remove('mobile-active');

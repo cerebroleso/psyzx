@@ -1,10 +1,12 @@
 namespace psyzx.Controllers;
 
+using psyzx.Data;
 using System.Collections.Concurrent;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
 using System.Diagnostics;
 using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
 
 [Authorize]
 [ApiController]
@@ -23,32 +25,6 @@ public class SystemController : ControllerBase
         _http = httpClientFactory.CreateClient();
         _http.DefaultRequestHeaders.Add("User-Agent", "psyzx/1.0");
         _scopeFactory = scopeFactory;
-    }
-
-    [HttpGet("stats")]
-    public IActionResult GetStats()
-    {
-        var proc = Process.GetCurrentProcess();
-        double appRamMb = proc.WorkingSet64 / 1024.0 / 1024.0;
-        
-        long sysTotalRam = 0;
-        long sysFreeRam = 0;
-
-        try
-        {
-            var meminfo = System.IO.File.ReadAllLines("/proc/meminfo");
-            sysTotalRam = long.Parse(meminfo[0].Replace("MemTotal:", "").Replace("kB", "").Trim()) / 1024;
-            sysFreeRam = long.Parse(meminfo[2].Replace("MemAvailable:", "").Replace("kB", "").Trim()) / 1024;
-        }
-        catch { }
-
-        return Ok(new
-        {
-            appRamUsageMb = Math.Round(appRamMb, 2),
-            appThreads = proc.Threads.Count,
-            sysRamTotalMb = sysTotalRam,
-            sysRamUsedMb = sysTotalRam - sysFreeRam
-        });
     }
 
     [HttpGet("lyrics")]
@@ -228,9 +204,103 @@ public class SystemController : ControllerBase
         _currentTrackInfo = "";
         Interlocked.Exchange(ref _isProcessing, 0); 
     }
+
+    [HttpPut("artist/{id}")]
+    public async Task<IActionResult> UpdateArtist(int id, [FromBody] ArtistUpdateDto dto, [FromServices] AppDbContext db, [FromServices] IConfiguration config)
+    {
+        var artist = await db.Artists.Include(a => a.Albums).ThenInclude(al => al.Tracks).FirstOrDefaultAsync(a => a.Id == id);
+        if (artist == null) return NotFound();
+
+        string oldName = artist.Name;
+        string newName = dto.name;
+        
+        var basePath = Path.GetFullPath(config["MusicSettings:BasePath"] ?? "Music");
+        var oldDir = Path.Combine(basePath, SanitizePath(oldName));
+        var newDir = Path.Combine(basePath, SanitizePath(newName));
+
+        if (Directory.Exists(oldDir) && !string.Equals(oldDir, newDir, StringComparison.OrdinalIgnoreCase))
+        {
+            Directory.Move(oldDir, newDir);
+            
+            if (!string.IsNullOrEmpty(artist.ImagePath))
+                artist.ImagePath = artist.ImagePath.Replace(SanitizePath(oldName), SanitizePath(newName));
+            
+            foreach (var album in artist.Albums)
+            {
+                if (!string.IsNullOrEmpty(album.CoverPath))
+                    album.CoverPath = album.CoverPath.Replace(SanitizePath(oldName), SanitizePath(newName));
+                    
+                foreach (var track in album.Tracks)
+                {
+                    if (!string.IsNullOrEmpty(track.FilePath))
+                        track.FilePath = track.FilePath.Replace(SanitizePath(oldName), SanitizePath(newName));
+                }
+            }
+        }
+
+        artist.Name = newName;
+        if (!string.IsNullOrEmpty(dto.imagePath)) artist.ImagePath = dto.imagePath;
+
+        await db.SaveChangesAsync();
+        return Ok();
+    }
+
+    [HttpPut("album/{id}")]
+    public async Task<IActionResult> UpdateAlbum(int id, [FromBody] AlbumUpdateDto dto, [FromServices] AppDbContext db, [FromServices] IConfiguration config)
+    {
+        var album = await db.Albums.Include(a => a.Artist).Include(a => a.Tracks).FirstOrDefaultAsync(a => a.Id == id);
+        if (album == null) return NotFound();
+
+        string artistName = album.Artist.Name;
+        string oldTitle = album.Title;
+        string newTitle = dto.title;
+
+        var basePath = Path.GetFullPath(config["MusicSettings:BasePath"] ?? "Music");
+        var oldDir = Path.Combine(basePath, SanitizePath(artistName), SanitizePath(oldTitle));
+        var newDir = Path.Combine(basePath, SanitizePath(artistName), SanitizePath(newTitle));
+
+        if (Directory.Exists(oldDir) && !string.Equals(oldDir, newDir, StringComparison.OrdinalIgnoreCase))
+        {
+            Directory.Move(oldDir, newDir);
+            
+            if (!string.IsNullOrEmpty(album.CoverPath))
+                album.CoverPath = album.CoverPath.Replace(SanitizePath(oldTitle), SanitizePath(newTitle));
+                
+            foreach (var track in album.Tracks)
+            {
+                if (!string.IsNullOrEmpty(track.FilePath))
+                    track.FilePath = track.FilePath.Replace(SanitizePath(oldTitle), SanitizePath(newTitle));
+            }
+        }
+
+        album.Title = newTitle;
+        if (!string.IsNullOrEmpty(dto.coverPath)) album.CoverPath = dto.coverPath;
+
+        await db.SaveChangesAsync();
+        return Ok();
+    }
+
+    private string SanitizePath(string name)
+    {
+        string invalidChars = new string(Path.GetInvalidFileNameChars()) + new string(Path.GetInvalidPathChars());
+        foreach (char c in invalidChars) name = name.Replace(c.ToString(), "_");
+        return name;
+    }
 }
 
 public class YtDlpRequest
 {
     public string url { get; set; } = string.Empty;
+}
+
+public class ArtistUpdateDto
+{
+    public string name { get; set; } = string.Empty;
+    public string imagePath { get; set; } = string.Empty;
+}
+
+public class AlbumUpdateDto
+{
+    public string title { get; set; } = string.Empty;
+    public string coverPath { get; set; } = string.Empty;
 }
