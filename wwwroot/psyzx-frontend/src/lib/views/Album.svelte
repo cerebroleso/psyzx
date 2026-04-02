@@ -14,6 +14,8 @@
         return a.title.localeCompare(b.title);
     }) : [];
 
+    $: discs = [...new Set(tracks.map(t => t.discNumber || 1))].sort((a,b) => a - b);
+
     $: totalSeconds = tracks.reduce((sum, t) => sum + t.durationSeconds, 0);
     $: hrs = Math.floor(totalSeconds / 3600);
     $: mins = Math.floor((totalSeconds % 3600) / 60);
@@ -207,20 +209,31 @@
                 <div style="text-align:center;">#</div><div>Title</div><div style="text-align:right;"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg></div>
             </div>
             
-            {#each tracks as track, index}
-                {@const pct = totalAlbumPlays > 0 ? ((track.playCount || 0) / totalAlbumPlays) * 100 : 0}
-                <div class="list-item" class:active={$currentPlaylist.length > 0 && $currentPlaylist[$currentIndex]?.id === track.id}>
-                    <div class="swipe-bg"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg></div>
-                    <div class="stat-bar" style="--stat-w: {mounted && viewMode === 'stats' ? pct : 0}%; transition: width 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) {index * 0.04}s;"></div>
-                    <div class="list-item-content" role="button" tabindex="0" use:swipeToQueue={track} on:click={() => playSpecificTrack(index)} on:keydown={(e) => e.key === 'Enter' && playSpecificTrack(index)}>
-                        <div class="list-item-num">{track.trackNumber > 0 ? track.trackNumber : index + 1}</div>
-                        <div style="min-width: 0;">
-                            <div class="list-item-title">{track.title}</div>
-                            <div class="list-item-artist">{album.artistName}</div>
-                        </div>
-                        <div class="list-item-time">{formatTime(track.durationSeconds)}</div>
+            {#each discs as disc}
+                {#if discs.length > 1}
+                    <div class="disc-header">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="2"></circle></svg>
+                        DISC {disc}
                     </div>
-                </div>
+                {/if}
+                
+                {#each tracks.filter(t => (t.discNumber || 1) === disc) as track}
+                    {@const globalIndex = tracks.findIndex(t => t.id === track.id)}
+                    {@const pct = totalAlbumPlays > 0 ? ((track.playCount || 0) / totalAlbumPlays) * 100 : 0}
+                    
+                    <div class="list-item" class:active={$currentPlaylist.length > 0 && $currentPlaylist[$currentIndex]?.id === track.id}>
+                        <div class="swipe-bg"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg></div>
+                        <div class="stat-bar" style="--stat-w: {mounted && viewMode === 'stats' ? pct : 0}%; transition: width 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) {globalIndex * 0.04}s;"></div>
+                        <div class="list-item-content" role="button" tabindex="0" use:swipeToQueue={track} on:click={() => playSpecificTrack(globalIndex)} on:keydown={(e) => e.key === 'Enter' && playSpecificTrack(globalIndex)}>
+                            <div class="list-item-num">{track.trackNumber > 0 ? track.trackNumber : globalIndex + 1}</div>
+                            <div style="min-width: 0;">
+                                <div class="list-item-title">{track.title}</div>
+                                <div class="list-item-artist">{album.artistName}</div>
+                            </div>
+                            <div class="list-item-time">{formatTime(track.durationSeconds)}</div>
+                        </div>
+                    </div>
+                {/each}
             {/each}
         </div>
     {/if}
@@ -247,6 +260,7 @@
         border-radius: 24px;
         padding: 20px;
         box-shadow: 0 8px 32px rgba(0,0,0,0.2), inset 1px 1px 0 rgba(255,255,255,0.05);
+        will-change: transform, backdrop-filter;
     }
 
     .album-hero { display: flex; gap: 24px; align-items: flex-end; margin-bottom: 0; }
@@ -267,6 +281,7 @@
         border-radius: 24px;
         padding: 16px;
         box-shadow: inset 1px 1px 0 rgba(255,255,255,0.05);
+        will-change: transform, backdrop-filter;
     }
 
     .max-glass .list-item { border-radius: 12px; background: transparent; border-bottom: 1px solid rgba(255,255,255,0.02); }
@@ -286,6 +301,12 @@
     .hoverable { transition: transform 0.2s, background 0.2s, color 0.2s; cursor: pointer; }
     .btn-main-play.hoverable:hover { transform: scale(1.05); background: var(--accent-color); color: black; }
     .btn-icon-bar.hoverable:hover { color: white; transform: scale(1.1); }
+
+    .disc-header {
+        font-size: 12px; font-weight: 800; color: var(--accent-color); letter-spacing: 1px;
+        padding: 24px 8px 8px 8px; border-bottom: 1px solid rgba(255,255,255,0.1); margin-bottom: 8px;
+        display: flex; align-items: center; gap: 8px; text-transform: uppercase;
+    }
 
     .ps2-scroll-wrapper { width: 100%; overflow-x: auto; overflow-y: hidden; padding-bottom: 40px; }
 

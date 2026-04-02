@@ -22,7 +22,7 @@
     const toggleDesktopSwap = () => isDesktopSwapActive.set(!$isDesktopSwapActive);
 
     const nukeCache = async () => {
-        if (confirm('Sei sicuro? Cancellerai tutti i brani scaricati offline e verrai sloggato.')) {
+        if (confirm('Are you sure? This will delete all cached tracks and settings.')) {
             localStorage.clear();
             try {
                 const keys = await caches.keys();
@@ -39,16 +39,16 @@
 
 <div class="view-wrapper" in:fade={{duration: 200}}>
     <div class="settings-header">
-        <h1>Impostazioni</h1>
+        <h1>Settings</h1>
     </div>
 
     <div class="settings-section">
-        <h2>Aspetto & UI</h2>
+        <h2>UI & Look</h2>
         
         <div class="setting-item">
             <div class="setting-info">
-                <span class="setting-title">Sfondo Globale Dinamico</span>
-                <span class="setting-desc">Applica il colore della canzone in riproduzione allo sfondo di tutta l'app.</span>
+                <span class="setting-title">Dynamic Background</span>
+                <span class="setting-desc">Applies the color of the active album for the entire app's background.</span>
             </div>
             <button class="toggle-btn" class:active={$isGlobalColorActive} on:click={toggleGlobalColor} aria-label="Toggle Global Background">
                 <div class="toggle-knob"></div>
@@ -58,7 +58,7 @@
         <div class="setting-item">
             <div class="setting-info">
                 <span class="setting-title">Max Glassmorphism</span>
-                <span class="setting-desc">Attiva un effetto di sfocatura estremo in stile iOS per la status bar e crea una capsula dedicata per il brano.</span>
+                <span class="setting-desc">Enables glassmorphism (IOS 26).</span>
             </div>
             <button class="toggle-btn" class:active={$isMaxGlassActive} on:click={toggleMaxGlass} aria-label="Toggle Max Glass">
                 <div class="toggle-knob"></div>
@@ -67,8 +67,8 @@
 
         <div class="setting-item">
             <div class="setting-info">
-                <span class="setting-title">Inverti Layout Status Bar (Desktop)</span>
-                <span class="setting-desc">Sposta le info della canzone a destra e i controlli del volume/bitrate a sinistra.</span>
+                <span class="setting-title">Invert Status Bar Layout (Desktop)</span>
+                <span class="setting-desc">Moves track's info to the right and volume/bitrate controls to the left.</span>
             </div>
             <button class="toggle-btn" class:active={$isDesktopSwapActive} on:click={toggleDesktopSwap} aria-label="Toggle Layout Swap">
                 <div class="toggle-knob"></div>
@@ -77,7 +77,7 @@
     </div>
 
     <div class="settings-section">
-        <h2>Hardware Pre-Amp</h2>
+        <h2>Software Pre-Amp</h2>
         
         <div class="setting-item-col">
             <div class="setting-info w-full">
@@ -85,7 +85,7 @@
                     <span class="setting-title">Gain Multiplier</span>
                     <span class="highlight-val">{currentBoost}x</span>
                 </div>
-                <span class="setting-desc mb-16">Aumenta il guadagno hardware del player in locale. Bypassa i limiti del server.</span>
+                <span class="setting-desc mb-16">Increases the gain of the local player (up to 3x).</span>
             </div>
             <input class="range-slider" type="range" min="0.5" max="3.0" step="0.1" value={currentBoost} on:input={updateBoost}>
         </div>
@@ -96,7 +96,7 @@
         
         <div class="setting-item-col">
             <div class="setting-info w-full">
-                <span class="setting-desc mb-16">Distrugge Service Worker, Storage e Database locale. Usare solo in caso di emergenza.</span>
+                <span class="setting-desc mb-16">Destroys Service Worker, Storage and Local Database. Use only as a last resort.</span>
                 <button class="btn-danger" on:click={nukeCache}>
                     <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"></path><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
                     Purge All Data

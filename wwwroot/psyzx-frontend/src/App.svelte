@@ -214,12 +214,13 @@
         </aside>
     </div>
 
-    <Player on:openFull={() => isFullPlayerOpen = true} />
+    <Player on:toggleFull={() => isFullPlayerOpen = !isFullPlayerOpen} />
     <FullPlayer isOpen={isFullPlayerOpen} on:close={() => isFullPlayerOpen = false} />
 </div>
 {/if}
 
 <style>
+    /* 1. RESET E LAYOUT GLOBALE */
     :global(body), :global(html) {
         background-color: #050505 !important;
         margin: 0; padding: 0;
@@ -246,12 +247,14 @@
         transition: padding 0.3s ease, gap 0.3s ease;
     }
 
+    /* 2. MAX GLASS LAYOUT - ESTETICA */
     .app-row.max-glass-layout {
         padding: 16px 16px 0 16px;
         gap: 16px;
         align-items: flex-start;
     }
 
+    /* Stile base aside (Standard) */
     :global(.app-row > aside) {
         background: rgba(0, 0, 0, 0.02) !important;
         backdrop-filter: blur(28px);
@@ -259,37 +262,43 @@
         border-right: 1px solid rgba(255,255,255,0.05);
     }
 
-    :global(.app-row.max-glass-layout > aside), :global(.app-row.max-glass-layout > main#main-view) {
+    /* Effetto Glass Avanzato */
+    :global(.app-row.max-glass-layout > aside), 
+    :global(.app-row.max-glass-layout > main#main-view) {
         border-radius: 24px !important;
         background: rgba(255, 255, 255, 0.05) !important;
-        backdrop-filter: blur(64px) saturate(200%) brightness(1.1) !important;
-        -webkit-backdrop-filter: blur(64px) saturate(200%) brightness(1.1) !important;
+        backdrop-filter: blur(32px) saturate(120%) !important;
+        -webkit-backdrop-filter: blur(32px) saturate(120%) !important;
         border: 1px solid rgba(255, 255, 255, 0.1) !important;
         box-shadow: 0 16px 40px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.1) !important;
         overflow-x: hidden;
         height: 100% !important;
+        will-change: transform;
     }
 
-    :global(.max-glass-layout .album-card), :global(.max-glass-layout .artist-card), :global(.max-glass-layout .playlist-card), :global(.max-glass-layout .grid-item), :global(.max-glass-layout .card) {
+    @supports (-moz-appearance:none) {
+        :global(.app-row.max-glass-layout > aside), :global(.app-row.max-glass-layout > main#main-view) {
+            backdrop-filter: blur(16px) !important;
+            background: rgba(255, 255, 255, 0.08) !important;
+        }
+    }
+
+    /* 3. CARD INTERNE (Accelerazione HW) */
+    :global(.max-glass-layout .album-card), :global(.max-glass-layout .artist-card), 
+    :global(.max-glass-layout .playlist-card), :global(.max-glass-layout .grid-item) {
         background: rgba(255, 255, 255, 0.05) !important;
-        backdrop-filter: blur(32px) saturate(150%) !important;
-        -webkit-backdrop-filter: blur(32px) saturate(150%) !important;
+        backdrop-filter: blur(24px) saturate(120%) !important;
+        -webkit-backdrop-filter: blur(24px) saturate(120%) !important;
         border: 1px solid rgba(255, 255, 255, 0.1) !important;
         border-radius: 24px !important;
         box-shadow: 0 8px 24px rgba(0,0,0,0.2), inset 1px 1px 0 rgba(255,255,255,0.1) !important;
         overflow: hidden;
+        transform: translate3d(0,0,0);
     }
 
-    :global(main#main-view) {
-        flex: 1;
-        overflow-y: auto;
-        position: relative;
-    }
-
-    :global(header), :global(.topbar), :global(#topbar) {
-        z-index: 10000 !important;
-        position: relative !important; 
-    }
+    /* 4. COMPONENTI DI SISTEMA */
+    :global(main#main-view) { flex: 1; overflow-y: auto; position: relative; }
+    :global(#topbar) { z-index: 10000 !important; position: relative !important; }
 
     :global(#right-sidebar) {
         width: 420px !important;
@@ -298,13 +307,14 @@
         border-left: 1px solid rgba(255,255,255,0.05);
     }
 
+    /* 5. SFONDI DINAMICI E AUTH */
     .global-dynamic-bg {
         position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
         z-index: -2; pointer-events: none;
         -webkit-mask-image: linear-gradient(to bottom, rgba(0,0,0,1) 0%, rgba(0,0,0,0) 100%);
         mask-image: linear-gradient(to bottom, rgba(0,0,0,1) 0%, rgba(0,0,0,0) 100%);
         opacity: 0.35;
-        transition: background-color 0.8s ease-in-out;
+        transition: background-color 0.8s ease;
     }
 
     .global-gradient-overlay {
@@ -318,61 +328,58 @@
         background: #000; display: flex; align-items: center; justify-content: center;
         z-index: 999999;
     }
-    
+
     .auth-card {
         background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1);
-        padding: 48px; border-radius: 16px; text-align: center; max-width: 400px; width: 90%;
-        backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
-        box-shadow: 0 20px 40px rgba(0,0,0,0.5);
+        padding: 48px; border-radius: 16px; text-align: center; max-width: 400px;
+        backdrop-filter: blur(20px); box-shadow: 0 20px 40px rgba(0,0,0,0.5);
     }
-    
-    .auth-card h2 { margin: 0 0 24px 0; font-size: 24px; color: white; }
-    
-    .auth-form { display: flex; flex-direction: column; gap: 16px; }
-    
+
     .auth-form input {
         width: 100%; padding: 14px; background: rgba(0,0,0,0.5); color: white;
-        border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; font-size: 14px;
-        box-sizing: border-box; outline: none; transition: border-color 0.2s;
+        border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; outline: none;
     }
-    
-    .auth-form input:focus { border-color: var(--accent-color); }
-    .auth-form input:disabled { opacity: 0.5; cursor: not-allowed; }
-    
-    .auth-error { color: #ef4444; font-size: 13px; font-weight: bold; margin-top: -4px; }
-    
+
     .btn-auth {
         background: var(--accent-color); color: black; border: none; padding: 14px;
         font-size: 16px; font-weight: bold; border-radius: 30px; cursor: pointer;
-        transition: transform 0.2s, opacity 0.2s; width: 100%; margin-top: 8px;
     }
-    
-    .btn-auth:hover:not(:disabled) { transform: scale(1.03); }
-    .btn-auth:disabled { opacity: 0.7; cursor: wait; }
 
+    /* 6. MEDIA QUERIES (FIX MOBILE ANTI-GLITCH) */
     @media (max-width: 768px) {
-        .app-row.max-glass-layout {
-            padding: 12px 12px 0 12px;
-            gap: 12px;
-        }
+        .app-row.max-glass-layout { padding: 12px 12px 0 12px; gap: 12px; }
 
+        /* Sidebar Posizionamento Mobile */
         :global(.app-row > aside:first-child) {
             position: fixed !important;
             top: 0 !important;
             left: 0 !important;
             height: 100dvh !important;
             z-index: 100005 !important;
+            padding-bottom: 140px !important;
         }
 
-        :global(.app-row.max-glass-layout > aside), :global(.app-row.max-glass-layout > main#main-view) {
-            border-radius: 20px !important;
-        }
-
+        /* Sidebar Mobile Glass - Focus sul movimento pulito */
         :global(.app-row.max-glass-layout > aside:first-child) {
             top: 12px !important;
             left: 12px !important;
             height: calc(100dvh - 24px) !important;
             width: calc(100vw - 24px) !important;
+            border-radius: 20px !important;
+            
+            /* Pointer events con transizione per evitare glitch al click durante chiusura */
+            pointer-events: none;
+            transition: pointer-events 0s linear 0.3s; 
+            /* Rimosso transform: qui non deve esserci, lo gestisce il componente Sidebar */
+        }
+
+        /* Se aperta, abilita i click istantaneamente */
+        :global(.app-row.max-glass-layout > aside:first-child.open) {
+            pointer-events: auto !important;
+            transition: pointer-events 0s linear 0s;
+        }
+
+        :global(.app-row.max-glass-layout > main#main-view) {
             border-radius: 20px !important;
         }
     }

@@ -131,29 +131,33 @@ export const api = {
         }
     },
 
-    async getLyrics(artist, title) {
+    async getLyrics(id) {
         try {
-            if (!artist || !title) return null;
-            const url = `/System/lyrics?artist=${encodeURIComponent(artist)}&title=${encodeURIComponent(title)}`;
-            const res = await this.fetchWithTimeout(url);
+            if (!id) return null;
             
-            if (!res.ok) return null;
-            const data = await res.json();
-            return data.lrc;
-        } catch {
+            const res = await this.fetchWithTimeout(`/Tracks/lyrics/${id}`);
+            
+            if (!res.ok) {
+                console.error(`[API] Lyrics Error: ${res.status}`);
+                return null;
+            }
+            
+            return await res.json();
+        } catch (err) {
+            console.error(`[API] Lyrics Catch:`, err);
             return null;
         }
     },
 
-    async updateArtist(id, name, imagePath) {
+    async updateArtist(id, formData) {
         try {
-            const res = await this.fetchWithTimeout(`/System/artist/${id}`, {
+            const response = await this.fetchWithTimeout(`/System/artist/${id}`, {
                 method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name, imagePath })
+                body: formData 
             });
-            return res.ok;
-        } catch {
+            return response.ok;
+        } catch (err) {
+            console.error("[API] UpdateArtist Error:", err);
             return false;
         }
     },
@@ -170,4 +174,5 @@ export const api = {
             return false;
         }
     }
+
 };

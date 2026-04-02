@@ -197,7 +197,7 @@
     </div>
 
     <div id="player-main">
-        <div id="np-info" class="np-info-hover" role="button" tabindex="0" on:click={() => dispatch('openFull')} on:keydown={(e) => e.key === 'Enter' && dispatch('openFull')}>
+        <div id="np-info" class="np-info-hover" role="button" tabindex="0" on:click={() => dispatch('toggleFull')} on:keydown={(e) => e.key === 'Enter' && dispatch('toggleFull')}>
             <img id="np-cover" src={coverUrl || 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxIDEiPjxyZWN0IHdpZHRoPSIxIiBoZWlnaHQ9IjEiIGZpbGw9IiMzMzMiLz48L3N2Zz4='} alt="Cover">
             <div id="now-playing">
                 <span id="np-title">{track ? track.title : '---'}</span>
@@ -230,7 +230,7 @@
         <div id="nerdy-info" class="hide-on-mobile">
             <div class="vol-control">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path></svg>
-                <input class="sleek-slider" type="range" aria-label="Volume" min="0" max="100" bind:value={volume} style="--val: {volume}%">
+                <input class="volume-slider" type="range" aria-label="Volume" min="0" max="100" bind:value={volume} style="--val: {volume}%">
             </div>
             {#if bitrate > 0}
             <div class="kbps-badge">
@@ -257,18 +257,19 @@
         bottom: 16px !important; left: 16px !important; width: calc(100vw - 32px) !important;
         border-radius: 24px !important; height: auto !important; min-height: 96px !important;
         background: rgba(255, 255, 255, 0.03) !important; 
-        backdrop-filter: blur(48px) saturate(200%) brightness(1.1) !important;
-        -webkit-backdrop-filter: blur(48px) saturate(200%) brightness(1.1) !important;
+        backdrop-filter: blur(32px) saturate(120%) !important;
+        -webkit-backdrop-filter: blur(32px) saturate(120%) !important;
         border: 1px solid rgba(255, 255, 255, 0.1) !important; 
         box-shadow: 0 16px 40px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.1) !important;
         padding: 12px 20px !important; flex-direction: column;
+        transform: translate3d(0,0,0); will-change: transform;
     }
 
     .max-glass #player-main { height: 54px; padding-top: 0; order: 1; }
     
     .max-glass .np-info-hover {
-        background: rgba(255, 255, 255, 0.08) !important; backdrop-filter: blur(24px) saturate(150%) !important;
-        -webkit-backdrop-filter: blur(24px) saturate(150%) !important; border-radius: 20px !important;
+        background: rgba(255, 255, 255, 0.08) !important; backdrop-filter: blur(16px) saturate(120%) !important;
+        -webkit-backdrop-filter: blur(16px) saturate(120%) !important; border-radius: 20px !important;
         border: 1px solid rgba(255, 255, 255, 0.1) !important;
         box-shadow: inset 1px 1px 0 rgba(255, 255, 255, 0.2), 0 4px 16px rgba(0,0,0,0.1) !important;
         height: 100%; display: flex; align-items: center; padding: 4px 16px 4px 6px !important;
@@ -282,7 +283,7 @@
     #time-current, #time-total { font-size: 11px; color: rgba(255,255,255,0.6); font-variant-numeric: tabular-nums; width: 32px; }
     #progress-container { flex: 1; height: 4px; background: rgba(255, 255, 255, 0.2); border-radius: 2px; cursor: pointer; position: relative; }
     #progress-container:hover #progress-bar { background: white !important; }
-    #progress-bar { height: 100%; border-radius: 2px; transition: width 0.1s linear, background 0.2s; }
+    #progress-bar { height: 100%; border-radius: 2px; background: rgba(255,255,255,0.8); transition: width 0.1s linear, background 0.2s; }
     
     #player-main { display: flex; justify-content: space-between; align-items: center; height: 64px; padding-top: 8px; }
     
@@ -321,32 +322,32 @@
     }
     .kbps-badge .ext { color: var(--accent-color); }
 
-    .sleek-slider {
+    .volume-slider {
         -webkit-appearance: none; appearance: none; flex: 1; height: 6px; border-radius: 3px;
         background: linear-gradient(to right, var(--accent-color) var(--val), rgba(255,255,255,0.4) var(--val));
         outline: none; transition: height 0.2s ease; box-shadow: inset 0 1px 2px rgba(0,0,0,0.5);
     }
-    .sleek-slider:hover { height: 8px; }
-    .sleek-slider::-webkit-slider-thumb {
+    .volume-slider:hover { height: 8px; }
+    .volume-slider::-webkit-slider-thumb {
         -webkit-appearance: none; appearance: none; width: 16px; height: 16px; border-radius: 50%;
         background: white; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,0.6); transition: transform 0.1s ease;
     }
-    .sleek-slider::-webkit-slider-thumb:hover { transform: scale(1.3); }
-    .sleek-slider::-moz-range-thumb {
+    .volume-slider::-webkit-slider-thumb:hover { transform: scale(1.2); }
+    .volume-slider::-moz-range-thumb {
         width: 16px; height: 16px; border-radius: 50%; background: white; cursor: pointer; border: none;
         box-shadow: 0 2px 8px rgba(0,0,0,0.6); transition: transform 0.1s ease;
     }
-    .sleek-slider::-moz-range-thumb:hover { transform: scale(1.3); }
+    .volume-slider::-moz-range-thumb:hover { transform: scale(1.2); }
 
     @media (min-width: 769px) {
         :global(footer#player.layout-swapped #player-main) { flex-direction: row-reverse; }
         :global(footer#player.layout-swapped .np-info-hover) { 
-            margin-left: 0; margin-right: -8px; flex-direction: row-reverse; text-align: right; 
+            margin-left: 0 !important; margin-right: -20px !important; flex-direction: row-reverse; text-align: right; width: 420px !important; padding-right: 20px !important;
         }
         :global(footer#player.layout-swapped .max-glass .np-info-hover) { 
-            padding: 4px 6px 4px 16px !important;
+            padding: 4px 6px 4px 16px !important; border-top-right-radius: 20px !important; border-bottom-right-radius: 20px !important;
         }
-        :global(footer#player.layout-swapped #now-playing) { align-items: flex-end; }
+        :global(footer#player.layout-swapped #now-playing) { align-items: flex-end; margin-left: auto; margin-right: 14px; }
         :global(footer#player.layout-swapped #nerdy-info) { justify-content: flex-start; }
     }
 

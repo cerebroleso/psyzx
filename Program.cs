@@ -13,7 +13,10 @@ builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseMySql(connectionString, ServerVersion.AutoDetect(connectionString)));
 
 builder.Services.AddHttpClient();
+
+// --- REGISTRAZIONE SERVIZI ---
 builder.Services.AddScoped<LibraryScanner>();
+builder.Services.AddSingleton<LyricsDownloader>(); // AGGIUNTO QUI!
 
 builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
     .AddCookie(options =>
@@ -60,7 +63,7 @@ app.MapGet("/api/health", () =>
         ffmpegOk = process?.ExitCode == 0;
     }
     catch { }
-    return new { status = "ok", os = "Arch Linux", ffmpegInstalled = ffmpegOk };
+    return new { status = "ok", os = "linux", ffmpegInstalled = ffmpegOk };
 }).AllowAnonymous();
 
 _ = Task.Run(async () =>

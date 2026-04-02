@@ -162,7 +162,7 @@ public class SystemController : ControllerBase
             } 
             catch { }
 
-            string safeArtist = string.Join("_", firstArtist.Split(Path.GetInvalidFileNameChars()));
+            string safeArtist = SanitizePath(firstArtist);
 
             try
             {
@@ -206,43 +206,71 @@ public class SystemController : ControllerBase
     }
 
     [HttpPut("artist/{id}")]
-    public async Task<IActionResult> UpdateArtist(int id, [FromBody] ArtistUpdateDto dto, [FromServices] AppDbContext db, [FromServices] IConfiguration config)
+    public async Task<IActionResult> UpdateArtist(int id, [FromForm] string name, [FromForm] IFormFile? imageFile, [FromServices] AppDbContext db, [FromServices] IConfiguration config)
     {
-        var artist = await db.Artists.Include(a => a.Albums).ThenInclude(al => al.Tracks).FirstOrDefaultAsync(a => a.Id == id);
+        var artist = await db.Artists
+            .Include(a => a.Albums)
+            .ThenInclude(al => al.Tracks)
+            .FirstOrDefaultAsync(a => a.Id == id);
+
         if (artist == null) return NotFound();
 
         string oldName = artist.Name;
-        string newName = dto.name;
-        
+        string newName = name;
         var basePath = Path.GetFullPath(config["MusicSettings:BasePath"] ?? "Music");
+        
         var oldDir = Path.Combine(basePath, SanitizePath(oldName));
         var newDir = Path.Combine(basePath, SanitizePath(newName));
 
         if (Directory.Exists(oldDir) && !string.Equals(oldDir, newDir, StringComparison.OrdinalIgnoreCase))
         {
-            Directory.Move(oldDir, newDir);
-            
-            if (!string.IsNullOrEmpty(artist.ImagePath))
-                artist.ImagePath = artist.ImagePath.Replace(SanitizePath(oldName), SanitizePath(newName));
-            
-            foreach (var album in artist.Albums)
+            if (!Directory.Exists(newDir)) 
             {
-                if (!string.IsNullOrEmpty(album.CoverPath))
-                    album.CoverPath = album.CoverPath.Replace(SanitizePath(oldName), SanitizePath(newName));
-                    
-                foreach (var track in album.Tracks)
+                Directory.Move(oldDir, newDir);
+                
+                artist.ImagePath = artist.ImagePath?.Replace(SanitizePath(oldName), SanitizePath(newName));
+                
+                foreach (var album in artist.Albums)
                 {
-                    if (!string.IsNullOrEmpty(track.FilePath))
-                        track.FilePath = track.FilePath.Replace(SanitizePath(oldName), SanitizePath(newName));
+                    album.CoverPath = album.CoverPath?.Replace(SanitizePath(oldName), SanitizePath(newName));
+                    foreach (var track in album.Tracks)
+                    {
+                        track.FilePath = track.FilePath?.Replace(SanitizePath(oldName), SanitizePath(newName));
+                    }
                 }
             }
         }
+        else if (!Directory.Exists(newDir))
+        {
+            Directory.CreateDirectory(newDir);
+        }
+
+        if (imageFile != null && imageFile.Length > 0)
+        {
+            // Prendiamo l'estensione originale (es: .webp, .png, .jpg)
+            var extension = Path.GetExtension(imageFile.FileName).ToLower();
+            if (string.IsNullOrEmpty(extension)) extension = ".jpg"; // Fallback
+
+            var fileName = "artist" + extension;
+            var filePath = Path.Combine(newDir, fileName);
+
+            // Pulizia: se esisteva un vecchio artist.jpg e ora carichi artist.webp, 
+            // dobbiamo cancellare quello vecchio per non fare confusione.
+            var oldFiles = Directory.GetFiles(newDir, "artist.*");
+            foreach (var f in oldFiles) System.IO.File.Delete(f);
+
+            using (var stream = new FileStream(filePath, FileMode.Create))
+            {
+                await imageFile.CopyToAsync(stream);
+            }
+
+            artist.ImagePath = Path.Combine(SanitizePath(newName), fileName);
+        }
 
         artist.Name = newName;
-        if (!string.IsNullOrEmpty(dto.imagePath)) artist.ImagePath = dto.imagePath;
-
         await db.SaveChangesAsync();
-        return Ok();
+        
+        return Ok(new { artist.Name, artist.ImagePath });
     }
 
     [HttpPut("album/{id}")]
@@ -282,25 +310,12 @@ public class SystemController : ControllerBase
 
     private string SanitizePath(string name)
     {
-        string invalidChars = new string(Path.GetInvalidFileNameChars()) + new string(Path.GetInvalidPathChars());
-        foreach (char c in invalidChars) name = name.Replace(c.ToString(), "_");
-        return name;
+        if (string.IsNullOrWhiteSpace(name)) return "Unknown";
+        var invalid = Path.GetInvalidFileNameChars();
+        return new string(name.Where(x => !invalid.Contains(x)).ToArray()).Trim().Replace(' ', '_');
     }
 }
 
-public class YtDlpRequest
-{
-    public string url { get; set; } = string.Empty;
-}
-
-public class ArtistUpdateDto
-{
-    public string name { get; set; } = string.Empty;
-    public string imagePath { get; set; } = string.Empty;
-}
-
-public class AlbumUpdateDto
-{
-    public string title { get; set; } = string.Empty;
-    public string coverPath { get; set; } = string.Empty;
-}
+public class YtDlpRequest { public string url { get; set; } = string.Empty; }
+public class ArtistUpdateDto { public string name { get; set; } = string.Empty; public string imagePath { get; set; } = string.Empty; }
+public class AlbumUpdateDto { public string title { get; set; } = string.Empty; public string coverPath { get; set; } = string.Empty; }

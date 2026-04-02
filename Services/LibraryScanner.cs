@@ -23,10 +23,6 @@ public class LibraryScanner
     {
         if (string.IsNullOrWhiteSpace(_basePath) || !Directory.Exists(_basePath)) return;
 
-        await _context.Tracks.ExecuteDeleteAsync();
-        await _context.Albums.ExecuteDeleteAsync();
-        await _context.Artists.ExecuteDeleteAsync();
-
         var artistDirs = Directory.GetDirectories(_basePath);
 
         foreach (var artistDir in artistDirs)
@@ -102,7 +98,6 @@ public class LibraryScanner
                 {
                     int releaseYear = DateTime.Now.Year;
                     
-                    // Cerchiamo un audio nell'album o in una sua sottocartella (per i CD)
                     var firstAudio = Directory.EnumerateFiles(albumDir, "*.*", SearchOption.AllDirectories)
                         .FirstOrDefault(f => f.EndsWith(".mp3", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".flac", StringComparison.OrdinalIgnoreCase));
                     
@@ -149,7 +144,6 @@ public class LibraryScanner
                     await _context.SaveChangesAsync();
                 }
 
-                // --- LOGICA MULTI-DISCO (CD) ---
                 var cdDirectories = Directory.GetDirectories(albumDir)
                     .Where(d => 
                     {
@@ -206,7 +200,6 @@ public class LibraryScanner
                     trackNum = (int)tfile.Tag.Track;
                     bitrate = tfile.Properties.AudioBitrate;
                     
-                    // Se TagLib trova il numero del disco nei metadata, usiamo quello invece di quello della cartella
                     if (tfile.Tag.Disc > 0)
                     {
                         discNumber = (int)tfile.Tag.Disc;
