@@ -11,7 +11,7 @@ using psyzx.Data;
 namespace psyzx.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    [Migration("20260331091631_Fresh")]
+    [Migration("20260402134850_Fresh")]
     partial class Fresh
     {
         /// <inheritdoc />
