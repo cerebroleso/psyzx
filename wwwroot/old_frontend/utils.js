@@ -12,7 +12,6 @@ export const getCorporateFooter = () => `
         <h3>psyzx</h3>
         <p>better than fuckass spotify.</p>
         <p>© 2026 psyzx Corp. All rights reserved.</p>
-        <p>No DRM, no ads, just pure raw audio directly from your Arch machine.</p>
     </div>
 `;
 

@@ -160,7 +160,7 @@ export const renderLyrics = async () => {
     const rawLyrics = await api.getLyrics(track.id);
 
     if (!rawLyrics) {
-        DOM.mainContent.innerHTML = `<div style="padding: 48px; text-align: center; color: var(--text-secondary);">No lyrics found in Arch database.</div>`;
+        DOM.mainContent.innerHTML = `<div style="padding: 48px; text-align: center; color: var(--text-secondary);">No lyrics found in database.</div>`;
         return;
     }
 
@@ -216,7 +216,7 @@ export const renderSearch = (query) => {
             try {
                 const safeQuery = query.replace(/["']/g, '');
                 const res = await api.ytdlp({ url: `ytsearch1:${safeQuery}` });
-                if (res.ok) status.innerHTML = `<span style="color: #1db954;">Added to Arch server queue! 🚀</span>`;
+                if (res.ok) status.innerHTML = `<span style="color: #1db954;">Added to server queue! 🚀</span>`;
                 else status.innerHTML = `<span style="color: #ef4444;">Error: ${res.data.text}</span>`;
             } catch(e) { status.innerHTML = `<span style="color: #ef4444;">Network Error.</span>`; }
         });
@@ -436,14 +436,14 @@ export const renderDownloader = () => {
     DOM.mainContent.innerHTML = `
         <div style="padding: 64px 24px; max-width: 800px; margin: 0 auto; width: 100%;">
             <h2 style="font-size: 40px; margin-bottom: 24px; font-weight: 900; letter-spacing: -1px;">Import Music</h2>
-            <p style="color: var(--text-secondary); margin-bottom: 32px;">Incolla un link YouTube. Il server Arch gestirà il download e l'aggiunta al database in background.</p>
+            <p style="color: var(--text-secondary); margin-bottom: 32px;">Paste Youtube link. The server will manage the download and the database records in the background.</p>
             <div style="background: var(--surface-color); padding: 32px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); box-shadow: 0 16px 32px rgba(0,0,0,0.5);">
                 <input type="text" id="dl-url" placeholder="https://youtube.com/watch?v=..." style="width: 100%; padding: 16px; background: rgba(0,0,0,0.5); border: 1px solid #333; color: #fff; border-radius: 4px; margin-bottom: 24px; font-size: 16px; outline: none;">
                 <div style="display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin-bottom: 24px;">
                     <button id="btn-do-dl" style="padding: 16px 32px; background: var(--accent-color); color: #000; border: none; border-radius: 32px; font-weight: bold; cursor: pointer; display: flex; align-items: center; gap: 8px;"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" x2="12" y1="15" y2="3"></line></svg>Fetch & Download</button>
                     <button id="btn-stop-dl" style="padding: 16px; background: rgba(239, 68, 68, 0.1); color: #ef4444; border: 1px solid #ef4444; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center;" title="Halt all operations"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect></svg></button>
                 </div>
-                <div id="queue-status" style="font-size: 13px; font-family: monospace; font-weight: 600; padding: 16px; border-radius: 8px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); word-break: break-all;">🟢 Arch Server Ready</div>
+                <div id="queue-status" style="font-size: 13px; font-family: monospace; font-weight: 600; padding: 16px; border-radius: 8px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); word-break: break-all;">Server Ready</div>
                 <div id="dl-status" style="margin-top: 16px; font-size: 14px; font-weight: 600;"></div>
             </div>
         </div>
@@ -458,7 +458,7 @@ export const renderDownloader = () => {
                     qBadge.innerHTML = `<div style="color: #fbbf24; margin-bottom: 8px;">⚙️ Processing: ${data.active} | ⏳ Queued: ${data.queued}</div><div style="color: var(--accent-color);">🎵 Track: ${data.currentTrack || "Fetching metadata..."}</div>`;
                     qBadge.style.borderColor = 'rgba(251, 191, 36, 0.3)';
                 } else {
-                    qBadge.innerHTML = `🟢 Arch Server Ready`;
+                    qBadge.innerHTML = `Server Ready`;
                     qBadge.style.borderColor = 'rgba(217, 70, 239, 0.3)';
                 }
             }

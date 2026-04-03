@@ -3,7 +3,7 @@
     import { api } from '../api.js';
 
     let dlUrl = '';
-    let queueStatus = '🟢 Arch Server Ready';
+    let queueStatus = 'Server Ready';
     let dlStatus = '';
     let isProcessing = false;
     let queueInterval;
@@ -17,7 +17,7 @@
                     queueStatus = `<div style="color: #fbbf24; margin-bottom: 8px;">⚙️ Processing: ${data.active} | ⏳ Queued: ${data.queued}</div><div style="color: var(--accent-color);">🎵 Track: ${data.currentTrack || "Fetching metadata..."}</div>`;
                 } else {
                     isProcessing = false;
-                    queueStatus = `🟢 Arch Server Ready`;
+                    queueStatus = `Server Ready`;
                 }
             }
         } catch(e) {}
@@ -62,7 +62,7 @@
 
 <div style="padding: 64px 24px; max-width: 800px; margin: 0 auto; width: 100%;">
     <h2 style="font-size: 40px; margin-bottom: 24px; font-weight: 900; letter-spacing: -1px;">Import Music</h2>
-    <p style="color: var(--text-secondary); margin-bottom: 32px;">Incolla un link YouTube. Il server Arch gestirà il download e l'aggiunta al database in background.</p>
+    <p style="color: var(--text-secondary); margin-bottom: 32px;">Paste Youtube link. The server will manage download and database records in the background.</p>
     
     <div style="background: var(--surface-color); padding: 32px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); box-shadow: 0 16px 32px rgba(0,0,0,0.5);">
         <input type="text" placeholder="https://youtube.com/watch?v=..." bind:value={dlUrl} style="width: 100%; padding: 16px; background: rgba(0,0,0,0.5); border: 1px solid #333; color: #fff; border-radius: 4px; margin-bottom: 24px; font-size: 16px; outline: none;">

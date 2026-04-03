@@ -44,7 +44,7 @@ const checkHealth = async () => {
             const data = await api.getStats();
             const latency = Math.round(performance.now() - startPing);
             const ramPct = Math.round((data.sysRamUsedMb / data.sysRamTotalMb) * 100);
-            DOM.systemHealth.innerHTML = `<div style="margin-bottom:8px; font-weight:bold; color:var(--accent-color)">SYSTEM MONITOR</div><div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; font-family:monospace; font-size:10px;"><div>PING: ${latency}ms</div><div>FETCH: ${state.lastFetchTime}ms</div><div>APP RAM: ${data.appRamUsageMb}MB</div><div>SYS RAM: ${ramPct}%</div><div>THREADS: ${data.appThreads}</div><div>OS: Arch</div></div>`;
+            DOM.systemHealth.innerHTML = `<div style="margin-bottom:8px; font-weight:bold; color:var(--accent-color)">SYSTEM MONITOR</div><div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; font-family:monospace; font-size:10px;"><div>PING: ${latency}ms</div><div>FETCH: ${state.lastFetchTime}ms</div><div>APP RAM: ${data.appRamUsageMb}MB</div><div>SYS RAM: ${ramPct}%</div><div>THREADS: ${data.appThreads}</div><div>OS: linux</div></div>`;
         } catch(e) { DOM.systemHealth.innerHTML = `<span style="color:#ef4444">●</span> Connection Lost`; }
     }, 3000);
 };
@@ -116,7 +116,7 @@ if (DOM.editForm) {
         if (success) {
             window.location.reload(); 
         } else {
-            alert('Errore di salvataggio. Controlla che il backend Arch sia in ascolto sui nuovi endpoint.');
+            alert('Save error.');
             DOM.loaderOverlay.classList.remove('active');
         }
     });

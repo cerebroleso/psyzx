@@ -8,7 +8,6 @@ export const formatTime = (seconds) => {
 export const getCorporateFooter = () => `
     <div class="corp-footer">
         <h3>PSYZX</h3>
-        <p>Arch Linux Server Edition</p>
         <p>v3.0 - Svelte Engine</p>
     </div>
 `;
