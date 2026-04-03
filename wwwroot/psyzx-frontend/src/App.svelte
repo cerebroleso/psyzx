@@ -17,6 +17,8 @@
     import Offline from './lib/views/Offline.svelte';
     import Downloader from './lib/views/Downloader.svelte';
     import Account from './lib/views/Account.svelte';
+    import Playlists from './lib/views/Playlists.svelte';
+    import Playlist from './lib/views/Playlist.svelte';
     
     import { api } from './lib/api.js';
     import { allTracks, artistsMap, albumsMap, accentColor, isGlobalColorActive, isMaxGlassActive } from './store.js';
@@ -38,6 +40,8 @@
     $: navContextTitle = currentHash.startsWith('#album/') ? 'Album' 
                        : currentHash.startsWith('#artist/') ? 'Artist'
                        : currentHash.startsWith('#search/') ? 'Search'
+                       : currentHash.startsWith('#playlist/') ? 'Playlist'
+                       : currentHash === '#playlists' ? 'Playlists'
                        : currentHash === '#account' ? 'My Account'
                        : currentHash === '#settings' ? 'Settings' 
                        : currentHash === '#top' ? 'Top Played'
@@ -275,6 +279,10 @@
                         <Album albumId={currentHash.split('/')[1]} />
                     {:else if currentHash.startsWith('#search/')}
                         <Search query={decodeURIComponent(currentHash.substring(8))} />
+                    {:else if currentHash === '#playlists'}
+                        <Playlists />
+                    {:else if currentHash.startsWith('#playlist/')} 
+                        <Playlist playlistId={currentHash.split('/')[1]} />
                     {:else if currentHash === '#account'}
                         <Account />
                     {:else if currentHash === '#top'}
@@ -366,7 +374,20 @@
     }
 
     :global(main#main-view) { flex: 1; overflow-y: auto; position: relative; }
-    :global(#topbar) { z-index: 10000 !important; position: relative !important; }
+    :global(#topbar) { 
+        position: sticky !important; 
+        top: 0 !important; 
+        z-index: 10000 !important; 
+        transition: background 0.3s ease, border-bottom 0.3s ease, backdrop-filter 0.3s ease, box-shadow 0.3s ease !important;
+    }
+
+    :global(#topbar.scrolled) {
+        background: rgba(5, 5, 5, 0.40) !important;
+        backdrop-filter: blur(32px) saturate(150%) !important;
+        -webkit-backdrop-filter: blur(32px) saturate(150%) !important;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05) !important;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5) !important;
+    }
 
     :global(#right-sidebar) {
         width: 420px !important;
@@ -580,12 +601,10 @@
         border-radius: 12px !important;
         box-shadow: 0 8px 24px rgba(0,0,0,0.2), inset 1px 1px 0 rgba(255,255,255,0.1) !important;
         overflow: hidden;
-        transform: translate3d(0,0,0);
         transition: transform 0.3s ease, background-color 0.3s ease;
     }
 
     :global(.max-glass-layout .card:hover) {
         background: rgba(255, 255, 255, 0.1) !important;
-        transform: translateY(-4px) translate3d(0,0,0);
     }
 </style>

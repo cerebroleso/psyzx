@@ -107,6 +107,53 @@ export const api = {
         }
     },
 
+    async getPlaylists() {
+        try {
+            const res = await this.fetchWithTimeout('/Playlists');
+            if (!res.ok) throw new Error('SERVER_ERROR');
+            return await res.json();
+        } catch {
+            return [];
+        }
+    },
+
+    async getPlaylist(id) {
+        try {
+            const res = await this.fetchWithTimeout(`/Playlists/${id}`);
+            if (!res.ok) throw new Error('SERVER_ERROR');
+            return await res.json();
+        } catch {
+            return null;
+        }
+    },
+
+    async createPlaylist(name) {
+        try {
+            const res = await this.fetchWithTimeout('/Playlists', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name })
+            });
+            if (!res.ok) throw new Error('SERVER_ERROR');
+            return await res.json();
+        } catch {
+            throw new Error('CREATE_FAILED');
+        }
+    },
+
+    async addToPlaylist(playlistId, trackId) {
+        try {
+            const res = await this.fetchWithTimeout(`/Playlists/${playlistId}/tracks`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ trackId })
+            });
+            return res.ok;
+        } catch {
+            return false;
+        }
+    },
+
     async scanLibrary() {
         try {
             return await this.fetchWithTimeout('/System/scan', { method: 'POST' });
@@ -161,13 +208,8 @@ export const api = {
     async getLyrics(id) {
         try {
             if (!id) return null;
-            
             const res = await this.fetchWithTimeout(`/Tracks/lyrics/${id}`);
-            
-            if (!res.ok) {
-                return null;
-            }
-            
+            if (!res.ok) return null;
             return await res.json();
         } catch (err) {
             return null;
