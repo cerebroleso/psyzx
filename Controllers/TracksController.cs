@@ -132,7 +132,7 @@ public class TracksController : ControllerBase
         }
         else if (lines.Length > 0)
         {
-            parsedLyrics.Add(new LyricLine { t = 0, text = "◆ TESTO NON SINCRONIZZATO ◆" });
+            parsedLyrics.Add(new LyricLine { t = 0, text = "◆ LYRICS SYNC NOT AVAILABLE ◆" });
             foreach (var line in lines)
             {
                 if (!string.IsNullOrWhiteSpace(line))

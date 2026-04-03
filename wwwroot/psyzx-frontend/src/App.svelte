@@ -12,6 +12,7 @@
     import Album from './lib/views/Album.svelte';
     import Settings from './lib/views/Settings.svelte';
     import TopPlayed from './lib/views/TopPlayed.svelte';
+    import Search from './lib/views/Search.svelte';
     import ThePool from './lib/views/ThePool.svelte';
     import Offline from './lib/views/Offline.svelte';
     import Downloader from './lib/views/Downloader.svelte';
@@ -34,6 +35,7 @@
 
     $: navContextTitle = currentHash.startsWith('#album/') ? 'Album' 
                        : currentHash.startsWith('#artist/') ? 'Artist'
+                       : currentHash.startsWith('#search/') ? 'Search'
                        : currentHash === '#settings' ? 'Settings' 
                        : currentHash === '#top' ? 'Top Played'
                        : currentHash === '#all' ? 'The Pool'
@@ -41,14 +43,94 @@
                        : currentHash === '#downloader' ? 'Downloader'
                        : 'Library';
 
-    const bootEngine = async () => {
-        try {
-            let isAuthError = false;
-
-            const data = await api.getTracks().catch(e => {
-                if (e.message === 'UNAUTHORIZED') isAuthError = true;
-                return [];
+    const localDB = {
+        init() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open('PsyZxStorage', 1);
+                request.onupgradeneeded = (e) => e.target.result.createObjectStore('cache');
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
             });
+        },
+        async set(key, val) {
+            const db = await this.init();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction('cache', 'readwrite');
+                tx.objectStore('cache').put(val, key);
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => reject(tx.error);
+            });
+        },
+        async get(key) {
+            const db = await this.init();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction('cache', 'readonly');
+                const req = tx.objectStore('cache').get(key);
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error);
+            });
+        }
+    };
+
+    const buildLibrary = (data, statsData) => {
+        const statsMap = new Map();
+        if (statsData) {
+            if (Array.isArray(statsData)) {
+                statsData.forEach(s => statsMap.set(s.trackId || s.id, s.playCount || s.plays || 0));
+            } else if (typeof statsData === 'object') {
+                Object.entries(statsData).forEach(([k, v]) => statsMap.set(parseInt(k), typeof v === 'number' ? v : (v.playCount || v.plays || 0)));
+            }
+        }
+
+        const newArtists = new Map();
+        const newAlbums = new Map();
+
+        data.forEach(track => {
+            if (!track) return;
+            track.playCount = statsMap.get(track.id) || track.playCount || 0;
+            
+            const album = track.album || { id: 9999, title: 'Unknown Album', coverPath: '' };
+            const artist = album.artist || { id: 9999, name: 'Unknown Artist', imagePath: '' };
+            
+            if (!newArtists.has(artist.id)) newArtists.set(artist.id, { id: artist.id, name: artist.name, imagePath: artist.imagePath, albums: new Set() });
+            newArtists.get(artist.id).albums.add(album.id);
+            
+            if (!newAlbums.has(album.id)) newAlbums.set(album.id, { id: album.id, title: album.title, coverPath: album.coverPath, releaseYear: album.releaseYear, playCount: album.playCount || 0, artistId: artist.id, artistName: artist.name, tracks: [] });
+            
+            const currentAlbum = newAlbums.get(album.id);
+            if (!currentAlbum.tracks.some(t => t.id === track.id)) {
+                currentAlbum.tracks.push(track);
+                currentAlbum.playCount += track.playCount;
+            }
+        });
+
+        allTracks.set(data);
+        artistsMap.set(newArtists);
+        albumsMap.set(newAlbums);
+    };
+
+    const bootEngine = async () => {
+        let hasLocalData = false;
+        isLoading = true;
+        apiError = null;
+
+        try {
+            const cachedLocal = await localDB.get('psyzx_library_cache');
+            
+            if (cachedLocal && Array.isArray(cachedLocal) && cachedLocal.length > 0) {
+                buildLibrary(cachedLocal, null);
+                hasLocalData = true;
+                isLoading = false; 
+            }
+
+            let isAuthError = false;
+            let data = null;
+
+            try {
+                data = await api.getTracks();
+            } catch (e) {
+                if (e && e.message === 'UNAUTHORIZED') isAuthError = true;
+            }
 
             if (isAuthError) {
                 requiresLogin = true;
@@ -56,45 +138,21 @@
                 return;
             }
 
-            const statsData = await api.getStats().catch(() => null);
-
-            if (!data || data.length === 0) {
-                apiError = "Nessuna traccia trovata o Backend offline.";
-            } else {
-                const statsMap = new Map();
-                if (statsData) {
-                    if (Array.isArray(statsData)) {
-                        statsData.forEach(s => statsMap.set(s.trackId || s.id, s.playCount || s.plays || 0));
-                    } else if (typeof statsData === 'object') {
-                        Object.entries(statsData).forEach(([k, v]) => statsMap.set(parseInt(k), typeof v === 'number' ? v : (v.playCount || v.plays || 0)));
-                    }
-                }
-
-                const newArtists = new Map();
-                const newAlbums = new Map();
-
-                data.forEach(track => {
-                    track.playCount = statsMap.get(track.id) || track.playCount || 0;
-                    const artist = track.album.artist;
-                    const album = track.album;
-                    
-                    if (!newArtists.has(artist.id)) newArtists.set(artist.id, { id: artist.id, name: artist.name, imagePath: artist.imagePath, albums: new Set() });
-                    newArtists.get(artist.id).albums.add(album.id);
-                    
-                    if (!newAlbums.has(album.id)) newAlbums.set(album.id, { id: album.id, title: album.title, coverPath: album.coverPath, releaseYear: album.releaseYear, playCount: album.playCount || 0, artistId: artist.id, artistName: artist.name, tracks: [] });
-                    const currentAlbum = newAlbums.get(album.id);
-                    if (!currentAlbum.tracks.some(t => t.id === track.id)) {
-                        currentAlbum.tracks.push(track);
-                        currentAlbum.playCount += track.playCount;
-                    }
-                });
-
-                allTracks.set(data);
-                artistsMap.set(newArtists);
-                albumsMap.set(newAlbums);
+            if (data && Array.isArray(data) && data.length > 0) {
+                await localDB.set('psyzx_library_cache', data);
+                
+                let statsData = null;
+                try { statsData = await api.getStats(); } catch(e) {}
+                
+                buildLibrary(data, statsData);
+            } else if (!hasLocalData) {
+                apiError = "No tracks found or backend offline.";
             }
+
         } catch (e) {
-            apiError = "Impossibile connettersi al backend Arch.";
+            if (!hasLocalData) {
+                apiError = "Failed to load data. Check console.";
+            }
         } finally {
             isLoading = false;
         }
@@ -116,7 +174,7 @@
 
     const executeLogin = async () => {
         if (!loginUsername || !loginPassword) {
-            loginErrorMsg = "Compila tutti i campi.";
+            loginErrorMsg = "Fill all fields.";
             return;
         }
         
@@ -133,7 +191,7 @@
             isLoading = true;
             bootEngine();
         } else {
-            loginErrorMsg = "Credenziali non valide. Riprova.";
+            loginErrorMsg = "Invalid credentials. Retry.";
             isLoggingIn = false;
         }
     };
@@ -149,10 +207,10 @@
             <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="var(--accent-color)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom: 16px;">
                 <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
             </svg>
-            <h2>Accesso Richiesto</h2>
+            <h2>Access Required</h2>
             
             <form on:submit|preventDefault={executeLogin} class="auth-form">
-                <input type="text" bind:value={loginUsername} placeholder="Username o Email" required disabled={isLoggingIn} autocomplete="username">
+                <input type="text" bind:value={loginUsername} placeholder="Username or Email" required disabled={isLoggingIn} autocomplete="username">
                 <input type="password" bind:value={loginPassword} placeholder="Password" required disabled={isLoggingIn} autocomplete="current-password">
                 
                 {#if loginErrorMsg}
@@ -160,7 +218,7 @@
                 {/if}
                 
                 <button type="submit" class="btn-auth" disabled={isLoggingIn}>
-                    {isLoggingIn ? 'Autenticazione in corso...' : 'Entra'}
+                    {isLoggingIn ? 'Authenticating...' : 'Enter'}
                 </button>
             </form>
         </div>
@@ -191,6 +249,8 @@
                         <Artist artistId={currentHash.split('/')[1]} />
                     {:else if currentHash.startsWith('#album/')}
                         <Album albumId={currentHash.split('/')[1]} />
+                    {:else if currentHash.startsWith('#search/')}
+                        <Search query={decodeURIComponent(currentHash.substring(8))} />
                     {:else if currentHash === '#top'}
                         <TopPlayed />
                     {:else if currentHash === '#all'}
@@ -202,7 +262,7 @@
                     {:else if currentHash === '#settings'}
                         <Settings />
                     {:else}
-                        <div style="padding: 24px; color: var(--text-secondary);">Rotta non trovata.</div>
+                        <div style="padding: 24px; color: var(--text-secondary);">Route not found.</div>
                     {/if}
                 </div>
                 {/key}
@@ -220,7 +280,6 @@
 {/if}
 
 <style>
-    /* 1. RESET E LAYOUT GLOBALE */
     :global(body), :global(html) {
         background-color: #050505 !important;
         margin: 0; padding: 0;
@@ -247,14 +306,12 @@
         transition: padding 0.3s ease, gap 0.3s ease;
     }
 
-    /* 2. MAX GLASS LAYOUT - ESTETICA */
     .app-row.max-glass-layout {
         padding: 16px 16px 0 16px;
         gap: 16px;
         align-items: flex-start;
     }
 
-    /* Stile base aside (Standard) */
     :global(.app-row > aside) {
         background: rgba(0, 0, 0, 0.02) !important;
         backdrop-filter: blur(28px);
@@ -262,7 +319,6 @@
         border-right: 1px solid rgba(255,255,255,0.05);
     }
 
-    /* Effetto Glass Avanzato */
     :global(.app-row.max-glass-layout > aside), 
     :global(.app-row.max-glass-layout > main#main-view) {
         border-radius: 24px !important;
@@ -283,20 +339,6 @@
         }
     }
 
-    /* 3. CARD INTERNE (Accelerazione HW) */
-    :global(.max-glass-layout .album-card), :global(.max-glass-layout .artist-card), 
-    :global(.max-glass-layout .playlist-card), :global(.max-glass-layout .grid-item) {
-        background: rgba(255, 255, 255, 0.05) !important;
-        backdrop-filter: blur(24px) saturate(120%) !important;
-        -webkit-backdrop-filter: blur(24px) saturate(120%) !important;
-        border: 1px solid rgba(255, 255, 255, 0.1) !important;
-        border-radius: 24px !important;
-        box-shadow: 0 8px 24px rgba(0,0,0,0.2), inset 1px 1px 0 rgba(255,255,255,0.1) !important;
-        overflow: hidden;
-        transform: translate3d(0,0,0);
-    }
-
-    /* 4. COMPONENTI DI SISTEMA */
     :global(main#main-view) { flex: 1; overflow-y: auto; position: relative; }
     :global(#topbar) { z-index: 10000 !important; position: relative !important; }
 
@@ -307,7 +349,6 @@
         border-left: 1px solid rgba(255,255,255,0.05);
     }
 
-    /* 5. SFONDI DINAMICI E AUTH */
     .global-dynamic-bg {
         position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
         z-index: -2; pointer-events: none;
@@ -345,11 +386,9 @@
         font-size: 16px; font-weight: bold; border-radius: 30px; cursor: pointer;
     }
 
-    /* 6. MEDIA QUERIES (FIX MOBILE ANTI-GLITCH) */
     @media (max-width: 768px) {
         .app-row.max-glass-layout { padding: 12px 12px 0 12px; gap: 12px; }
 
-        /* Sidebar Posizionamento Mobile */
         :global(.app-row > aside:first-child) {
             position: fixed !important;
             top: 0 !important;
@@ -359,7 +398,6 @@
             padding-bottom: 140px !important;
         }
 
-        /* Sidebar Mobile Glass - Focus sul movimento pulito */
         :global(.app-row.max-glass-layout > aside:first-child) {
             top: 12px !important;
             left: 12px !important;
@@ -367,13 +405,10 @@
             width: calc(100vw - 24px) !important;
             border-radius: 20px !important;
             
-            /* Pointer events con transizione per evitare glitch al click durante chiusura */
             pointer-events: none;
             transition: pointer-events 0s linear 0.3s; 
-            /* Rimosso transform: qui non deve esserci, lo gestisce il componente Sidebar */
         }
 
-        /* Se aperta, abilita i click istantaneamente */
         :global(.app-row.max-glass-layout > aside:first-child.open) {
             pointer-events: auto !important;
             transition: pointer-events 0s linear 0s;
@@ -382,5 +417,29 @@
         :global(.app-row.max-glass-layout > main#main-view) {
             border-radius: 20px !important;
         }
+    }
+
+    :global(.max-glass-layout) {
+        --surface-color: rgba(255, 255, 255, 0.05) !important;
+    }
+
+    :global(.max-glass-layout .card),
+    :global(.max-glass-layout .album-card), 
+    :global(.max-glass-layout .artist-card), 
+    :global(.max-glass-layout .playlist-card), 
+    :global(.max-glass-layout .grid-item) {
+        background: var(--surface-color) !important;
+        backdrop-filter: blur(24px) saturate(120%) !important;
+        -webkit-backdrop-filter: blur(24px) saturate(120%) !important;
+        border: 1px solid rgba(255, 255, 255, 0.1) !important;
+        border-radius: 12px !important;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.2), inset 1px 1px 0 rgba(255,255,255,0.1) !important;
+        overflow: hidden;
+        transform: translate3d(0,0,0);
+        transition: transform 0.3s ease, background-color 0.3s ease;
+    }
+
+    :global(.max-glass-layout .card:hover) {
+        background: rgba(255, 255, 255, 0.1) !important;
     }
 </style>

@@ -88,12 +88,12 @@ html, body {
 .album-meta { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
 .album-badge { background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 4px; font-size: 11px; color: var(--accent-color); transition: all 0.5s ease; }
 
-.cover-wrapper { position: relative; display: inline-block; border-radius: 4px; overflow: hidden; flex-shrink: 0; }
+.cover-wrapper { position: relative; display: inline-block; border-radius: 8px; overflow: hidden; flex-shrink: 0; }
 .cover-wrapper.artist-wrapper { border-radius: 50%; }
 .edit-trigger { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); border: none; color: #fff; width: 48px; height: 48px; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: opacity 0.2s, transform 0.1s; z-index: 10; opacity: 0; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
 .edit-trigger:active { transform: translate(-50%, -50%) scale(0.9); }
 .cover-wrapper:hover .edit-trigger { opacity: 1; }
-.cover-wrapper:hover img { filter: brightness(0.5); }
+.cover-wrapper:hover img { filter: brightness(0.9); }
 .cover-wrapper img { transition: filter 0.2s; display: block; box-shadow: 0 4px 60px rgba(0,0,0,0.5); }
 
 .action-bar { position: relative; z-index: 1; padding: 24px; display: flex; align-items: center; gap: 24px; }

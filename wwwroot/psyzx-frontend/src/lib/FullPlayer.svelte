@@ -111,11 +111,11 @@
                     if (data && data.length > 0) {
                         lyrics = data;
                     } else {
-                        lyrics = [{ t: 0, text: "♪ (Instrumental / Nessun testo) ♪" }];
+                        lyrics = [{ t: 0, text: "♪ (Instrumental / No text) ♪" }];
                     }
                 })
                 .catch(() => {
-                    lyrics = [{ t: 0, text: "♪ (Testo non disponibile) ♪" }];
+                    lyrics = [{ t: 0, text: "♪ (Text not available) ♪" }];
                 });
         }
     }
