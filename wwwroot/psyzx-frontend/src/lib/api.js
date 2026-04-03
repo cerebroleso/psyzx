@@ -1,3 +1,5 @@
+import { currentUser } from '../store.js';
+
 export const api = {
     baseUrl: '/api',
 
@@ -8,14 +10,13 @@ export const api = {
 
         try {
             const response = await fetch(`${this.baseUrl}${endpoint}`, {
-                credentials: 'include', // <-- QUESTO RESTA: è vitale per i cookie su Cloudflare/Mobile
+                credentials: 'include', 
                 ...options,
                 signal: controller.signal
             });
             clearTimeout(id);
 
             if (response.status === 401 || response.status === 403) {
-                // NIENTE PIÙ REDIRECT AUTOMATICO = NIENTE LOOP INFINITO
                 throw new Error('UNAUTHORIZED');
             }
 
@@ -35,19 +36,45 @@ export const api = {
     async checkAuth() {
         try {
             const res = await this.fetchWithTimeout('/Auth/check');
-            return res.ok;
+            if (res.ok) {
+                const data = await res.json();
+                currentUser.set(data);
+                return true;
+            }
+            currentUser.set(null);
+            return false;
         } catch {
+            currentUser.set(null);
             return false;
         }
     },
 
     async login(formData) {
         try {
-            return await this.fetchWithTimeout('/Auth/login', {
+            const res = await this.fetchWithTimeout('/Auth/login', {
                 method: 'POST',
                 body: new URLSearchParams(formData),
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
             });
+            if (res.ok) {
+                const data = await res.json();
+                currentUser.set(data);
+                return { ok: true, data };
+            }
+            return { ok: false };
+        } catch {
+            return { ok: false };
+        }
+    },
+
+    async register(formData) {
+        try {
+            const res = await this.fetchWithTimeout('/Auth/register', {
+                method: 'POST',
+                body: new URLSearchParams(formData),
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+            });
+            return { ok: res.ok };
         } catch {
             return { ok: false };
         }
@@ -61,20 +88,20 @@ export const api = {
                     const data = await res.json();
                     if (data.offlineMode) return [];
                 }
-                throw new Error('Errore server');
+                throw new Error('SERVER_ERROR');
             }
             return await res.json();
         } catch (e) {
             if (e.message === 'TIMEOUT' || e.message === 'NETWORK_ERROR') {
                 try {
-                    const cache = await caches.open('psyzx-data-v8'); // Aggiornato alla v8
+                    const cache = await caches.open('psyzx-data-v8'); 
                     const cachedRes = await cache.match(`${this.baseUrl}/Tracks`, { ignoreSearch: true });
                     if (cachedRes) {
                         return await cachedRes.json();
                     }
                 } catch (cacheErr) {}
                 
-                throw new Error('Sei offline e non ci sono dati in cache.');
+                throw new Error('OFFLINE_NO_CACHE');
             }
             throw e;
         }
@@ -84,7 +111,7 @@ export const api = {
         try {
             return await this.fetchWithTimeout('/System/scan', { method: 'POST' });
         } catch (e) {
-            throw new Error('Impossibile scansionare offline');
+            throw new Error('OFFLINE');
         }
     },
 
@@ -94,7 +121,7 @@ export const api = {
             if (!res.ok) throw new Error();
             return await res.json();
         } catch {
-            throw new Error('Offline');
+            throw new Error('OFFLINE');
         }
     },
 
@@ -104,7 +131,7 @@ export const api = {
             if (!res.ok) throw new Error();
             return await res.json();
         } catch {
-            throw new Error('Offline');
+            throw new Error('OFFLINE');
         }
     },
 
@@ -138,13 +165,11 @@ export const api = {
             const res = await this.fetchWithTimeout(`/Tracks/lyrics/${id}`);
             
             if (!res.ok) {
-                console.error(`[API] Lyrics Error: ${res.status}`);
                 return null;
             }
             
             return await res.json();
         } catch (err) {
-            console.error(`[API] Lyrics Catch:`, err);
             return null;
         }
     },
@@ -157,7 +182,6 @@ export const api = {
             });
             return response.ok;
         } catch (err) {
-            console.error("[API] UpdateArtist Error:", err);
             return false;
         }
     },
@@ -174,5 +198,4 @@ export const api = {
             return false;
         }
     }
-
 };

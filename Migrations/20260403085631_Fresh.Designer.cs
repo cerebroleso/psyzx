@@ -11,7 +11,7 @@ using psyzx.Data;
 namespace psyzx.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    [Migration("20260402205601_Fresh")]
+    [Migration("20260403085631_Fresh")]
     partial class Fresh
     {
         /// <inheritdoc />
@@ -116,6 +116,34 @@ namespace psyzx.Migrations
                     b.HasIndex("AlbumId");
 
                     b.ToTable("Tracks");
+                });
+
+            modelBuilder.Entity("psyzx.Models.User", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("PasswordHash")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("Username")
+                        .IsRequired()
+                        .HasColumnType("varchar(255)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Username")
+                        .IsUnique();
+
+                    b.ToTable("Users");
                 });
 
             modelBuilder.Entity("psyzx.Models.Album", b =>

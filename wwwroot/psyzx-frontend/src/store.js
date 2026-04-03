@@ -1,5 +1,7 @@
 import { writable } from 'svelte/store';
 
+export const currentUser = writable(null);
+
 export const allTracks = writable([]);
 export const artistsMap = writable(new Map());
 export const albumsMap = writable(new Map());

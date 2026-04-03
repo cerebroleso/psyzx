@@ -16,6 +16,7 @@
     import ThePool from './lib/views/ThePool.svelte';
     import Offline from './lib/views/Offline.svelte';
     import Downloader from './lib/views/Downloader.svelte';
+    import Account from './lib/views/Account.svelte';
     
     import { api } from './lib/api.js';
     import { allTracks, artistsMap, albumsMap, accentColor, isGlobalColorActive, isMaxGlassActive } from './store.js';
@@ -28,6 +29,7 @@
     let apiError = null;
     
     let requiresLogin = false;
+    let isRegisterMode = false;
     let loginUsername = '';
     let loginPassword = '';
     let loginErrorMsg = '';
@@ -36,6 +38,7 @@
     $: navContextTitle = currentHash.startsWith('#album/') ? 'Album' 
                        : currentHash.startsWith('#artist/') ? 'Artist'
                        : currentHash.startsWith('#search/') ? 'Search'
+                       : currentHash === '#account' ? 'My Account'
                        : currentHash === '#settings' ? 'Settings' 
                        : currentHash === '#top' ? 'Top Played'
                        : currentHash === '#all' ? 'The Pool'
@@ -110,9 +113,17 @@
     };
 
     const bootEngine = async () => {
-        let hasLocalData = false;
         isLoading = true;
         apiError = null;
+
+        const isAuth = await api.checkAuth();
+        if (!isAuth) {
+            requiresLogin = true;
+            isLoading = false;
+            return; 
+        }
+
+        let hasLocalData = false;
 
         try {
             const cachedLocal = await localDB.get('psyzx_library_cache');
@@ -120,22 +131,18 @@
             if (cachedLocal && Array.isArray(cachedLocal) && cachedLocal.length > 0) {
                 buildLibrary(cachedLocal, null);
                 hasLocalData = true;
-                isLoading = false; 
             }
 
-            let isAuthError = false;
             let data = null;
 
             try {
                 data = await api.getTracks();
             } catch (e) {
-                if (e && e.message === 'UNAUTHORIZED') isAuthError = true;
-            }
-
-            if (isAuthError) {
-                requiresLogin = true;
-                isLoading = false;
-                return;
+                if (e && e.message === 'UNAUTHORIZED') {
+                    requiresLogin = true;
+                    isLoading = false;
+                    return;
+                }
             }
 
             if (data && Array.isArray(data) && data.length > 0) {
@@ -172,7 +179,7 @@
 
     const handleScroll = (e) => { isScrolled = e.target.scrollTop > 50; };
 
-    const executeLogin = async () => {
+    const executeAuth = async () => {
         if (!loginUsername || !loginPassword) {
             loginErrorMsg = "Fill all fields.";
             return;
@@ -181,18 +188,27 @@
         isLoggingIn = true;
         loginErrorMsg = '';
         
-        const res = await api.login({
-            username: loginUsername,
-            password: loginPassword
-        });
+        const credentials = { username: loginUsername, password: loginPassword };
 
-        if (res && res.ok) {
-            requiresLogin = false;
-            isLoading = true;
-            bootEngine();
+        if (isRegisterMode) {
+            const res = await api.register(credentials);
+            if (res.ok) {
+                isRegisterMode = false;
+                await executeAuth(); 
+            } else {
+                loginErrorMsg = "Username already taken or server error.";
+                isLoggingIn = false;
+            }
         } else {
-            loginErrorMsg = "Invalid credentials. Retry.";
-            isLoggingIn = false;
+            const res = await api.login(credentials);
+            if (res && res.ok) {
+                requiresLogin = false;
+                isLoading = true;
+                bootEngine();
+            } else {
+                loginErrorMsg = "Invalid credentials. Retry.";
+                isLoggingIn = false;
+            }
         }
     };
 </script>
@@ -207,20 +223,28 @@
             <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="var(--accent-color)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom: 16px;">
                 <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
             </svg>
-            <h2>Access Required</h2>
+            <h2>{isRegisterMode ? 'Create Account' : 'Access Required'}</h2>
             
-            <form on:submit|preventDefault={executeLogin} class="auth-form">
-                <input type="text" bind:value={loginUsername} placeholder="Username or Email" required disabled={isLoggingIn} autocomplete="username">
-                <input type="password" bind:value={loginPassword} placeholder="Password" required disabled={isLoggingIn} autocomplete="current-password">
+            <form on:submit|preventDefault={executeAuth} class="auth-form">
+                <input type="text" bind:value={loginUsername} placeholder="Username" required disabled={isLoggingIn} autocomplete="username">
+                <input type="password" bind:value={loginPassword} placeholder="Password" required disabled={isLoggingIn} autocomplete={isRegisterMode ? "new-password" : "current-password"}>
                 
                 {#if loginErrorMsg}
                     <div class="auth-error">{loginErrorMsg}</div>
                 {/if}
                 
                 <button type="submit" class="btn-auth" disabled={isLoggingIn}>
-                    {isLoggingIn ? 'Authenticating...' : 'Enter'}
+                    {#if isLoggingIn}
+                        Working...
+                    {:else}
+                        {isRegisterMode ? 'Sign Up' : 'Enter'}
+                    {/if}
                 </button>
             </form>
+
+            <button class="btn-toggle-auth" on:click={() => { isRegisterMode = !isRegisterMode; loginErrorMsg = ''; }} disabled={isLoggingIn}>
+                {isRegisterMode ? 'Already have an account? Login' : 'No account? Register here'}
+            </button>
         </div>
     </div>
 {/if}
@@ -251,6 +275,8 @@
                         <Album albumId={currentHash.split('/')[1]} />
                     {:else if currentHash.startsWith('#search/')}
                         <Search query={decodeURIComponent(currentHash.substring(8))} />
+                    {:else if currentHash === '#account'}
+                        <Account />
                     {:else if currentHash === '#top'}
                         <TopPlayed />
                     {:else if currentHash === '#all'}
@@ -349,6 +375,7 @@
         border-left: 1px solid rgba(255,255,255,0.05);
     }
 
+    /* SFONDI DINAMICI E OVERLAY */
     .global-dynamic-bg {
         position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
         z-index: -2; pointer-events: none;
@@ -364,28 +391,146 @@
         z-index: -1; pointer-events: none;
     }
 
+    /* OVERLAY SCURO E BLURRATO PER IL LOGIN */
     .auth-overlay {
         position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-        background: #000; display: flex; align-items: center; justify-content: center;
+        background: rgba(0, 0, 0, 0.6); 
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        display: flex; align-items: center; justify-content: center;
         z-index: 999999;
+        perspective: 1000px;
     }
 
+    /* CARD LOGIN ULTRA-GLASS */
     .auth-card {
-        background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1);
-        padding: 48px; border-radius: 16px; text-align: center; max-width: 400px;
-        backdrop-filter: blur(20px); box-shadow: 0 20px 40px rgba(0,0,0,0.5);
+        background: rgba(255, 255, 255, 0.03);
+        backdrop-filter: blur(40px) saturate(150%);
+        -webkit-backdrop-filter: blur(40px) saturate(150%);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-top: 1px solid rgba(255, 255, 255, 0.25); /* Glossy top edge */
+        padding: 48px 40px; 
+        border-radius: 28px; 
+        text-align: center; 
+        width: 90%;
+        max-width: 420px;
+        box-shadow: 
+            0 32px 64px rgba(0, 0, 0, 0.5), 
+            inset 0 1px 0 rgba(255, 255, 255, 0.1);
+        transform: translateY(0);
+        animation: cardFloatUp 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
     }
 
+    @keyframes cardFloatUp {
+        0% { opacity: 0; transform: translateY(30px) scale(0.95); }
+        100% { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    .auth-card h2 { 
+        margin: 0 0 32px 0; 
+        font-size: 28px; 
+        color: white; 
+        font-weight: 800;
+        letter-spacing: -1px;
+    }
+
+    .auth-form { 
+        display: flex; 
+        flex-direction: column; 
+        gap: 16px; 
+    }
+
+    /* INPUT CAMPI INCASSATI E LUMINOSI */
     .auth-form input {
-        width: 100%; padding: 14px; background: rgba(0,0,0,0.5); color: white;
-        border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; outline: none;
+        width: 100%; 
+        padding: 16px 20px; 
+        background: rgba(0, 0, 0, 0.3); 
+        color: white;
+        border: 1px solid rgba(255, 255, 255, 0.05); 
+        border-radius: 16px; 
+        font-size: 15px;
+        box-sizing: border-box; 
+        outline: none; 
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
     }
 
+    .auth-form input::placeholder {
+        color: rgba(255, 255, 255, 0.3);
+    }
+
+    .auth-form input:focus { 
+        border-color: var(--accent-color); 
+        background: rgba(0, 0, 0, 0.5);
+        box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.1), inset 0 2px 4px rgba(0,0,0,0.2); 
+    }
+    
+    .auth-form input:disabled { 
+        opacity: 0.5; 
+        cursor: not-allowed; 
+    }
+
+    .auth-error { 
+        color: #ef4444; 
+        font-size: 13px; 
+        font-weight: 700; 
+        margin-top: -4px; 
+        background: rgba(239, 68, 68, 0.1);
+        padding: 10px;
+        border-radius: 10px;
+        border: 1px solid rgba(239, 68, 68, 0.2);
+    }
+
+    /* BOTTONE CALL TO ACTION */
     .btn-auth {
-        background: var(--accent-color); color: black; border: none; padding: 14px;
-        font-size: 16px; font-weight: bold; border-radius: 30px; cursor: pointer;
+        background: var(--accent-color); 
+        color: black; 
+        border: none; 
+        padding: 16px;
+        font-size: 16px; 
+        font-weight: 800; 
+        border-radius: 16px; 
+        cursor: pointer;
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); 
+        width: 100%; 
+        margin-top: 8px;
     }
 
+    .btn-auth:hover:not(:disabled) { 
+        transform: translateY(-2px); 
+        box-shadow: 0 8px 24px rgba(255, 255, 255, 0.2);
+        filter: brightness(1.15);
+    }
+    
+    .btn-auth:active:not(:disabled) {
+        transform: translateY(1px);
+        box-shadow: 0 2px 8px rgba(255, 255, 255, 0.1);
+    }
+
+    .btn-auth:disabled { 
+        opacity: 0.7; 
+        cursor: wait; 
+        filter: grayscale(0.5);
+    }
+
+    /* BOTTONE TOGGLE SECONDARIO */
+    .btn-toggle-auth {
+        background: none; 
+        border: none; 
+        color: rgba(255, 255, 255, 0.4);
+        margin-top: 24px; 
+        cursor: pointer; 
+        font-size: 14px; 
+        font-weight: 600;
+        transition: all 0.2s;
+    }
+
+    .btn-toggle-auth:hover { 
+        color: white; 
+        text-shadow: 0 0 12px rgba(255,255,255,0.4);
+    }
+
+    /* MEDIA QUERIES (FIX MOBILE ANTI-GLITCH) */
     @media (max-width: 768px) {
         .app-row.max-glass-layout { padding: 12px 12px 0 12px; gap: 12px; }
 
@@ -441,5 +586,6 @@
 
     :global(.max-glass-layout .card:hover) {
         background: rgba(255, 255, 255, 0.1) !important;
+        transform: translateY(-4px) translate3d(0,0,0);
     }
 </style>
