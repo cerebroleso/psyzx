@@ -1,48 +1,75 @@
 <script>
     import { onMount } from 'svelte';
     import { get } from 'svelte/store';
-    import { allTracks, albumsMap, currentPlaylist, currentIndex, isPlaying, isShuffle, shuffleHistory } from '../../store.js';
+    // Import the new cache stores from your store.js
+    import { allTracks, albumsMap, currentPlaylist, currentIndex, isPlaying, isShuffle, shuffleHistory, cachedTrackIds, refreshOfflineCache } from '../../store.js';
     import { formatTime } from '../utils.js';
+    import { fly, slide } from 'svelte/transition'; // Add slide for smooth appearance
+    import { totalCacheSize } from '../../store.js';
 
-    let offlineTracks = [];
     let loading = true;
+    let activeDownloads = {}; // Format: { trackId: progressValue }
+
+    // REACTIVE: This list updates automatically whenever a track is added to cache
+    $: offlineTracks = $allTracks
+        .filter(t => $cachedTrackIds.has(t.id))
+        .sort((a, b) => a.title.localeCompare(b.title));
 
     $: isPlayingPlaylist = $isPlaying && $currentPlaylist.length > 0 && offlineTracks.some(t => t.id === $currentPlaylist[$currentIndex]?.id);
 
+    // Add this inside your <script>
+    $: getTrackName = (id) => $allTracks.find(t => t.id == id)?.title || "Unknown Track";
+
+    // --- DEBUG STATE ---
+    let debugLogs = [];
+    const addLog = (msg) => {
+        const time = new Date().toLocaleTimeString();
+        debugLogs = [`[${time}] ${msg}`, ...debugLogs.slice(0, 4)];
+    };
+
     onMount(async () => {
-        try {
-            if (!('caches' in window)) { console.warn("Cache API non supportata"); loading = false; return; }
-            const cachesList = await caches.keys();
-            const cachedIds = new Set();
-            for (let cName of cachesList) {
-                try {
-                    const cache = await caches.open(cName);
-                    const reqs = await cache.keys();
-                    for (let req of reqs) {
-                        // FIX: Splitta l'URL fisicamente e prende l'ultimo parametro numerico
-                        const parts = req.url.split('?')[0].split('/');
-                        const possibleId = parseInt(parts[parts.length - 1], 10);
-                        if (!isNaN(possibleId)) {
-                            cachedIds.add(possibleId);
-                        }
-                    }
-                } catch(e) {}
-            }
-            // Mappa l'ID della traccia con gli ID salvati in cache
-            offlineTracks = $allTracks.filter(t => cachedIds.has(t.id)).sort((a, b) => a.title.localeCompare(b.title));
-        } catch (e) { console.warn("Errore lettura cache", e); }
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.addEventListener('message', (event) => {
+                const data = event.data;
+                
+                // NEW: Capture logs from the SW
+                if (data.type === 'DEBUG_LOG') {
+                    addLog(data.msg);
+                }
+
+                if (data.type === 'DOWNLOAD_PROGRESS') {
+                    activeDownloads[data.trackId] = data.progress;
+                    activeDownloads = activeDownloads;
+                }
+
+                if (data.type === 'CACHE_UPDATED') {
+                    refreshOfflineCache();
+                    addLog("✅ SW: Cache successfully updated");
+                    setTimeout(() => { activeDownloads = {}; }, 1500);
+                }
+            });
+        }
+        await refreshOfflineCache();
         loading = false;
     });
+    
 
     const togglePlayView = () => {
         if (offlineTracks.length === 0) return;
-        if (isPlayingPlaylist) { document.querySelector('audio').pause(); } 
-        else {
-            if (offlineTracks.some(t => t.id === $currentPlaylist[$currentIndex]?.id)) { document.querySelector('audio').play(); } 
-            else {
+        const audio = document.querySelector('audio');
+        if (isPlayingPlaylist) { 
+            audio.pause(); 
+        } else {
+            if (offlineTracks.some(t => t.id === $currentPlaylist[$currentIndex]?.id)) { 
+                audio.play(); 
+            } else {
                 currentPlaylist.set(offlineTracks);
-                if ($isShuffle) { shuffleHistory.set([]); currentIndex.set(Math.floor(Math.random() * offlineTracks.length)); } 
-                else { currentIndex.set(0); }
+                if ($isShuffle) { 
+                    shuffleHistory.set([]); 
+                    currentIndex.set(Math.floor(Math.random() * offlineTracks.length)); 
+                } else { 
+                    currentIndex.set(0); 
+                }
             }
         }
     };
@@ -50,11 +77,19 @@
     const toggleShuffleMode = () => {
         isShuffle.set(!$isShuffle);
         currentPlaylist.set(offlineTracks);
-        if ($isShuffle) { shuffleHistory.set([]); currentIndex.set(Math.floor(Math.random() * offlineTracks.length)); } 
-        else { currentIndex.set(0); }
+        if ($isShuffle) { 
+            shuffleHistory.set([]); 
+            currentIndex.set(Math.floor(Math.random() * offlineTracks.length)); 
+        } else { 
+            currentIndex.set(0); 
+        }
     };
 
-    const playSpecificTrack = (index) => { shuffleHistory.set([]); currentPlaylist.set(offlineTracks); currentIndex.set(index); };
+    const playSpecificTrack = (index) => { 
+        shuffleHistory.set([]); 
+        currentPlaylist.set(offlineTracks); 
+        currentIndex.set(index); 
+    };
 
     function swipeToQueue(node, track) {
         let startX = 0, currentX = 0, isSwiping = false;
@@ -75,7 +110,9 @@
             }
             setTimeout(() => { isSwiping = false; currentX = 0; }, 50);
         };
-        node.addEventListener('touchstart', onStart, {passive: true}); node.addEventListener('touchmove', onMove, {passive: true}); node.addEventListener('touchend', onEnd);
+        node.addEventListener('touchstart', onStart, {passive: true}); 
+        node.addEventListener('touchmove', onMove, {passive: true}); 
+        node.addEventListener('touchend', onEnd);
         return { destroy() { node.removeEventListener('touchstart', onStart); node.removeEventListener('touchmove', onMove); node.removeEventListener('touchend', onEnd); } };
     }
 </script>
@@ -93,9 +130,11 @@
         <div class="album-info">
             <div class="album-type">Local Cache</div>
             <div class="album-title">Available Offline</div>
-            <div class="album-meta"><strong>Downloaded Tracks</strong><span class="dot">•</span><span>{offlineTracks.length} songs</span></div>
+            <div class="album-meta"><strong>Downloaded Tracks</strong><span class="dot">•</span><span>{offlineTracks.length} songs</span><span class="dot">•</span><span style="color: var(--accent-color); font-weight: 800;">{$totalCacheSize}</span></div>
+            </div>
         </div>
-    </div>
+
+    
 
     <div class="action-bar">
         <button class="btn-main-play hoverable" aria-label="Play" disabled={offlineTracks.length === 0} on:click={togglePlayView} style={offlineTracks.length === 0 ? 'opacity:0.5' : ''}>
@@ -109,6 +148,25 @@
             <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 18h1.4c1.3 0 2.5-.6 3.3-1.7l6.1-8.6c.7-1.1 2-1.7 3.3-1.7H22"></path><path d="m18 2 4 4-4 4"></path><path d="M2 6h1.9c1.5 0 2.9.9 3.6 2.2"></path><path d="M22 18h-5.9c-1.3 0-2.6-.7-3.3-1.8l-.5-.8"></path><path d="m18 14 4 4-4 4"></path></svg>
         </button>
     </div>
+
+    {#if Object.keys(activeDownloads).length > 0}
+        <div class="download-section" transition:slide>
+            <div class="sys-title" style="margin-bottom: 12px; font-size: 10px; opacity: 0.6;">
+                ACTIVE DOWNLOADS
+            </div>
+            {#each Object.entries(activeDownloads) as [id, progress]}
+                <div class="download-item" in:fly={{ y: 10 }}>
+                    <div class="download-info">
+                        <span class="dl-name">{getTrackName(id)}</span>
+                        <span class="dl-perc">{progress}%</span>
+                    </div>
+                    <div class="progress-container">
+                        <div class="progress-bar" style="width: {progress}%"></div>
+                    </div>
+                </div>
+            {/each}
+        </div>
+    {/if}
 
     {#if offlineTracks.length > 0}
         <div class="list-container active-view" id="tracks-container">
@@ -131,12 +189,127 @@
             {/each}
         </div>
     {:else}
-        <div style="padding: 48px; text-align: center; color: var(--text-secondary);">Nessuna traccia in cache trovata. Ascolta le canzoni per scaricarle in background.</div>
+        <div style="padding: 48px; text-align: center; color: var(--text-secondary);">No tracks found in cache. Play tracks in order to download and have them available offline.</div>
     {/if}
 {/if}
+
+<!-- <div class="debug-overlay">
+    <div class="debug-header">NERD STATS (v3.0-iOS)</div>
+    <div class="debug-grid">
+        <div class="debug-val"><span>DL_ACTIVE:</span> {Object.keys(activeDownloads).length}</div>
+        <div class="debug-val"><span>OFFLINE_CNT:</span> {offlineTracks.length}</div>
+        <div class="debug-val"><span>CACHE_SET:</span> {$cachedTrackIds.size}</div>
+    </div>
+    <div class="debug-console">
+        {#each debugLogs as log}
+            <div class="log-line">{log}</div>
+        {/each}
+    </div>
+</div> -->
 
 <style>
     .hoverable { transition: transform 0.2s, background 0.2s, color 0.2s; cursor: pointer; }
     .btn-main-play.hoverable:hover { transform: scale(1.05); background: var(--accent-color); color: black; }
     .btn-icon-bar.hoverable:hover { color: white; transform: scale(1.1); }
+
+    .download-section {
+        margin: 0 16px 24px 16px;
+        padding: 16px;
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 12px;
+        backdrop-filter: blur(10px);
+    }
+
+    .download-item {
+        margin-bottom: 12px;
+    }
+
+    .download-item:last-child { margin-bottom: 0; }
+
+    .download-info {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 8px;
+        font-size: 13px;
+        font-weight: 600;
+    }
+
+    .dl-name {
+        color: white;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .dl-perc {
+        color: var(--accent-color);
+    }
+
+    .progress-container {
+        width: 100%;
+        height: 4px;
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 2px;
+        overflow: hidden;
+    }
+
+    .progress-bar {
+        height: 100%;
+        background: var(--accent-color);
+        box-shadow: 0 0 10px var(--accent-color);
+        transition: width 0.3s ease; /* Makes the bar glide smoothly */
+    }
+
+
+    .debug-overlay {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: rgba(0, 0, 0, 0.85);
+        backdrop-filter: blur(10px);
+        border-top: 1px solid #00ff00;
+        padding: 10px;
+        z-index: 999999;
+        font-family: 'Courier New', Courier, monospace;
+        pointer-events: none; /* Allows you to click through it if needed */
+        font-size: 10px;
+        color: #00ff00;
+    }
+
+    .debug-header {
+        font-weight: bold;
+        margin-bottom: 5px;
+        border-bottom: 1px solid #00ff0033;
+        padding-bottom: 2px;
+    }
+
+    .debug-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 5px;
+        margin-bottom: 5px;
+    }
+
+    .debug-val span {
+        color: #888;
+    }
+
+    .debug-console {
+        background: #000;
+        padding: 5px;
+        border-radius: 4px;
+        height: 60px;
+        overflow: hidden;
+    }
+
+    .log-line {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        border-left: 2px solid #00ff00;
+        padding-left: 5px;
+        margin-bottom: 2px;
+    }
 </style>

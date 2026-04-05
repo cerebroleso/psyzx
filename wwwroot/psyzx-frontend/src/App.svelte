@@ -6,6 +6,8 @@
     import Player from './lib/Player.svelte';
     import FullPlayer from './lib/FullPlayer.svelte';
     import RightSidebar from './lib/RightSidebar.svelte';
+    import Footer from './lib/Footer.svelte';
+    import InitialLoader from './lib/InitialLoader.svelte';
     
     import Library from './lib/views/Library.svelte';
     import Artist from './lib/views/Artist.svelte';
@@ -23,10 +25,26 @@
     import { api } from './lib/api.js';
     import { allTracks, artistsMap, albumsMap, accentColor, isGlobalColorActive, isMaxGlassActive } from './store.js';
 
+    import { primeEngine } from './lib/audio.js';
+    
+    // As soon as the user touches the screen once, we unlock the hardware
+    const handleFirstInteraction = () => {
+        primeEngine();
+        // Remove the listeners so we don't spam the engine
+        window.removeEventListener('touchstart', handleFirstInteraction);
+        window.removeEventListener('mousedown', handleFirstInteraction);
+    };
+
+    onMount(() => {
+        window.addEventListener('touchstart', handleFirstInteraction);
+        window.addEventListener('mousedown', handleFirstInteraction);
+    });
+
     let currentHash = '';
     let isMobileSidebarOpen = false;
     let isScrolled = false;
     let isLoading = true;
+    let isFirstLoad = false;
     let isFullPlayerOpen = false;
     let apiError = null;
     
@@ -116,56 +134,64 @@
         albumsMap.set(newAlbums);
     };
 
+    
+
+    let bootProgress = 0;
+    let bootStatus = "Waking up...";
+
     const bootEngine = async () => {
         isLoading = true;
-        apiError = null;
+        isFirstLoad = !sessionStorage.getItem('psyzx_booted');
 
+        // Trickle: Updates bootProgress directly
+        const trickle = setInterval(() => {
+            if (bootProgress < 95) bootProgress += 0.2;
+        }, 100);
+
+        // Step 1
+        bootStatus = "Verifying Identity...";
         const isAuth = await api.checkAuth();
-        if (!isAuth) {
-            requiresLogin = true;
-            isLoading = false;
+        if (!isAuth) { 
+            clearInterval(trickle);
+            requiresLogin = true; 
+            isLoading = false; 
             return; 
         }
-
-        let hasLocalData = false;
+        bootProgress = 25; // Updated from targetProgress
 
         try {
+            // Step 2
+            bootStatus = "Checking local storage...";
             const cachedLocal = await localDB.get('psyzx_library_cache');
-            
-            if (cachedLocal && Array.isArray(cachedLocal) && cachedLocal.length > 0) {
+            if (cachedLocal?.length > 0) {
                 buildLibrary(cachedLocal, null);
-                hasLocalData = true;
+                bootProgress = 45; // Updated from targetProgress
             }
 
-            let data = null;
+            // Step 3
+            bootStatus = "Syncing tracks from server...";
+            let data = await api.getTracks();
+            bootProgress = 85; // Updated from targetProgress
 
-            try {
-                data = await api.getTracks();
-            } catch (e) {
-                if (e && e.message === 'UNAUTHORIZED') {
-                    requiresLogin = true;
-                    isLoading = false;
-                    return;
-                }
-            }
-
-            if (data && Array.isArray(data) && data.length > 0) {
+            if (data?.length > 0) {
+                bootStatus = "Optimizing library...";
                 await localDB.set('psyzx_library_cache', data);
+                bootProgress = 95; // Updated from targetProgress
                 
                 let statsData = null;
                 try { statsData = await api.getStats(); } catch(e) {}
-                
                 buildLibrary(data, statsData);
-            } else if (!hasLocalData) {
-                apiError = "No tracks found or backend offline.";
             }
-
         } catch (e) {
-            if (!hasLocalData) {
-                apiError = "Failed to load data. Check console.";
-            }
+            console.error(e);
         } finally {
-            isLoading = false;
+            clearInterval(trickle);
+            bootProgress = 100; // Updated from targetProgress
+            bootStatus = "Ready.";
+            setTimeout(() => {
+                isLoading = false;
+                sessionStorage.setItem('psyzx_booted', 'true');
+            }, 800);
         }
     };
     
@@ -180,6 +206,23 @@
         bootEngine();
         return () => window.removeEventListener('hashchange', handleHashChange);
     });
+
+    if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js', { scope: '/' })
+        .then(reg => {
+            console.log('SW Registered!', reg);
+            // If the SW updated, this makes it take control immediately
+            reg.onupdatefound = () => {
+                const newWorker = reg.installing;
+                newWorker.onstatechange = () => {
+                    if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                        location.reload(); 
+                    }
+                };
+            };
+        })
+        .catch(err => console.error('SW Registration Failed', err));
+}
 
     const handleScroll = (e) => { isScrolled = e.target.scrollTop > 50; };
 
@@ -218,7 +261,17 @@
 </script>
 
 {#if isLoading}
-    <div id="loader-overlay" class="active" out:fade={{duration: 300}}><div class="spinner"></div></div>
+    {#if isFirstLoad}
+        <InitialLoader progress={bootProgress} status={bootStatus} />
+    {:else}
+        <div id="loader-overlay" class="active" out:fade={{duration: 300}}>
+            <div class="ios-spinner">
+                {#each Array(12) as _, i}
+                    <div style="transform: rotate({i * 30}deg); animation-delay: {-(1.1 - (i * 0.083))}s;"></div>
+                {/each}
+            </div>
+        </div>
+    {/if}
 {/if}
 
 {#if requiresLogin}
@@ -261,56 +314,59 @@
 <div class="global-gradient-overlay"></div>
 
 {#if !requiresLogin && !isLoading}
-<div id="app-layout" style="position: relative; z-index: 1;">
-    <div class="app-row" class:max-glass-layout={$isMaxGlassActive}>
-        <Sidebar bind:isMobileOpen={isMobileSidebarOpen} {currentHash} />
+    <div id="app-layout" style="position: relative; z-index: 1;">
+        <div class="app-row" class:max-glass-layout={$isMaxGlassActive}>
+            <Sidebar bind:isMobileOpen={isMobileSidebarOpen} {currentHash} />
 
-        <main id="main-view" on:scroll={handleScroll}>
-            <Topbar {isScrolled} navContext={navContextTitle} currentHash={currentHash} on:toggleSidebar={() => isMobileSidebarOpen = !isMobileSidebarOpen} />
-            
-            <div id="main-content" style="position: relative;">
-                {#key currentHash}
-                <div in:fade={{duration: 250, delay: 100}} out:fade={{duration: 100}} style="position: absolute; width: 100%;">
-                    {#if currentHash === '' || currentHash === '#' || currentHash === '#/'}
-                        <Library />
-                    {:else if currentHash.startsWith('#artist/')}
-                        <Artist artistId={currentHash.split('/')[1]} />
-                    {:else if currentHash.startsWith('#album/')}
-                        <Album albumId={currentHash.split('/')[1]} />
-                    {:else if currentHash.startsWith('#search/')}
-                        <Search query={decodeURIComponent(currentHash.substring(8))} />
-                    {:else if currentHash === '#playlists'}
-                        <Playlists />
-                    {:else if currentHash.startsWith('#playlist/')} 
-                        <Playlist playlistId={currentHash.split('/')[1]} />
-                    {:else if currentHash === '#account'}
-                        <Account />
-                    {:else if currentHash === '#top'}
-                        <TopPlayed />
-                    {:else if currentHash === '#all'}
-                        <ThePool />
-                    {:else if currentHash === '#offline'}
-                        <Offline />
-                    {:else if currentHash === '#downloader'}
-                        <Downloader />
-                    {:else if currentHash === '#settings'}
-                        <Settings />
-                    {:else}
-                        <div style="padding: 24px; color: var(--text-secondary);">Route not found.</div>
-                    {/if}
+            <main id="main-view" on:scroll={handleScroll}>
+                <Topbar {isScrolled} navContext={navContextTitle} currentHash={currentHash} on:toggleSidebar={() => isMobileSidebarOpen = !isMobileSidebarOpen} />
+                
+                <div id="main-content" style="position: relative;">
+                    {#key currentHash}
+                    <div in:fade={{duration: 250, delay: 100}} out:fade={{duration: 100}} style="position: absolute; width: 100%;">
+                        {#if currentHash === '' || currentHash === '#' || currentHash === '#/'}
+                            <Library />
+                        {:else if currentHash.startsWith('#artist/')}
+                            <Artist artistId={currentHash.split('/')[1]} />
+                        {:else if currentHash.startsWith('#album/')}
+                            <Album albumId={currentHash.split('/')[1]} />
+                        {:else if currentHash.startsWith('#search/')}
+                            <Search query={decodeURIComponent(currentHash.substring(8))} />
+                        {:else if currentHash === '#playlists'}
+                            <Playlists />
+                        {:else if currentHash.startsWith('#playlist/')} 
+                            <Playlist playlistId={currentHash.split('/')[1]} />
+                        {:else if currentHash === '#account'}
+                            <Account />
+                        {:else if currentHash === '#top'}
+                            <TopPlayed />
+                        {:else if currentHash === '#all'}
+                            <ThePool />
+                        {:else if currentHash === '#offline'}
+                            <Offline />
+                        {:else if currentHash === '#downloader'}
+                            <Downloader />
+                        {:else if currentHash === '#settings'}
+                            <Settings />
+                        {:else}
+                            <div style="padding: 24px; color: var(--text-secondary);">Route not found.</div>
+                        {/if}
+
+                        <Footer />
+                    </div>
+                    {/key}
                 </div>
-                {/key}
-            </div>
-        </main>
+            </main>
 
-        <aside id="right-sidebar">
-            <RightSidebar />
-        </aside>
+            <aside id="right-sidebar">
+                <RightSidebar />
+            </aside>
+        </div>
+
+        <Player on:toggleFull={() => isFullPlayerOpen = !isFullPlayerOpen} />
     </div>
 
-    <Player on:toggleFull={() => isFullPlayerOpen = !isFullPlayerOpen} />
     <FullPlayer isOpen={isFullPlayerOpen} on:close={() => isFullPlayerOpen = false} />
-</div>
 {/if}
 
 <style>
@@ -551,6 +607,44 @@
         text-shadow: 0 0 12px rgba(255,255,255,0.4);
     }
 
+    #loader-overlay {
+        position: fixed; 
+        inset: 0; 
+        background: rgba(5, 5, 5, 0.8);
+        backdrop-filter: blur(20px); 
+        -webkit-backdrop-filter: blur(20px);
+        display: flex; 
+        align-items: center; 
+        justify-content: center; 
+        z-index: 999999;
+    }
+
+    .ios-spinner {
+        position: relative; 
+        width: 36px; 
+        height: 36px;
+        display: inline-block;
+    }
+
+    .ios-spinner div {
+        position: absolute; 
+        left: 46%; 
+        top: 10%;
+        width: 8%; 
+        height: 26%;
+        background: rgba(255, 255, 255, 0.9);
+        border-radius: 50px; 
+        opacity: 0;
+        animation: ios-fade 1s linear infinite;
+        transform-origin: 50% 150%;
+        will-change: opacity;
+    }
+
+    @keyframes ios-fade {
+        from { opacity: 1; }
+        to { opacity: 0.15; }
+    }
+
     /* MEDIA QUERIES (FIX MOBILE ANTI-GLITCH) */
     @media (max-width: 768px) {
         .app-row.max-glass-layout { padding: 12px 12px 0 12px; gap: 12px; }
@@ -606,5 +700,20 @@
 
     :global(.max-glass-layout .card:hover) {
         background: rgba(255, 255, 255, 0.1) !important;
+    }
+
+    :global(body.modal-open #app-layout) {
+        transform: scale(var(--modal-scale, 0.93)) translateY(10px) !important;
+        border-radius: 32px !important;
+        overflow: hidden !important;
+        pointer-events: none !important; /* Prevents clicking background while player is open */
+        filter: brightness(0.6) !important;
+        transition: transform 0.4s cubic-bezier(0.32, 0.72, 0, 1), 
+                    filter 0.4s ease, 
+                    border-radius 0.4s ease !important;
+    }
+
+    :global(body) {
+        background-color: #000 !important; /* Background must be black for the 'gap' to look right */
     }
 </style>

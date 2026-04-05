@@ -6,8 +6,31 @@ let eqFilters = [];
 const EQ_FREQS = [60, 250, 1000, 4000, 8000, 14000];
 let isEngineInitialized = false;
 
+export const primeEngine = async () => {
+    if (!audioCtx) initAudioEngine();
+    if (audioCtx && audioCtx.state === 'suspended') {
+        await audioCtx.resume();
+        console.log("🔊 System Level Audio Unlocked");
+    }
+};
+
 export const registerAudioElement = (el) => {
     globalAudioEl = el;
+};
+
+export const unlockAudioContext = async () => {
+    if (!audioCtx) {
+        initAudioEngine();
+    }
+    
+    if (audioCtx && audioCtx.state === 'suspended') {
+        try {
+            await audioCtx.resume();
+            console.log("[Audio] Context Resumed via User Gesture");
+        } catch (e) {
+            console.error("[Audio] Resume failed:", e);
+        }
+    }
 };
 
 export const initAudioEngine = () => {
@@ -17,22 +40,20 @@ export const initAudioEngine = () => {
         const AudioCtx = window.AudioContext || window['webkitAudioContext'];
         if (!AudioCtx) return;
         
+        // Use a single instance
         if (!audioCtx) audioCtx = new AudioCtx();
         
-        // Crea il nodo del volume master
         gainNode = audioCtx.createGain();
         
-        // Crea i 6 nodi dell'equalizzatore chirurgico
         eqFilters = EQ_FREQS.map(freq => {
             const filter = audioCtx.createBiquadFilter();
             filter.type = 'peaking';
             filter.frequency.value = freq;
-            filter.Q.value = 1.4; // Campana ottimizzata per separazione frequenze
+            filter.Q.value = 1.4;
             filter.gain.value = 0;
             return filter;
         });
         
-        // Routing: Media -> Gain -> EQ0 -> EQ1 ... -> EQ5 -> Destination
         const source = audioCtx.createMediaElementSource(globalAudioEl);
         source.connect(gainNode);
         
@@ -44,9 +65,9 @@ export const initAudioEngine = () => {
         lastNode.connect(audioCtx.destination);
         
         isEngineInitialized = true;
-        
-        if (audioCtx.state === 'suspended') audioCtx.resume();
-    } catch (e) {}
+    } catch (e) {
+        console.error("[Audio] Engine Init Error:", e);
+    }
 };
 
 export const setVolumeBoost = (val) => {

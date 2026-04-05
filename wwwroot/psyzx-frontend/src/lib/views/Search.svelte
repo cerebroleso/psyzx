@@ -1,5 +1,5 @@
 <script>
-    import { allTracks, artistsMap, albumsMap } from '../../store.js';
+    import { allTracks, artistsMap, albumsMap, currentPlaylist, currentIndex, shuffleHistory } from '../../store.js';
 
     export let query = '';
 
@@ -19,6 +19,15 @@
         a.title?.toLowerCase().includes(q) || 
         a.artistName?.toLowerCase().includes(q)
     );
+
+    const playTrack = (track) => {
+        const indexInResults = resultsTracks.findIndex(t => t.id === track.id);
+        if (indexInResults !== -1) {
+            shuffleHistory.set([]);
+            currentPlaylist.set(resultsTracks);
+            currentIndex.set(indexInResults);
+        }
+    };
 </script>
 
 <div class="search-view">
@@ -58,7 +67,7 @@
             <h2>Tracks</h2>
             <div class="track-list">
                 {#each resultsTracks as track}
-                    <div class="track-item">
+                    <div class="track-item" role="button" tabindex="0" on:click={() => playTrack(track)} on:keydown={(e) => e.key === 'Enter' && playTrack(track)}>
                         <div class="track-info">
                             <div class="track-title">{track.title}</div>
                             <div class="track-artist">{track.album.artist.name} &bull; {track.album.title}</div>
@@ -156,6 +165,8 @@
         background: rgba(255,255,255,0.03);
         border-radius: 8px;
         transition: background 0.2s ease;
+        cursor: pointer;
+        outline: none;
     }
 
     .track-item:hover {

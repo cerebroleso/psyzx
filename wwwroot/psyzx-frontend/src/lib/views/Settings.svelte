@@ -3,11 +3,18 @@
     import { fade } from 'svelte/transition';
     import { isGlobalColorActive, isMaxGlassActive, isDesktopSwapActive } from '../../store.js';
     import { setVolumeBoost } from '../audio.js';
+    import { isCacheDebugActive } from '../../store.js';
 
     let currentBoost = '1.0';
 
     onMount(() => {
         currentBoost = localStorage.getItem('psyzx_boost') || '1.0';
+        if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+            navigator.serviceWorker.controller.postMessage({
+                type: 'SET_DEBUG_MODE',
+                value: $isCacheDebugActive
+            });
+        }
     });
 
     const updateBoost = (e) => {
@@ -20,6 +27,18 @@
     const toggleGlobalColor = () => isGlobalColorActive.set(!$isGlobalColorActive);
     const toggleMaxGlass = () => isMaxGlassActive.set(!$isMaxGlassActive);
     const toggleDesktopSwap = () => isDesktopSwapActive.set(!$isDesktopSwapActive);
+    const toggleCacheDebug = () => {
+    const newVal = !$isCacheDebugActive;
+    isCacheDebugActive.set(newVal);
+    
+    // Notify the Service Worker immediately
+    if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage({
+            type: 'SET_DEBUG_MODE',
+            value: newVal
+        });
+    }
+};
 
     const nukeCache = async () => {
         if (confirm('Are you sure? This will delete all cached tracks and settings.')) {
@@ -71,6 +90,15 @@
                 <span class="setting-desc">Moves track's info to the right and volume/bitrate controls to the left.</span>
             </div>
             <button class="toggle-btn" class:active={$isDesktopSwapActive} on:click={toggleDesktopSwap} aria-label="Toggle Layout Swap">
+                <div class="toggle-knob"></div>
+            </button>
+        </div>
+        <div class="setting-item">
+            <div class="setting-info">
+                <span class="setting-title">Developer: Bypass Cache</span>
+                <span class="setting-desc">Disables aggressive caching. Use this if you are editing CSS/JS and don't see changes.</span>
+            </div>
+            <button class="toggle-btn" class:active={$isCacheDebugActive} on:click={toggleCacheDebug} aria-label="Toggle Cache Debug">
                 <div class="toggle-knob"></div>
             </button>
         </div>

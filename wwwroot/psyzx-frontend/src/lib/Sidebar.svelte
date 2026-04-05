@@ -12,8 +12,48 @@
 
     $: isMobile = innerWidth <= 768;
 
+    let isClosing = false;
+    let visualHash = currentHash;
+
+    // Only allow visualHash to follow currentHash when the sidebar is 
+    // fully settled and open. This prevents the "jump" during exit.
+    $: if (isMobileOpen && !isClosing) {
+        visualHash = currentHash;
+    }
+
+    // Change your reactive block to be simpler
+    // If we are closing, we REFUSE to update the visualHash
+    $: if (!isClosing) {
+        visualHash = currentHash;
+    }
+
     const closeSidebar = () => {
+        // We set isClosing FIRST to lock the visualHash immediately
+        isClosing = true;
         isMobileOpen = false;
+
+        // Reset everything once the sidebar is physically gone
+        setTimeout(() => {
+            isClosing = false;
+            visualHash = currentHash; 
+        }, 400); // 400ms to be safe (transition is 300ms)
+    };
+
+    const handleNav = (id) => {
+        if (isMobile) {
+            isClosing = true;
+            isMobileOpen = false;
+            
+            // Navigate immediately
+            window.location.hash = id;
+
+            // Unlock only after sidebar is gone
+            setTimeout(() => {
+                isClosing = false;
+            }, 400);
+        } else {
+            window.location.hash = id;
+        }
     };
 
     const handleKeydown = (e) => {
@@ -74,9 +114,14 @@
 
     <nav>
         {#each menu as item}
-            <a href="{item.id}" class:active={currentHash === item.id || (item.id === '#/' && (currentHash === '' || currentHash === '#/'))} on:click={closeSidebar}>
+            <a 
+            href={item.id}
+            class:active={visualHash === item.id || (item.id === '#/' && (visualHash === '' || visualHash === '#/'))} 
+            on:click|preventDefault={() => handleNav(item.id)}>
                 <span class="icon-wrap">
-                    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="{item.icon}"></path></svg>
+                    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="{item.icon}"></path>
+                    </svg>
                 </span>
                 <span>{item.text}</span>
             </a>
@@ -100,16 +145,45 @@
 
 <style>
     /* ... (Il tuo CSS della Sidebar rimane identico) ... */
-    .backdrop { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); z-index: 100004; cursor: pointer; }
+    .backdrop { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); z-index: 100004; cursor: pointer; pointer-events: auto;}
     aside { display: flex; flex-direction: column; width: 240px; padding: 24px; box-sizing: border-box; flex-shrink: 0; transform: translate3d(0, 0, 0); transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); will-change: transform; height: 100%; overflow-y: auto; overflow-x: hidden; padding-bottom: 120px; background: #050505; border-right: 1px solid rgba(255,255,255,0.05); contain: paint; }
     .logo { display: flex; align-items: center; gap: 12px; margin-bottom: 40px; color: white; }
     .logo h2 { margin: 0; font-size: 24px; font-weight: 800; letter-spacing: -1px; flex-grow: 1; }
     .close-trigger { background: rgba(255,255,255,0.05); border: none; color: white; cursor: pointer; padding: 8px; border-radius: 50%; display: flex; align-items: center; }
     nav { display: flex; flex-direction: column; gap: 4px; }
-    a { display: flex; align-items: center; gap: 16px; padding: 12px 16px; color: rgba(255,255,255,0.6); text-decoration: none; border-radius: 12px; transition: all 0.2s; font-weight: 600; font-size: 14px; }
+    a {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 12px 16px;
+        color: rgba(255,255,255,0.6);
+        text-decoration: none;
+        border-radius: 12px;
+        /* CHANGE: Only transition color, not background or box-shadow */
+        transition: color 0.2s ease; 
+        font-weight: 600;
+        font-size: 14px;
+        -webkit-tap-highlight-color: transparent;
+        user-select: none;
+    }
+
+    /* Ensure the active state has zero transitions */
+    a.active {
+        color: black;
+        background: white;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        transition: none !important; 
+    }
     .icon-wrap { display: flex; align-items: center; justify-content: center; width: 20px; height: 20px; }
     a:hover { color: white; background: rgba(255,255,255,0.05); }
-    a.active { color: black; background: white; box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
+    a.active {
+        color: black;
+        background: white;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        /* Disable background transition when it becomes active 
+        to make it feel snappy, or keep it consistent */
+        transition: none !important; 
+    }    
     a.active svg { color: var(--accent-color); }
     .sys-monitor { padding: 16px; border-radius: 12px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); font-family: monospace; font-size: 11px; }
     .sys-title { color: var(--accent-color); font-weight: 900; margin-bottom: 8px; letter-spacing: 1px; }
@@ -118,7 +192,12 @@
     .sys-logs { color: rgba(255,255,255,0.3); display: flex; flex-direction: column; gap: 4px; }
     .version { margin-top: 24px; margin-bottom: 40px; text-align: center; font-size: 11px; color: rgba(255,255,255,0.2); }
     @media (max-width: 768px) {
-        aside { position: fixed; top: 0; left: 0; height: 100dvh; transform: translate3d(-110%, 0, 0); z-index: 100005; border-right: none; backface-visibility: hidden; visibility: hidden; transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), visibility 0s 0.3s; }
-        aside.open { transform: translate3d(0, 0, 0) !important; box-shadow: 20px 0 50px rgba(0,0,0,0.8); visibility: visible; transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), visibility 0s 0s; }
+        aside { position: fixed; top: 0; left: 0; height: 100dvh; transform: translate3d(-110%, 0, 0); z-index: 100005; border-right: none; backface-visibility: hidden; visibility: hidden; transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), visibility 0s 0.3s; transform: translate3d(-105%, 0, 0); 
+        will-change: transform;
+        /* Ensure no flickering during movement */
+        backface-visibility: hidden;
+        -webkit-backface-visibility: hidden;
+        pointer-events: none;}
+        aside.open { transform: translate3d(0, 0, 0) !important; box-shadow: 20px 0 50px rgba(0,0,0,0.8); visibility: visible; transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), visibility 0s 0s;         pointer-events: auto !important;}
     }
 </style>

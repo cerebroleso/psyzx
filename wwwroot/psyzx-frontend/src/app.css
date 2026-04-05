@@ -256,28 +256,3 @@ html, body {
         .vol-control, #nerdy-info, #btn-shuffle, #btn-repeat, #btn-lyrics, #btn-download { display: none !important; }
         .btn-icon-main { width: 40px; height: 40px; }
     }    
-
-
-
-  /*
-
-     issues:   
-
-
-   1. service workers do not work or the available offline view does not work, still, no music found there
-
-
-   2. you still didn't fix the fade background dynamic on album cover  
-
- color change. it's stuck to purple even if music is playing
-
-
-  3. edit the full playing now card to be more elegant, is a little stiff, doesn't even have animations anywhere now
-
-
-  4. add a rectangle highlight when hovering in the status bar in the track name, so the user knows clicking there would bring up the full player card
-
-  
-  5. the site on mobile does not load
-
-  */
