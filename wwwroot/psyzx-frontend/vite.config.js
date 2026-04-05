@@ -1,25 +1,43 @@
 import { defineConfig } from 'vite'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
-import basicSsl from '@vitejs/plugin-basic-ssl';
+import fs from 'fs'
+import path from 'path'
+
+// --- DIAGNOSTIC LOGS ---
+const certPath = '../../cachyos-x8664.tailb22187.ts.net.crt';
+const keyPath = '../../cachyos-x8664.tailb22187.ts.net.key';
+
+console.log("--- Checking Certificate Files ---");
+console.log("Full Path CRT:", path.resolve(certPath));
+console.log("Exists?", fs.existsSync(certPath));
+console.log("Full Path KEY:", path.resolve(keyPath));
+console.log("Exists?", fs.existsSync(keyPath));
+// -----------------------
 
 export default defineConfig({
-  plugins: [svelte(), basicSsl()],
+  plugins: [svelte()],
   server: {
-    host: true,
-    allowedHosts: true,
-    https: true,
+    host: '0.0.0.0', 
+    https: {
+      key: fs.readFileSync(keyPath),
+      cert: fs.readFileSync(certPath),
+    },
+    hmr: {
+      protocol: 'wss',
+      // CRITICAL: Match the certificate domain
+      host: 'cachyos-x8664.tailb22187.ts.net', 
+    },
     proxy: {
       '/api': {
         target: 'http://localhost:5149',
         changeOrigin: true,
         secure: false,
-        // QUESE DUE RIGHE SONO MAGIA NERA PER L'AUTH
-        cookieDomainRewrite: "", // Rimuove restrizioni di dominio dai cookie di ASP.NET
-        xfwd: true, // Invia gli header reali (IP, protocollo) al C#
-        configure: (proxy, options) => {
-          proxy.on('proxyRes', (proxyRes, req, res) => {
+        cookieDomainRewrite: "", 
+        xfwd: true,
+        configure: (proxy) => {
+          proxy.on('proxyRes', (proxyRes) => {
             proxyRes.headers['Access-Control-Allow-Origin'] = '*';
-            proxyRes.headers['Access-Control-Allow-Credentials'] = 'true'; // Fondamentale se usi Auth!
+            proxyRes.headers['Access-Control-Allow-Credentials'] = 'true';
           });
         }
       }

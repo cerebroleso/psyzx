@@ -194,6 +194,46 @@
             }, 800);
         }
     };
+
+    const handleRefresh = async () => {
+        isLoading = true;
+        isFirstLoad = true; // Forces the nice full-screen loader to show up
+        bootProgress = 10;
+        bootStatus = "Commanding C# to scan /Music...";
+        
+        try {
+            // 1. Tell backend to rescan files and update SQL
+            await api.scanLibrary();
+            bootProgress = 50;
+            
+            // 2. Fetch the newly updated database
+            bootStatus = "Downloading fresh tracks...";
+            let data = await api.getTracks();
+            bootProgress = 80;
+            
+            // 3. Update the UI and Local Cache
+            if (data?.length > 0) {
+                bootStatus = "Rebuilding Library...";
+                await localDB.set('psyzx_library_cache', data);
+                
+                let statsData = null;
+                try { statsData = await api.getStats(); } catch(e) {}
+                
+                buildLibrary(data, statsData);
+            }
+        } catch (error) {
+            console.error("Refresh failed:", error);
+            apiError = "Library Sync Failed (Server Offline?)";
+            setTimeout(() => apiError = null, 4000);
+        } finally {
+            bootProgress = 100;
+            bootStatus = "Done.";
+            setTimeout(() => {
+                isLoading = false;
+                isFirstLoad = false;
+            }, 600);
+        }
+    };
     
     onMount(() => {
         currentHash = window.location.hash;
@@ -319,8 +359,13 @@
             <Sidebar bind:isMobileOpen={isMobileSidebarOpen} {currentHash} />
 
             <main id="main-view" on:scroll={handleScroll}>
-                <Topbar {isScrolled} navContext={navContextTitle} currentHash={currentHash} on:toggleSidebar={() => isMobileSidebarOpen = !isMobileSidebarOpen} />
-                
+                <Topbar 
+                    {isScrolled} 
+                    navContext={navContextTitle} 
+                    currentHash={currentHash} 
+                    on:toggleSidebar={() => isMobileSidebarOpen = !isMobileSidebarOpen} 
+                    on:refresh={handleRefresh} 
+                />                
                 <div id="main-content" style="position: relative;">
                     {#key currentHash}
                     <div in:fade={{duration: 250, delay: 100}} out:fade={{duration: 100}} style="position: absolute; width: 100%;">

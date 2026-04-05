@@ -1,3 +1,8 @@
+/**
+ * audio.js
+ * Handles Web Audio API Context, Equalizer, and Media Session API.
+ */
+
 export let audioCtx;
 export let gainNode;
 let globalAudioEl = null;
@@ -6,6 +11,10 @@ let eqFilters = [];
 const EQ_FREQS = [60, 250, 1000, 4000, 8000, 14000];
 let isEngineInitialized = false;
 
+/**
+ * Primes the audio engine. Useful for pre-emptively resuming 
+ * the context during an early user interaction.
+ */
 export const primeEngine = async () => {
     if (!audioCtx) initAudioEngine();
     if (audioCtx && audioCtx.state === 'suspended') {
@@ -14,10 +23,17 @@ export const primeEngine = async () => {
     }
 };
 
+/**
+ * Links the <audio> element from your Svelte component to the audio engine.
+ */
 export const registerAudioElement = (el) => {
     globalAudioEl = el;
 };
 
+/**
+ * Crucial for iOS: Resumes the audio context within a user-triggered 
+ * event (like a click) to allow sound to play.
+ */
 export const unlockAudioContext = async () => {
     if (!audioCtx) {
         initAudioEngine();
@@ -33,6 +49,9 @@ export const unlockAudioContext = async () => {
     }
 };
 
+/**
+ * Sets up the Web Audio graph: Source -> Gain -> EQ -> Destination
+ */
 export const initAudioEngine = () => {
     if (typeof window === 'undefined' || !globalAudioEl || isEngineInitialized) return;
     
@@ -40,11 +59,12 @@ export const initAudioEngine = () => {
         const AudioCtx = window.AudioContext || window['webkitAudioContext'];
         if (!AudioCtx) return;
         
-        // Use a single instance
+        // Single instance of the context
         if (!audioCtx) audioCtx = new AudioCtx();
         
         gainNode = audioCtx.createGain();
         
+        // Setup Peaking filters for the EQ
         eqFilters = EQ_FREQS.map(freq => {
             const filter = audioCtx.createBiquadFilter();
             filter.type = 'peaking';
@@ -54,7 +74,10 @@ export const initAudioEngine = () => {
             return filter;
         });
         
+        // Create the source from the audio element
         const source = audioCtx.createMediaElementSource(globalAudioEl);
+        
+        // Connect the nodes
         source.connect(gainNode);
         
         let lastNode = gainNode;
@@ -62,6 +85,7 @@ export const initAudioEngine = () => {
             lastNode.connect(f);
             lastNode = f;
         });
+        
         lastNode.connect(audioCtx.destination);
         
         isEngineInitialized = true;
@@ -70,12 +94,18 @@ export const initAudioEngine = () => {
     }
 };
 
+/**
+ * Adjusts the volume boost (gain).
+ */
 export const setVolumeBoost = (val) => {
     const num = parseFloat(val);
     if (!isEngineInitialized && num !== 1.0) initAudioEngine();
     if (gainNode) gainNode.gain.value = num;
 };
 
+/**
+ * Adjusts a specific frequency band in the EQ.
+ */
 export const setEqBand = (index, val) => {
     if (!isEngineInitialized) initAudioEngine();
     if (eqFilters[index]) {
@@ -83,8 +113,12 @@ export const setEqBand = (index, val) => {
     }
 };
 
+/**
+ * Syncs the browser/iOS system-level "Now Playing" controls.
+ */
 export const updateMediaSession = (track, album, handlers) => {
     if (typeof navigator === 'undefined' || !('mediaSession' in navigator) || !window.MediaMetadata || !track) return;
+    
     try {
         navigator.mediaSession.metadata = new MediaMetadata({
             title: track.title || 'Unknown Title',
@@ -92,18 +126,25 @@ export const updateMediaSession = (track, album, handlers) => {
             album: album?.title || 'Unknown Album',
             artwork: [
                 { 
-                    src: album?.coverPath ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}` : '', 
+                    src: album?.coverPath 
+                         ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}` 
+                         : '', 
                     sizes: '512x512', 
                     type: 'image/jpeg' 
                 }
             ]
         });
 
+        // Register hardware/lock-screen controls
         navigator.mediaSession.setActionHandler('play', handlers.play);
         navigator.mediaSession.setActionHandler('pause', handlers.pause);
         navigator.mediaSession.setActionHandler('previoustrack', handlers.prev);
         navigator.mediaSession.setActionHandler('nexttrack', handlers.next);
+        
+        // Optional: Support 10-second skip in notifications
         navigator.mediaSession.setActionHandler('seekbackward', () => { handlers.seekRelative(-10); });
         navigator.mediaSession.setActionHandler('seekforward', () => { handlers.seekRelative(10); });
-    } catch (e) {}
+    } catch (e) {
+        console.warn("[MediaSession] Failed to update metadata:", e);
+    }
 };

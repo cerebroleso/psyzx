@@ -58,6 +58,12 @@
             dlStatus = `<span style="color: #ef4444;">Impossibile fermare.</span>`; 
         }
     };
+
+    const handleKeyDown = (e) => {
+        if (e.key === 'Enter') {
+            startDownload();
+        }
+    };
 </script>
 
 <div style="padding: 64px 24px; max-width: 800px; margin: 0 auto; width: 100%;">
@@ -65,7 +71,13 @@
     <p style="color: var(--text-secondary); margin-bottom: 32px;">Paste Youtube link. The server will manage download and database records in the background.</p>
     
     <div style="background: var(--surface-color); padding: 32px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); box-shadow: 0 16px 32px rgba(0,0,0,0.5);">
-        <input type="text" placeholder="https://youtube.com/watch?v=..." bind:value={dlUrl} style="width: 100%; padding: 16px; background: rgba(0,0,0,0.5); border: 1px solid #333; color: #fff; border-radius: 4px; margin-bottom: 24px; font-size: 16px; outline: none;">
+        <input 
+            type="text" 
+            placeholder="https://youtube.com/watch?v=..." 
+            bind:value={dlUrl} 
+            on:keydown={handleKeyDown}
+            style="width: 100%; padding: 16px; background: rgba(0,0,0,0.5); border: 1px solid #333; color: #fff; border-radius: 4px; margin-bottom: 24px; font-size: 16px; outline: none;"
+        >
         
         <div style="display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin-bottom: 24px;">
             <button on:click={startDownload} style="padding: 16px 32px; background: var(--accent-color); color: #000; border: none; border-radius: 32px; font-weight: bold; cursor: pointer; display: flex; align-items: center; gap: 8px;">

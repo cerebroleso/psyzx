@@ -190,9 +190,27 @@
         }
     }
 
-    const togglePlay = () => { const audio = getAudioEl(); if (audio) { audio.paused ? audio.play() : audio.pause(); } };
-    const playNext = () => { const audio = getAudioEl(); if (audio) audio.currentTime = audio.duration - 0.1; };
-    const playPrev = () => { const audio = getAudioEl(); if (audio) audio.currentTime = 0; };
+    const togglePlay = () => { 
+        const audio = getAudioEl(); 
+        if (audio) { audio.paused ? audio.play() : audio.pause(); } 
+    };
+
+    const playNext = () => { 
+        currentIndex.update(n => (n + 1) % $currentPlaylist.length);
+    };
+
+    const playPrev = () => { 
+        const audio = getAudioEl(); 
+        if (!audio) return;
+
+        // The "3-Second Rule" logic
+        if (audio.currentTime > 3) {
+            audio.currentTime = 0;
+        } else {
+            // Move to previous index, wrapping to the end if at 0
+            currentIndex.update(n => (n - 1 + $currentPlaylist.length) % $currentPlaylist.length);
+        }
+    };
 
     const goArtist = () => {
         if (album && album.artistId) {
@@ -263,6 +281,21 @@
         }
     };
 
+    function getDynamicFontSize(text, isActive) {
+        if (!isActive) return '8px';
+
+        const containerWidth = 380; 
+        const maxFontSize = 24;      
+        const minFontSize = 8;       
+        const glyphConstant = 0.70;  
+
+        const calculatedSize = containerWidth / (text.length * glyphConstant);
+
+        const finalSize = Math.min(maxFontSize, Math.max(minFontSize, calculatedSize));
+
+        return `${finalSize}px`;
+    }
+
 </script>
 
 <svelte:window
@@ -306,7 +339,13 @@
             <div class="lyrics-preview-window" on:click={() => isLyricsFullScreen = true} role="button" tabindex="0">
                 <div class="lyrics-preview-strip" style="transform: translate3d(0, calc({-activeLyricIdx} * 24px), 0);">
                     {#each lyrics as line, i}
-                        <div class="lp-mini-line" class:active={i === activeLyricIdx}>{line.text}</div>
+                        <div 
+                            class="lp-mini-line" 
+                            class:active={i === activeLyricIdx}
+                            style="font-size: {getDynamicFontSize(line.text, i === activeLyricIdx)}"
+                        >
+                            {line.text}
+                        </div>
                     {/each}
                 </div>
             </div>
@@ -446,7 +485,7 @@
     </div>
 
     {#if showQueue}
-        <div class="queue-modal" in:fly={{y: '100%', duration: 400, easing: expoOut}} out:fly={{y: '100%', duration: 300, easing: quintOut}}>
+        <div class="queue-modal" in:fly={{y: '100%', duration: 400, easing: expoOut}} out:fly={{y: '100%', duration: 300, easing: expoIn}}>
             <div class="queue-header">
                 <h3 style="margin:0; font-size:18px; color:white; font-weight:800; letter-spacing:-0.5px;">Playing Next</h3>
                 <button class="btn-icon" on:click={() => showQueue = false}>
@@ -622,13 +661,16 @@
 
     .lp-mini-line.active {
         color: white;
-        font-size: 12px;
+        /* font-size is now handled dynamically in the markup style binding */
         font-weight: 800;
         text-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
         transform: scale(1.05);
-        white-space: pre-wrap;
-        word-break: break-word;
-        overflow: visible;
+
+        /* Reverted wrapping settings to keep it single-line */
+        white-space: nowrap; 
+        word-break: initial;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
 
     .fp-progress-track { width: 100%; height: 4px !important; background: rgba(255,255,255,0.15) !important; border-radius: 10px !important; position: relative; overflow: hidden; transition: height 0.3s cubic-bezier(0.32, 0.72, 0, 1), background 0.2s !important; transform: translateZ(0); }
@@ -666,8 +708,18 @@
     }
     .preset-chip.active { background: white !important; color: black !important; border-color: white !important; box-shadow: 0 0 15px rgba(255,255,255,0.4), 0 0 5px rgba(255,255,255,0.2) !important; transform: scale(1.05); }
 
-    .fp-sliders, .full-lyrics-card { background: rgba(255, 255, 255, 0.05) !important; border: 1px solid rgba(255, 255, 255, 0.1) !important; border-radius: 24px !important; backdrop-filter: blur(15px) !important; -webkit-backdrop-filter: blur(15px) !important; }
-
+.fp-sliders, .full-lyrics-card {
+        background: rgba(255, 255, 255, 0.04) !important;
+        border: 1px solid rgba(255, 255, 255, 0.15) !important;
+        border-radius: 28px !important;
+        backdrop-filter: blur(40px) saturate(200%) brightness(1.1) !important;
+        -webkit-backdrop-filter: blur(40px) saturate(200%) brightness(1.1) !important;
+        box-shadow: 
+            0 12px 40px rgba(0, 0, 0, 0.4),
+            inset 0 1px 1px rgba(255, 255, 255, 0.2),
+            inset 0 0 20px rgba(255, 255, 255, 0.05) !important;
+        transition: all 0.5s cubic-bezier(0.16, 1, 0.3, 1) !important;
+    }
     #full-player.max-glass { height: calc(100dvh - 210px) !important; top: 76px !important; right: 12px !important; border-radius: 32px !important; border: 1px solid rgba(255, 255, 255, 0.2) !important; box-shadow: 0 25px 50px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.1) !important;}
 
     .fp-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; min-height: 28px; }

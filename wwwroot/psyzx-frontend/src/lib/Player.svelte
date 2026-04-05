@@ -325,52 +325,7 @@
     </div>
 </footer>   
 
-    <div id="player-main">
-        <div id="np-info" class="np-info-hover" role="button" tabindex="0" on:click={() => dispatch('toggleFull')} on:keydown={(e) => e.key === 'Enter' && dispatch('toggleFull')}>
-            <img id="np-cover" src={coverUrl || 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxIDEiPjxyZWN0IHdpZHRoPSIxIiBoZWlnaHQ9IjEiIGZpbGw9IiMzMzMiLz48L3N2Zz4='} alt="Cover">
-            <div id="now-playing">
-                <span id="np-title">{track ? track.title : '---'}</span>
-                <span id="np-artist">{album ? album.artistName : '---'}</span>
-            </div>
-        </div>
-
-        <div id="controls">
-            <button class="btn-icon hide-on-mobile" aria-label="Shuffle" class:active={$isShuffle} on:click={() => isShuffle.set(!$isShuffle)}>
-                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 18h1.4c1.3 0 2.5-.6 3.3-1.7l6.1-8.6c.7-1.1 2-1.7 3.3-1.7H22"></path><path d="m18 2 4 4-4 4"></path><path d="M2 6h1.9c1.5 0 2.9.9 3.6 2.2"></path><path d="M22 18h-5.9c-1.3 0-2.6-.7-3.3-1.8l-.5-.8"></path><path d="m18 14 4 4-4 4"></path></svg>
-            </button>
-            <button class="btn-icon hide-on-mobile" aria-label="Previous" on:click={playPrev}>
-                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="19 20 9 12 19 4 19 20"></polygon><line x1="5" x2="5" y1="19" y2="5"></line></svg>
-            </button>
-            <button class="btn-icon-main" aria-label="Play/Pause" on:click={togglePlay}>
-                {#if $isPlaying}
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2"><rect width="4" height="16" x="6" y="4"></rect><rect width="4" height="16" x="14" y="4"></rect></svg>
-                {:else}
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-                {/if}
-            </button>
-            <button class="btn-icon hide-on-mobile" aria-label="Next" on:click={playNext}>
-                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4"></polygon><line x1="19" x2="19" y1="5" y2="19"></line></svg>
-            </button>
-            <button class="btn-icon hide-on-mobile" aria-label="Repeat" class:active={$isRepeat} on:click={() => isRepeat.set(!$isRepeat)}>
-                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m17 2 4 4-4 4"></path><path d="M3 11v-1a4 4 0 0 1 4-4h14"></path><path d="m7 22-4-4 4-4"></path><path d="M21 13v1a4 4 0 0 1-4 4H3"></path></svg>
-            </button>
-        </div>
-
-        <div id="nerdy-info" class="hide-on-mobile">
-            <div class="vol-control">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path></svg>
-                <input class="volume-slider" type="range" aria-label="Volume" min="0" max="100" bind:value={volume} style="--val: {volume}%">
-            </div>
-            {#if bitrate > 0}
-            <div class="kbps-badge">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="var(--accent-color)"><rect x="3" y="8" width="4" height="8"/><rect x="10" y="4" width="4" height="16"/><rect x="17" y="10" width="4" height="4"/></svg>
-                <span>{bitrate} kbps</span><span class="ext">{fileExt}</span>
-            </div>
-            {:else}
-                <span style="font-size: 11px; font-family: monospace; color: #555;">NO SIGNAL</span>
-            {/if}
-        </div>
-    </div>
+    
 
 <style>
     /* 1. CONTROL CENTER: Edit these values to resize and position everything */
@@ -500,11 +455,40 @@
     
     .vol-control { display: flex; align-items: center; gap: 12px; color: rgba(255,255,255,0.7); width: 140px; }
     
-    .btn-icon { background: none; border: none; color: rgba(255,255,255,0.7); cursor: pointer; transition: color 0.2s; padding: 8px; }
-    .btn-icon:hover { color: white; }
-    .btn-icon.active { color: var(--accent-color); text-shadow: 0 0 8px var(--accent-color); }
+    /* --- FP Button --- */
+    .fp-btn-main { 
+        width: 48px; 
+        height: 48px; 
+        border-radius: 50%; 
+        border: none; 
+        background: white; 
+        color: black; 
+        display: flex; 
+        align-items: center; 
+        justify-content: center; 
+        cursor: pointer; 
+        position: relative; 
+        z-index: 1; 
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3), 
+                    0 0 5px 2px rgba(255, 255, 255, 0.6), 
+                    0 0 25px rgba(255, 255, 255, 0.2) !important; 
+        transition: transform 0.2s cubic-bezier(0.32, 0.72, 0, 1), 
+                    box-shadow 0.3s ease !important; 
+    }
 
-    /* NUKE THE STAIN: Pure black shadows only */
+    .fp-btn-main:hover { 
+        transform: scale(1.08) !important;
+        box-shadow: 0 0 20px rgba(255, 255, 255, 0.4), 
+                    0 0 10px rgba(255, 255, 255, 0.2), 
+                    0 0 4px rgba(255, 255, 255, 0.1) !important; 
+    }
+
+    .fp-btn-main:active { 
+        transform: scale(0.96) !important; 
+        filter: brightness(0.9); 
+    }
+
+    /* --- Main Icon Button --- */
     .btn-icon-main { 
         width: 44px; 
         height: 44px; 
@@ -520,12 +504,13 @@
         flex-shrink: 0;
         position: relative; 
         z-index: 1;
-        
-        /* The Absolute Fix: No white RGBA values */
-        box-shadow: 0 8px 20px rgba(0, 0, 0, 0.4) !important;
-        filter: none !important;
         outline: none !important;
         -webkit-tap-highlight-color: transparent !important;
+        
+        /* The requested white shadow applied here */
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3), 
+                    0 0 5px 2px rgba(255, 255, 255, 0.6), 
+                    0 0 25px rgba(255, 255, 255, 0.2) !important;
 
         transition: transform 0.2s cubic-bezier(0.32, 0.72, 0, 1), 
                     box-shadow 0.3s ease !important;
@@ -533,23 +518,17 @@
 
     .btn-icon-main:hover {
         transform: scale(1.08) !important;
-        box-shadow: 0 12px 25px rgba(0, 0, 0, 0.6) !important;
-    }
-
-    .btn-icon-main:active {
-        transform: scale(0.94) !important;
-    }
-
-    .btn-icon-main:hover {
-        transform: scale(1.08) !important;
-        box-shadow: 0 12px 25px rgba(0, 0, 0, 0.4) !important;    
+        /* Hover state white shadow applied here */
+        box-shadow: 0 0 20px rgba(255, 255, 255, 0.4), 
+                    0 0 10px rgba(255, 255, 255, 0.2), 
+                    0 0 4px rgba(255, 255, 255, 0.1) !important;
     }
 
     .btn-icon-main:active {
         transform: scale(0.94) !important;
         filter: brightness(0.85);
     }
-    
+        
     .kbps-badge {
         display: flex; align-items: center; gap: 6px; background: rgba(0,0,0,0.4); padding: 4px 8px; border-radius: 6px;
         font-size: 11px; font-family: monospace; font-weight: bold; border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 2px 8px rgba(0,0,0,0.3);

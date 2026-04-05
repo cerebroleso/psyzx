@@ -23,6 +23,51 @@ public class LibraryScanner
     {
         if (string.IsNullOrWhiteSpace(_basePath) || !Directory.Exists(_basePath)) return;
 
+        var dbArtists = await _context.Artists
+            .Include(a => a.Albums)
+            .ThenInclude(a => a.Tracks)
+            .ToListAsync();
+
+        foreach (var dbArtist in dbArtists)
+        {
+            var artistPath = Path.Combine(_basePath, dbArtist.Name.Trim());
+
+            if (!Directory.Exists(artistPath))
+            {
+                foreach (var album in dbArtist.Albums.ToList())
+                {
+                    _context.Tracks.RemoveRange(album.Tracks);
+                }
+                _context.Albums.RemoveRange(dbArtist.Albums);
+                _context.Artists.Remove(dbArtist);
+                continue;
+            }
+
+            foreach (var album in dbArtist.Albums.ToList())
+            {
+                var albumPath = Path.Combine(artistPath, album.Title.Trim());
+
+                if (!Directory.Exists(albumPath))
+                {
+                    _context.Tracks.RemoveRange(album.Tracks);
+                    _context.Albums.Remove(album);
+                }
+                else
+                {
+                    foreach (var track in album.Tracks.ToList())
+                    {
+                        var trackPath = Path.Combine(_basePath, track.FilePath);
+                        if (!File.Exists(trackPath))
+                        {
+                            _context.Tracks.Remove(track);
+                        }
+                    }
+                }
+            }
+        }
+
+        await _context.SaveChangesAsync();
+
         var artistDirs = Directory.GetDirectories(_basePath);
 
         foreach (var artistDir in artistDirs)
@@ -33,14 +78,13 @@ public class LibraryScanner
             if (artist == null)
             {
                 artist = new Artist { Name = artistName };
-                
                 var artistImagePath = Path.Combine(artistDir, "artist.jpg");
+
                 if (!File.Exists(artistImagePath))
                 {
                     try
                     {
                         var response = await _httpClient.GetAsync($"https://api.deezer.com/search/artist?q={Uri.EscapeDataString(artistName)}");
-                        
                         if (response.IsSuccessStatusCode)
                         {
                             var json = await response.Content.ReadAsStringAsync();
@@ -48,13 +92,11 @@ public class LibraryScanner
                             if (doc.RootElement.TryGetProperty("data", out var dataElement) && dataElement.GetArrayLength() > 0)
                             {
                                 string pictureUrl = string.Empty;
-
                                 foreach (var item in dataElement.EnumerateArray())
                                 {
                                     if (item.TryGetProperty("name", out var nameElement))
                                     {
-                                        var fetchedName = nameElement.GetString();
-                                        if (string.Equals(fetchedName, artistName, StringComparison.OrdinalIgnoreCase))
+                                        if (string.Equals(nameElement.GetString(), artistName, StringComparison.OrdinalIgnoreCase))
                                         {
                                             pictureUrl = item.GetProperty("picture_xl").GetString() ?? "";
                                             break;
@@ -63,9 +105,7 @@ public class LibraryScanner
                                 }
 
                                 if (string.IsNullOrEmpty(pictureUrl))
-                                {
                                     pictureUrl = dataElement[0].GetProperty("picture_xl").GetString() ?? "";
-                                }
 
                                 if (!string.IsNullOrWhiteSpace(pictureUrl))
                                 {
@@ -97,10 +137,9 @@ public class LibraryScanner
                 if (album == null)
                 {
                     int releaseYear = DateTime.Now.Year;
-                    
                     var firstAudio = Directory.EnumerateFiles(albumDir, "*.*", SearchOption.AllDirectories)
                         .FirstOrDefault(f => f.EndsWith(".mp3", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".flac", StringComparison.OrdinalIgnoreCase));
-                    
+
                     if (firstAudio != null)
                     {
                         try
@@ -112,8 +151,8 @@ public class LibraryScanner
                     }
 
                     album = new Album { Title = albumName, ArtistId = artist.Id, ReleaseYear = releaseYear, PlayCount = 0 };
-                    
                     var coverPath = Path.Combine(albumDir, "cover.jpg");
+
                     if (!File.Exists(coverPath))
                     {
                         var imageFiles = Directory.GetFiles(albumDir).Where(f => f.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".png", StringComparison.OrdinalIgnoreCase)).ToArray();
@@ -158,11 +197,7 @@ public class LibraryScanner
                         var dirName = Path.GetFileName(cdDir);
                         var numberString = new string(dirName.Where(char.IsDigit).ToArray());
                         int discNumber = 1;
-                        
-                        if (!string.IsNullOrEmpty(numberString))
-                        {
-                            int.TryParse(numberString, out discNumber);
-                        }
+                        if (!string.IsNullOrEmpty(numberString)) int.TryParse(numberString, out discNumber);
 
                         await ProcessAudioFilesAsync(cdDir, album.Id, discNumber);
                     }
@@ -171,7 +206,7 @@ public class LibraryScanner
                 {
                     await ProcessAudioFilesAsync(albumDir, album.Id, 1);
                 }
-                
+
                 await _context.SaveChangesAsync();
             }
         }
@@ -199,11 +234,7 @@ public class LibraryScanner
                     duration = (int)tfile.Properties.Duration.TotalSeconds;
                     trackNum = (int)tfile.Tag.Track;
                     bitrate = tfile.Properties.AudioBitrate;
-                    
-                    if (tfile.Tag.Disc > 0)
-                    {
-                        discNumber = (int)tfile.Tag.Disc;
-                    }
+                    if (tfile.Tag.Disc > 0) discNumber = (int)tfile.Tag.Disc;
                 }
                 catch { }
 

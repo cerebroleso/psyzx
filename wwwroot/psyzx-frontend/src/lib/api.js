@@ -94,7 +94,7 @@ export const api = {
         } catch (e) {
             if (e.message === 'TIMEOUT' || e.message === 'NETWORK_ERROR') {
                 try {
-                    const cache = await caches.open('psyzx-data-v8'); 
+                    const cache = await caches.open('psyzx-data-v10'); 
                     const cachedRes = await cache.match(`${this.baseUrl}/Tracks`, { ignoreSearch: true });
                     if (cachedRes) {
                         return await cachedRes.json();
