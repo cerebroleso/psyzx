@@ -1,11 +1,14 @@
 <script>
     /**
      * @file FullPlayer.svelte
-     * @version 2.4.0
+     * @version 2.4.1
      * @description Professional Music Player with optimized Y-axis drawer physics.
      * * FIXED IN THIS VERSION:
      * 1. iOS Background Stack: Bound `isOpen` to toggle the `modal-open` class on document.body for mobile devices.
      * 2. Parallax Drag Physics: Mapped the Svelte drag engine to dynamically reverse the `#app-layout` scale/brightness when dragging down.
+     * 3. Seekbar UI: Fixed frameLoop ignoring UI updates during manual finger seek by manually updating the DOM inside updateSeek.
+     * 4. Accent Colors: Fixed global CSS overrides hiding the master EQ accent colors and track backgrounds using fallback and !important priorities, and fixed string coercion in Master EQ binding.
+     * 5. Preset Chips: Locked active state brightness filter to prevent native iOS tap decay.
      */
 
     import { createEventDispatcher, onMount, onDestroy, afterUpdate } from 'svelte';
@@ -19,7 +22,8 @@
         albumsMap, 
         playerCurrentTime, 
         playerDuration, 
-        isMaxGlassActive 
+        isMaxGlassActive, 
+        appSessionVersion
     } from '../store.js';
     import { formatTime } from './utils.js';
     import { setEqBand } from './audio.js';
@@ -50,6 +54,11 @@
     let isSeekingBar = false;
     let progressContainerEl;
     let isClosing = false;
+
+    const DEFAULT_PLACEHOLDER = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxIDEiPjxyZWN0IHdpZHRoPSIxIiBoZWlnaHQ9IjEiIGZpbGw9IiMzMzMiLz48L3N2Zz4=';
+    const handleImageError = (ev) => {
+        ev.target.src = DEFAULT_PLACEHOLDER;
+    };
 
     $: isMobile = innerWidth <= 768;
 
@@ -226,8 +235,11 @@
     // Link Svelte Spring to the Audio Engine
     $: $eqBands.forEach((val, i) => setEqBand(i, val));
 
-    const syncMasterEq = () => {
-        eqBands.set([$eqMaster, $eqMaster, $eqMaster, $eqMaster, $eqMaster, $eqMaster]);
+    const syncMasterEq = (event) => {
+        currentPreset = 'Custom';
+        const val = parseFloat(event.target.value);
+        eqMaster.set(val, { hard: true });
+        eqBands.set([val, val, val, val, val, val], { hard: true });
     };
 
     const applyPreset = (name) => {
@@ -347,6 +359,14 @@
         const seekTime = pct * $playerDuration;
         const audioEl = getAudioEl();
         if (audioEl) audioEl.currentTime = seekTime;
+        
+        // Ensure manual finger drag updates DOM visually since frameLoop ignores updates during isSeekingBar
+        if (progressRef) {
+            progressRef.style.transform = `scaleX(${pct})`;
+        }
+        if (currentTimeRef) {
+            currentTimeRef.textContent = formatTime(seekTime);
+        }
     };
 
     // -------------------------------------------------------------------------
@@ -397,8 +417,9 @@
     // -------------------------------------------------------------------------
     $: track = $currentPlaylist[$currentIndex];
     $: album = track ? $albumsMap.get(track.albumId) : null;
-    $: coverUrl = album && album.coverPath ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}` : 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxIDEiPjxyZWN0IHdpZHRoPSIxIiBoZWlnaHQ9IjEiIGZpbGw9IiMzMzMiLz48L3N2Zz4=';
-</script>
+    $: coverUrl = (album && album.coverPath) 
+        ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&v=${$appSessionVersion}` 
+        : DEFAULT_PLACEHOLDER;</script>
 
 <svelte:window
     bind:innerWidth={innerWidth}
@@ -447,7 +468,9 @@
                 
                 <div class="fp-cover-container">
                     {#key coverUrl}
-                        <img class="sober-cover" src={coverUrl} alt="Album Cover" in:fade={{duration: 250}}>
+                        <img class= "sober-cover" src={coverUrl}  alt="Album Cover" in:fade={{duration: 250}}
+                        on:error={handleImageError}
+                        />
                     {/key}
                 </div>
 
@@ -549,7 +572,7 @@
                             type="range" 
                             aria-label="Master EQ" 
                             min="-12" max="12" step="0.1" 
-                            bind:value={$eqMaster} 
+                            value={$eqMaster} 
                             on:input={syncMasterEq} 
                             style="--val: {(( $eqMaster + 12) / 24) * 100}%"
                         >
@@ -831,6 +854,7 @@
         font-weight: 700; cursor: pointer; 
         position: relative;
         overflow: hidden;
+        -webkit-tap-highlight-color: transparent; /* Prevent iOS native gray highlight flash */
         transition: 
             background 0.3s ease, 
             box-shadow 0.3s ease, 
@@ -878,7 +902,8 @@
 
     .preset-chip.active { 
         background: white !important; color: black !important; 
-        border-color: white !important; box-shadow: 0 0 15px rgba(255,255,255,0.4) !important; transform: scale(1.05); 
+        border-color: white !important; box-shadow: 0 0 15px rgba(255,255,255,0.4) !important; transform: scale(1.05) !important; 
+        filter: brightness(1) !important; /* Lock brightness to prevent hover interference on tap */
     }
     
     .preset-chip.active::after {
@@ -951,12 +976,12 @@
     .fp-sliders { padding: 16px; border-radius: 8px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); margin-bottom: 24px;}
 
     .fp-slider-row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
-    .label-accent { color: var(--accent-color); width: 32px; font-size: 11px; text-align: right; }
+    .label-accent { color: var(--accent-color, #ffffff) !important; width: 32px; font-size: 11px; text-align: right; }
     .label-freq { width: 32px; font-size: 11px; text-align: right; color: rgba(255,255,255,0.7); }
     
     .sleek-slider { 
         -webkit-appearance: none; appearance: none; flex: 1; height: 4px; border-radius: 2px; 
-        background: linear-gradient(to right, var(--accent-color) var(--val), rgba(255,255,255,0.15) var(--val)); 
+        background: linear-gradient(to right, var(--accent-color, #ffffff) var(--val), rgba(255,255,255,0.15) var(--val)) !important; 
         outline: none; transition: height 0.2s ease; transform: translateZ(0); cursor: grab;
     }
     .sleek-slider:active { cursor: grabbing; }
@@ -973,7 +998,7 @@
 
     .full-lyrics-card { padding: 24px; border-radius: 8px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); display: flex; flex-direction: column; flex-shrink: 0; height: 350px; transition: all 0.3s cubic-bezier(0.2, 0.8, 0.2, 1); }
     .lyrics-header-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
-    .lyrics-header-row h3 { margin: 0; font-size: 14px; color: var(--accent-color); text-transform: uppercase; letter-spacing: 1px; font-weight: 800; }
+    .lyrics-header-row h3 { margin: 0; font-size: 14px; color: var(--accent-color, #ffffff) !important; text-transform: uppercase; letter-spacing: 1px; font-weight: 800; }
     .lyric-line { font-size: 16px; font-weight: 600; color: rgba(255,255,255,0.3); margin-bottom: 16px; transition: all 0.4s cubic-bezier(0.2, 0.8, 0.2, 1); transform-origin: left center; cursor: pointer; }
     .lyric-line:hover { color: rgba(255,255,255,0.6); }
     .lyric-line.active { color: white; font-size: 22px; font-weight: 800; text-shadow: 0 0 16px rgba(255,255,255,0.4); }

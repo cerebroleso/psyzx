@@ -161,7 +161,7 @@
         
         <div class="setting-item-col">
             <div class="setting-info w-full">
-                <span class="setting-title">Force App Update</span>
+                <span class="setting-title" style="color: #ef4444;">Force App Update</span>
                 <span class="setting-desc mb-16">Purges JS/CSS/HTML and checks for a new version. Fixes iOS PWA "freeze". Your music stays safe.</span>
                 <button class="btn-refresh" on:click={refreshApp}>
                     <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>

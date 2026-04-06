@@ -52,8 +52,28 @@ export const unlockAudioContext = async () => {
 /**
  * Sets up the Web Audio graph: Source -> Gain -> EQ -> Destination
  */
+const isIOS = () => {
+  return [
+    'iPad Simulator',
+    'iPhone Simulator',
+    'iPod Simulator',
+    'iPad',
+    'iPhone',
+    'iPod'
+  ].includes(navigator.platform)
+  // iPad on iOS 13 detection
+  || (navigator.userAgent.includes("Mac") && "ontouchend" in document)
+};
+
 export const initAudioEngine = () => {
     if (typeof window === 'undefined' || !globalAudioEl || isEngineInitialized) return;
+    
+    // Bypass Web Audio API on iOS to preserve background playback
+    if (isIOS()) {
+        console.warn("[Audio] iOS detected: Bypassing Web Audio API for background compatibility.");
+        isEngineInitialized = true; // Prevent future attempts to initialize
+        return; 
+    }
     
     try {
         const AudioCtx = window.AudioContext || window['webkitAudioContext'];
@@ -142,8 +162,8 @@ export const updateMediaSession = (track, album, handlers) => {
         navigator.mediaSession.setActionHandler('nexttrack', handlers.next);
         
         // Optional: Support 10-second skip in notifications
-        navigator.mediaSession.setActionHandler('seekbackward', () => { handlers.seekRelative(-10); });
-        navigator.mediaSession.setActionHandler('seekforward', () => { handlers.seekRelative(10); });
+        // navigator.mediaSession.setActionHandler('seekbackward', () => { handlers.seekRelative(-10); });
+        // navigator.mediaSession.setActionHandler('seekforward', () => { handlers.seekRelative(10); });
     } catch (e) {
         console.warn("[MediaSession] Failed to update metadata:", e);
     }

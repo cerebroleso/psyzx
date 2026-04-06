@@ -1,5 +1,15 @@
 import { currentUser } from '../store.js';
 
+const triggerMetadataSweep = (tracks) => {
+    if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+        const trackIds = tracks.map(t => t.id);
+        navigator.serviceWorker.controller.postMessage({
+            type: 'PRELOAD_METADATA',
+            trackIds
+        });
+    }
+};
+
 export const api = {
     baseUrl: '/api',
 
@@ -90,7 +100,12 @@ export const api = {
                 }
                 throw new Error('SERVER_ERROR');
             }
-            return await res.json();
+            const tracks = await res.json();
+            
+            // TRIGGER SWEEP: This warms the cache for every album/track metadata
+            triggerMetadataSweep(tracks);
+            
+            return tracks;
         } catch (e) {
             if (e.message === 'TIMEOUT' || e.message === 'NETWORK_ERROR') {
                 try {

@@ -1,7 +1,7 @@
 <script>
     import { get } from 'svelte/store';
     import { fade, scale } from 'svelte/transition';
-    import { albumsMap, currentPlaylist, currentIndex, isPlaying, isShuffle, isRepeat, shuffleHistory, accentColor, isGlobalColorActive, isMaxGlassActive } from '../../store.js';
+    import { albumsMap, currentPlaylist, currentIndex, isPlaying, isShuffle, isRepeat, shuffleHistory, accentColor, isGlobalColorActive, isMaxGlassActive, appSessionVersion } from '../../store.js';
     import { formatTime } from '../utils.js';
     import { api } from '../api.js';
     
@@ -30,12 +30,17 @@
     $: totalAlbumPlays = tracks.reduce((sum, t) => sum + (t.playCount || 0), 0);
     $: maxPlay = Math.max(...tracks.map(t => t.playCount || 0));
     
-    $: coverUrl = album && album.coverPath ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}` : '';
-    $: avgBitrate = tracks.length > 0 ? Math.round(tracks.reduce((s, t) => s + (t.bitrate||0), 0) / tracks.length) : 0;
+    $: coverUrl = (album && album.coverPath) ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&v=${$appSessionVersion}` 
+    : DEFAULT_PLACEHOLDER;    $: avgBitrate = tracks.length > 0 ? Math.round(tracks.reduce((s, t) => s + (t.bitrate||0), 0) / tracks.length) : 0;
     
     $: isPlayingAlbum = $isPlaying && $currentPlaylist.some(t => tracks.find(pt => pt.id === t.id));
 
     let albumColor = '#b534d1';
+
+    const DEFAULT_PLACEHOLDER = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxIDEiPjxyZWN0IHdpZHRoPSIxIiBoZWlnaHQ9IjEiIGZpbGw9IiMzMzMiLz48L3N2Zz4=';
+    const handleImageError = (ev) => {
+        ev.target.src = DEFAULT_PLACEHOLDER;
+    };
     
     const extractAlbumColor = async (url) => {
         if (typeof document === 'undefined') return;
@@ -275,7 +280,9 @@
     <div class="album-header-block">
         <div class="album-hero">
             <div class="cover-wrapper">
-                <img src={coverUrl || 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxIDEiPjxyZWN0IHdpZHRoPSIxIiBoZWlnaHQ9IjEiIGZpbGw9IiMzMzMiLz48L3N2Zz4='} alt="Album Cover" style="width: 232px; height: 232px; object-fit: cover;">
+                <img src={coverUrl} alt="Album Cover" style="width: 232px; height: 232px; object-fit: cover;"
+                on:error={handleImageError}
+                />
             </div>
             <div class="album-info">
                 <div class="album-type">Album</div>
@@ -339,7 +346,7 @@
     {:else}
         <div class="list-container active-view" class:show-stats={viewMode === 'stats'} id="tracks-container" in:fade={{duration: 200}}>
             <div class="list-header">
-                <div style="text-align:center;">#</div><div>Title</div><div style="text-align:right;"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg></div>
+                <div style="text-align:center;">#</div><div>Title</div><div style="text-align:right; margin-right: 6px;"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg></div>
             </div>
             
             {#each discs as disc}
@@ -378,11 +385,11 @@
                                 <div class="list-item-artist">{album.artistName}</div>
                             </div>
                             
-                            <div class="list-item-time" style="display: flex; align-items: center; gap: 12px;">
+                            <div class="list-item-time" style="display: flex; align-items: center; gap: 6px; ">
                                 <button class="btn-add-playlist" aria-label="Add to Playlist" on:click|stopPropagation={() => openPlaylistSelector(track)}>
                                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="16"></line><line x1="8" y1="12" x2="16" y2="12"></line></svg>
                                 </button>
-                                {formatTime(track.durationSeconds)}
+                                <div style="font-size: 12px;">{formatTime(track.durationSeconds)}</div>
                             </div>
                         </div>
                     </div>

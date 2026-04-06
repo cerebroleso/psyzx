@@ -14,7 +14,7 @@ const FALLBACK_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1">
 
 let downloadQueue = [];
 let activeDownloads = 0;
-const MAX_CONCURRENT = 3;
+const MAX_CONCURRENT = 5; // Increased for metadata sweep
 
 const broadcastProgress = async (trackId, progress) => {
     const clients = await self.clients.matchAll();
@@ -37,18 +37,25 @@ const processQueue = async () => {
     if (activeDownloads >= MAX_CONCURRENT || downloadQueue.length === 0) return;
 
     while (activeDownloads < MAX_CONCURRENT && downloadQueue.length > 0) {
-        const { cacheKey, url, trackId } = downloadQueue.shift();
+        const { type, cacheKey, url, trackId } = downloadQueue.shift();
         
-        const cache = await caches.open(MEDIA_CACHE);
-        const existing = await cache.match(cacheKey);
+        const targetCacheName = type === 'MEDIA' ? MEDIA_CACHE : DATA_CACHE;
+        const cache = await caches.open(targetCacheName);
         
+        const existing = await cache.match(cacheKey, { ignoreVary: true });
         if (existing) continue;
 
         activeDownloads++;
         
         (async () => {
             try {
-                await backgroundCacheMedia(cacheKey, url, trackId);
+                if (type === 'MEDIA') {
+                    await backgroundCacheMedia(cacheKey, url, trackId);
+                } else {
+                    // Optimized for JSON/Images
+                    const res = await fetch(new Request(url, { credentials: 'include' }));
+                    if (res.ok || res.type === 'opaque') await cache.put(cacheKey, res);
+                }
             } catch (e) {
                 console.error(e);
             } finally {
@@ -61,11 +68,12 @@ const processQueue = async () => {
 
 async function backgroundCacheMedia(cacheKey, originalUrl, trackId) {
     const cache = await caches.open(MEDIA_CACHE);
-    const fullReq = new Request(originalUrl, { headers: {} });
+    const fullReq = new Request(originalUrl, { credentials: 'include' });
+    fullReq.headers.delete('Range');
 
     try {
         const res = await fetch(fullReq);
-        if (res.status !== 200) return;
+        if (!res.ok) return;
 
         const contentType = res.headers.get('content-type') || 'audio/mpeg';
         const reader = res.body.getReader();
@@ -102,27 +110,37 @@ async function backgroundCacheMedia(cacheKey, originalUrl, trackId) {
 }
 
 self.addEventListener('message', event => {
+    // 1. Existing Full Download (Audio + Meta + Image)
     if (event.data && event.data.type === 'PRELOAD_TRACKS') {
-        const trackIds = event.data.trackIds;
-        trackIds.forEach(id => {
-            const url = `/api/Tracks/stream/${id}`;
-            const cacheKey = new Request(new URL(url, self.location.origin).toString());
+        event.data.trackIds.forEach(id => {
+            const streamUrl = `/api/Tracks/stream/${id}`;
+            downloadQueue.push({ type: 'MEDIA', cacheKey: new Request(new URL(streamUrl, self.location.origin).toString()), url: streamUrl, trackId: id });
             
-            const alreadyInQueue = downloadQueue.some(item => item.trackId === id);
-            if (!alreadyInQueue) {
-                downloadQueue.push({ cacheKey, url, trackId: id });
-            }
+            queueMetadata(id);
         });
+        processQueue();
+    }
+
+    // 2. NEW: Metadata Only Sweep (JSON + Image + Lyrics for the whole DB)
+    if (event.data && event.data.type === 'PRELOAD_METADATA') {
+        event.data.trackIds.forEach(id => queueMetadata(id));
         processQueue();
     }
 });
 
+// Helper to keep the queue logic DRY
+function queueMetadata(id) {
+    const metaUrl = `/api/Tracks/${id}`;
+    const imgUrl = `/api/Tracks/image/${id}`;
+    const lyricsUrl = `/api/Tracks/lyrics/${id}`;
+
+    downloadQueue.push({ type: 'DATA', cacheKey: new Request(new URL(metaUrl, self.location.origin).toString()), url: metaUrl, trackId: id });
+    downloadQueue.push({ type: 'DATA', cacheKey: new Request(new URL(imgUrl, self.location.origin).toString()), url: imgUrl, trackId: id });
+    downloadQueue.push({ type: 'DATA', cacheKey: new Request(new URL(lyricsUrl, self.location.origin).toString()), url: lyricsUrl, trackId: id });
+}
+
 self.addEventListener('install', event => {
-    event.waitUntil(
-        caches.open(CACHE_NAME).then(cache => {
-            return Promise.all(APP_ASSETS.map(url => cache.add(url).catch(e => {})));
-        })
-    );
+    event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(APP_ASSETS)));
     self.skipWaiting();
 });
 
@@ -161,8 +179,7 @@ self.addEventListener('fetch', event => {
         event.respondWith(
             fetch(req).catch(async () => {
                 const cachedHtml = await caches.match('/index.html');
-                if (cachedHtml) return cachedHtml;
-                return new Response("Offline", { status: 503 });
+                return cachedHtml || new Response("Offline", { status: 503 });
             })
         );
         return;
@@ -184,13 +201,22 @@ self.addEventListener('fetch', event => {
 
 async function handleApiRequest(req) {
     const cache = await caches.open(DATA_CACHE);
+    const url = new URL(req.url);
+    url.searchParams.delete('token');
+    url.searchParams.delete('v');
+    url.searchParams.delete('_'); 
+    const cacheKey = new Request(url.toString());
+
     try {
         const res = await fetch(req);
-        if (res.ok && req.method === 'GET') cache.put(req, res.clone());
+        if (res.ok && req.method === 'GET') cache.put(cacheKey, res.clone());
         return res;
     } catch (err) {
-        const cachedRes = await cache.match(req, { ignoreSearch: true });
-        return cachedRes || new Response(JSON.stringify({ error: 'OFFLINE' }), { status: 503 });
+        const cachedRes = await cache.match(cacheKey, { ignoreVary: true });
+        return cachedRes || new Response(JSON.stringify({ error: 'OFFLINE' }), { 
+            status: 503,
+            headers: { 'Content-Type': 'application/json' }
+        });
     }
 }
 
@@ -199,12 +225,15 @@ async function handleImageRequest(req) {
     const url = new URL(req.url);
     url.searchParams.delete('v');
     url.searchParams.delete('token');
+    url.searchParams.delete('_');
     const cacheKey = new Request(url.toString());
-    const cachedRes = await cache.match(cacheKey);
+
+    const cachedRes = await cache.match(cacheKey, { ignoreVary: true });
     if (cachedRes) return cachedRes;
+
     try {
         const res = await fetch(req);
-        if (res.status === 200) cache.put(cacheKey, res.clone());
+        if (res.ok || res.type === 'opaque') cache.put(cacheKey, res.clone());
         return res;
     } catch (err) {
         return caches.match('/placeholder.png') || new Response(FALLBACK_SVG, { headers: { 'Content-Type': 'image/svg+xml' } });
@@ -217,10 +246,12 @@ async function handleMediaRequest(event, req) {
     const trackId = url.pathname.split('/').filter(Boolean).pop().split('?')[0];
     url.searchParams.delete('v');
     const cacheKey = new Request(url.toString());
-    const cachedRes = await cache.match(cacheKey);
+    
+    const cachedRes = await cache.match(cacheKey, { ignoreVary: true });
     if (cachedRes) return handleRangeLogic(cachedRes, req);
+    
     event.waitUntil(backgroundCacheMedia(cacheKey, req.url, trackId));
-    return fetch(req);
+    return fetch(req).catch(() => new Response(null, { status: 503 }));
 }
 
 async function handleRangeLogic(response, request) {

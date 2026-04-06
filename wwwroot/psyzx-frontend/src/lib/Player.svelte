@@ -1,10 +1,15 @@
 <script>
   import { onMount, createEventDispatcher } from 'svelte';
-  import { currentPlaylist, currentIndex, isPlaying, isShuffle, isRepeat, shuffleHistory, albumsMap, playerCurrentTime, playerDuration, accentColor, isMaxGlassActive, isDesktopSwapActive } from '../store.js';
+  import { currentPlaylist, currentIndex, isPlaying, isShuffle, isRepeat, shuffleHistory, albumsMap, playerCurrentTime, playerDuration, accentColor, isMaxGlassActive, isDesktopSwapActive, appSessionVersion } from '../store.js';
   import { initAudioEngine, audioCtx, updateMediaSession, registerAudioElement, setVolumeBoost, unlockAudioContext } from './audio.js';
   import { formatTime } from './utils.js';
 
   const dispatch = createEventDispatcher();
+
+  const DEFAULT_PLACEHOLDER = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxIDEiPjxyZWN0IHdpZHRoPSIxIiBoZWlnaHQ9IjEiIGZpbGw9IiMzMzMiLz48L3N2Zz4=';
+  const handleImageError = (ev) => {
+      ev.target.src = DEFAULT_PLACEHOLDER;
+  };
 
   let audioEl;
   let volume = 100;
@@ -24,7 +29,9 @@
   $: track = $currentPlaylist[$currentIndex];
   $: album = track ? $albumsMap.get(track.albumId) : null;
   $: streamUrl = track ? `/api/Tracks/stream/${track.id}` : '';
-  $: coverUrl = album && album.coverPath ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}` : '';
+  $: coverUrl = (album && album.coverPath) 
+    ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&v=${$appSessionVersion}` 
+    : DEFAULT_PLACEHOLDER;
   $: progressPct = $playerDuration > 0 ? ($playerCurrentTime / $playerDuration) * 100 : 0;
   $: fileExt = track ? track.filePath.split('.').pop().toUpperCase() : 'UNK';
   $: bitrate = track ? track.bitrate : 0;
@@ -306,7 +313,9 @@
       on:mousemove={handleMouseMove}
       style="--m-x: {mouseX}px; --m-y: {mouseY}px;"
     >
-      <img id="np-cover" src={coverUrl || 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxIDEiPjxyZWN0IHdpZHRoPSIxIiBoZWlnaHQ9IjEiIGZpbGw9IiMzMzMiLz48L3N2Zz4='} alt="Cover">
+      <img id="np-cover" src={coverUrl} alt="Cover"
+      on:error={handleImageError}
+      />
       <div id="now-playing">
         <div class="np-title-container marquee">
           <span>{track ? track.title : '---'}</span>
