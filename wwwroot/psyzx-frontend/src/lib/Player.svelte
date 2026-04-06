@@ -1,7 +1,7 @@
 <script>
   import { onMount, createEventDispatcher } from 'svelte';
   import { currentPlaylist, currentIndex, isPlaying, isShuffle, isRepeat, shuffleHistory, albumsMap, playerCurrentTime, playerDuration, accentColor, isMaxGlassActive, isDesktopSwapActive, appSessionVersion } from '../store.js';
-  import { initAudioEngine, audioCtx, updateMediaSession, registerAudioElement, setVolumeBoost, unlockAudioContext } from './audio.js';
+  import { initAudioEngine, audioCtx, updateMediaSession, registerAudioElement, setVolumeBoost, unlockAudioContext, updateMediaPositionState } from './audio.js';
   import { formatTime } from './utils.js';
 
   const dispatch = createEventDispatcher();
@@ -44,6 +44,7 @@
       pause: () => audioEl.pause(),
       next: playNext,
       prev: playPrev,
+      seek: (time) => { audioEl.currentTime = time; },
       seekRelative: (offset) => { audioEl.currentTime = Math.max(0, Math.min(audioEl.duration, audioEl.currentTime + offset)); }
     });
   }
@@ -189,10 +190,15 @@
 
   let lastSave = 0;
   const handleTimeUpdate = () => {
+    const currentTime = audioEl.currentTime;
+    const duration = audioEl.duration;
+    
+    // Tell iOS exactly where the scrubber should be
     playerCurrentTime.set(audioEl.currentTime);
+    
     if (audioEl.currentTime - lastSave > 3 || audioEl.currentTime < lastSave) {
-      safeSetStorage('psyzx_time', audioEl.currentTime.toString());
-      lastSave = audioEl.currentTime;
+        safeSetStorage('psyzx_time', audioEl.currentTime.toString());
+        lastSave = audioEl.currentTime;
     }
   };
 
@@ -263,21 +269,30 @@
   playsinline
   preload="auto"
   on:timeupdate={handleTimeUpdate}
-  on:loadedmetadata={() => playerDuration.set(audioEl.duration)}
+  on:loadedmetadata={() => {
+    playerDuration.set(audioEl.duration);
+    updateMediaPositionState(audioEl.currentTime, audioEl.duration); // Tell iOS the track loaded
+  }}
+  on:seeked={() => {
+    // Tell iOS the seek has officially finished
+    updateMediaPositionState(audioEl.currentTime, audioEl.duration); 
+  }}
   on:play={() => {
     isPlaying.set(true);
-    // Ensure engine is running
     if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
     const savedBoost = safeGetStorage('psyzx_boost') || '1.0';
     if (parseFloat(savedBoost) > 1.0) setVolumeBoost(savedBoost);
+    
     if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
       navigator.mediaSession.playbackState = 'playing';
+      updateMediaPositionState(audioEl.currentTime, audioEl.duration); // Sync on play
     }
   }}
   on:pause={() => {
     isPlaying.set(false);
     if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
       navigator.mediaSession.playbackState = 'paused';
+      updateMediaPositionState(audioEl.currentTime, audioEl.duration); // Sync on pause
     }
   }}
   on:ended={() => $isRepeat ? audioEl.play() : playNext()}

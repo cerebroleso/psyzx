@@ -1,5 +1,6 @@
 <script>
     import { artistsMap, appSessionVersion, viewSize } from '../../store.js';
+    import { onMount } from 'svelte';
 
     const DEFAULT_PLACEHOLDER = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxIDEiPjxyZWN0IHdpZHRoPSIxIiBoZWlnaHQ9IjEiIGZpbGw9IiMzMzMiLz48L3N2Zz4=';
     const handleImageError = (ev) => {
@@ -7,6 +8,44 @@
     };
     
     $: artistsArray = Array.from($artistsMap.values()).sort((a, b) => a.name.localeCompare(b.name));
+
+    let visibleCount = 40; // Start small so boot is instant
+    $: visibleArtists = artistsArray.slice(0, visibleCount);
+
+    let observerTarget;
+
+    onMount(() => {
+        // Set up the Intersection Observer
+        const observer = new IntersectionObserver((entries) => {
+            if (entries[0].isIntersecting) {
+                // When the invisible div hits the viewport, load 40 more
+                if (visibleCount < artistsArray.length) {
+                    visibleCount += 40;
+                }
+            }
+        }, { rootMargin: '400px' }); // Load them 400px before the user even reaches the bottom
+
+        if (observerTarget) observer.observe(observerTarget);
+
+        return () => observer.disconnect();
+    });
+
+    const smoothLoad = (node) => {
+        const trigger = () => {
+            // Wait 50ms so the browser registers the opacity: 0 state first
+            setTimeout(() => node.classList.add('loaded'), 50);
+        };
+
+        if (node.complete) {
+            trigger(); // Already in cache
+        } else {
+            node.addEventListener('load', trigger); // Waiting for network
+        }
+
+        return {
+            destroy() { node.removeEventListener('load', trigger); }
+        };
+    };
 
     const goArtist = (id) => {
         window.location.hash = `#artist/${id}`;
@@ -19,19 +58,26 @@
 </script>
 
 <div class="grid-container {$viewSize || 'medium'}">
-    {#each artistsArray as artist}
-        <div class="card" role="button" tabindex="0" on:click={() => goArtist(artist.id)} on:keydown={(e) => e.key === 'Enter' && goArtist(artist.id)}>
+    {#each visibleArtists as artist (artist.id)}
+        <div class="card" role="button" tabindex="0" on:click={() => goArtist(artist.id)}>
             <img 
-                src={artist.imagePath ? `/api/Tracks/image?path=${encodeURIComponent(artist.imagePath)}&v=${$appSessionVersion}` : DEFAULT_PLACEHOLDER} 
-                alt="{artist.name} cover"
-                loading="lazy" 
+                use:smoothLoad
+                src={artist.imagePath ? `/api/Tracks/image?path=${encodeURIComponent(artist.imagePath)}&size=thumb` : DEFAULT_PLACEHOLDER} 
+                alt=""
+                loading="lazy"
                 decoding="async"
-                on:error={handleImageError}
+                class="sleek-cover"
+                on:error={(e) => { 
+                    handleImageError(e); 
+                    setTimeout(() => e.target.classList.add('loaded'), 50);
+                }}
             >
             <div class="card-title">{artist.name}</div>
         </div>
     {/each}
 </div>
+
+<div bind:this={observerTarget} style="height: 1px; width: 100%;"></div>
 
 <style>
     /* Size Controls */
@@ -53,7 +99,27 @@
     .segmented-control button.active { background: var(--accent-color); color: black; box-shadow: 0 2px 8px rgba(0,0,0,0.3); }
 
     .card {
-        content-visibility: auto;
-        contain-intrinsic-size: 200px 250px; /* Guess the width/height of your card so the scrollbar doesn't jump */
+    }
+
+    .sleek-cover {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        opacity: 0;
+        transform: scale(0.92);
+        filter: blur(10px);
+        /* The magic physics curve */
+        transition: 
+            opacity 0.6s cubic-bezier(0.2, 0.8, 0.2, 1),
+            transform 0.6s cubic-bezier(0.34, 1.56, 0.64, 1),
+            filter 0.6s cubic-bezier(0.2, 0.8, 0.2, 1);
+        will-change: transform, opacity, filter;
+    }
+
+    /* Final state: Visible, actual size, and sharp */
+    .sleek-cover.loaded {
+        opacity: 1;
+        transform: scale(1);
+        filter: blur(0);
     }
 </style>

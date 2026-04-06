@@ -110,6 +110,27 @@
         toastTimeout = setTimeout(() => toastMessage = '', 2500);
     };
 
+    let isDownloading = false;
+
+    const downloadAlbum = () => {
+        // Ensure album is loaded and service worker is active
+        if (album && album.tracks && 'serviceWorker' in navigator && navigator.serviceWorker.controller) {
+            isDownloading = true;
+            
+            // Extract just the IDs
+            const trackIds = album.tracks.map(t => t.id);
+            
+            // Send to SW
+            navigator.serviceWorker.controller.postMessage({
+                type: 'PRELOAD_TRACKS',
+                trackIds
+            });
+
+            // Optional: reset button state after a bit, or listen for SW completion messages
+            setTimeout(() => { isDownloading = false; }, 2000); 
+        }
+    };
+
     // Context Menu State
     let contextMenu = { show: false, x: 0, y: 0, track: null };
 
@@ -321,6 +342,13 @@
             </button>
             <button class="btn-icon-bar hoverable" aria-label="PS2 View" class:active={viewMode === 'ps2'} on:click={() => viewMode = viewMode === 'ps2' ? 'list' : 'ps2'} title="PS2 Tower View">
                 <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path></svg>
+            </button>
+            <button class="btn-download btn-icon-bar hoverable" on:click={downloadAlbum} disabled={isDownloading} title="Make available offline">
+                <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <path d="M12 8v8"></path>
+                    <path d="M8 12l4 4 4-4"></path>
+                </svg>
             </button>
         </div>
     </div>
@@ -667,4 +695,25 @@
     .context-btn:hover { background: rgba(255,255,255,0.1); color: var(--accent-color); }
     .context-btn svg { color: rgba(255,255,255,0.5); transition: color 0.2s; }
     .context-btn:hover svg { color: var(--accent-color); }
+
+    .btn-download {
+        background: transparent;
+        color: var(--text-secondary, #aaa);
+        border: none;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    .btn-download:disabled {
+        opacity: 0.5;
+        cursor: wait;
+        animation: pulse 1.5s infinite;
+    }
+    @keyframes pulse {
+        0% { transform: scale(1); }
+        50% { transform: scale(0.95); }
+        100% { transform: scale(1); }
+    }
 </style>

@@ -128,7 +128,7 @@ export const updateMediaSession = (track, album, handlers) => {
         title: track.title,
         artist: album?.artistName,
         album: album?.title,
-        artwork: [{ src: album?.coverPath ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}` : '', sizes: '512x512', type: 'image/jpeg' }]
+        artwork: [{ src: album?.coverPath ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&size=thumb` : '', sizes: '512x512', type: 'image/jpeg' }]
     });
 
     navigator.mediaSession.setActionHandler('play', async () => {
@@ -141,6 +141,39 @@ export const updateMediaSession = (track, album, handlers) => {
         if (silentAnchorEl) silentAnchorEl.pause();
     });
 
+    if (handlers.seek) {
+        navigator.mediaSession.setActionHandler('seekto', (details) => {
+            // 1. Force exact time update (Bypassing broken Apple fastSeek)
+            handlers.seek(details.seekTime);
+            
+            // 2. Instantly feed the new time back to the OS to prevent rubber-banding
+            if (globalAudioEl && !isNaN(globalAudioEl.duration)) {
+                updateMediaPositionState(details.seekTime, globalAudioEl.duration);
+            }
+        });
+    }
+    
+    // 1. Ensure Next / Prev are active
     navigator.mediaSession.setActionHandler('previoustrack', handlers.prev);
     navigator.mediaSession.setActionHandler('nexttrack', handlers.next);
+
+    // 2. CRITICAL: Explicitly destroy the +10/-10 handlers so the OS restores the Next/Prev UI buttons
+    try {
+        navigator.mediaSession.setActionHandler('seekforward', null);
+        navigator.mediaSession.setActionHandler('seekbackward', null);
+    } catch (e) {}
+};
+
+export const updateMediaPositionState = (currentTime, duration) => {
+    if ('mediaSession' in navigator && !isNaN(duration) && duration > 0) {
+        try {
+            navigator.mediaSession.setPositionState({
+                duration: duration,
+                playbackRate: 1.0,
+                position: currentTime
+            });
+        } catch (e) {
+            // Fail silently if browser complains about state
+        }
+    }
 };
