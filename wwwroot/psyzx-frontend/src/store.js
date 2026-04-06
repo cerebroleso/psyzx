@@ -5,6 +5,7 @@ export const currentUser = writable(null);
 export const allTracks = writable([]);
 export const artistsMap = writable(new Map());
 export const albumsMap = writable(new Map());
+export const viewSize = writable(localStorage.getItem('psyzx_view_size') || 'medium');
 
 export const currentPlaylist = writable([]);
 export const currentIndex = writable(0);

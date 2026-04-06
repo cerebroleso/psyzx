@@ -12,6 +12,10 @@ const APP_ASSETS = [
 
 const FALLBACK_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><rect width="1" height="1" fill="#333"/></svg>';
 
+let downloadQueue = [];
+let activeDownloads = 0;
+const MAX_CONCURRENT = 3;
+
 const broadcastProgress = async (trackId, progress) => {
     const clients = await self.clients.matchAll();
     clients.forEach(client => client.postMessage({ type: 'DOWNLOAD_PROGRESS', trackId, progress }));
@@ -26,25 +30,97 @@ const notifyClientsOfCacheUpdate = async () => {
     try {
         const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
         clients.forEach(client => client.postMessage({ type: 'CACHE_UPDATED' }));
-    } catch (err) { console.warn('[SW] Notification failed:', err); }
+    } catch (err) {}
 };
 
-// Listen for frontend requests to preload upcoming tracks
+const processQueue = async () => {
+    if (activeDownloads >= MAX_CONCURRENT || downloadQueue.length === 0) return;
+
+    while (activeDownloads < MAX_CONCURRENT && downloadQueue.length > 0) {
+        const { cacheKey, url, trackId } = downloadQueue.shift();
+        
+        const cache = await caches.open(MEDIA_CACHE);
+        const existing = await cache.match(cacheKey);
+        
+        if (existing) continue;
+
+        activeDownloads++;
+        
+        (async () => {
+            try {
+                await backgroundCacheMedia(cacheKey, url, trackId);
+            } catch (e) {
+                console.error(e);
+            } finally {
+                activeDownloads--;
+                processQueue();
+            }
+        })();
+    }
+};
+
+async function backgroundCacheMedia(cacheKey, originalUrl, trackId) {
+    const cache = await caches.open(MEDIA_CACHE);
+    const fullReq = new Request(originalUrl, { headers: {} });
+
+    try {
+        const res = await fetch(fullReq);
+        if (res.status !== 200) return;
+
+        const contentType = res.headers.get('content-type') || 'audio/mpeg';
+        const reader = res.body.getReader();
+        const total = parseInt(res.headers.get('content-length'), 10);
+        let loaded = 0, chunks = [];
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) {
+                const fullBlob = new Blob(chunks, { type: contentType });
+                const cacheRes = new Response(fullBlob, {
+                    status: 200,
+                    headers: { 
+                        'Content-Type': contentType, 
+                        'Content-Length': fullBlob.size.toString(), 
+                        'Accept-Ranges': 'bytes' 
+                    }
+                });
+                await cache.put(cacheKey, cacheRes);
+                await notifyClientsOfCacheUpdate();
+                broadcastLog(`Stored ${trackId}`);
+                break;
+            }
+            chunks.push(value);
+            loaded += value.byteLength;
+            if (total) {
+                const progress = Math.round((loaded / total) * 100);
+                if (progress % 5 === 0) broadcastProgress(trackId, progress);
+            }
+        }
+    } catch (err) {
+        broadcastLog(`Failed ${trackId}`);
+    }
+}
+
 self.addEventListener('message', event => {
     if (event.data && event.data.type === 'PRELOAD_TRACKS') {
         const trackIds = event.data.trackIds;
         trackIds.forEach(id => {
             const url = `/api/Tracks/stream/${id}`;
             const cacheKey = new Request(new URL(url, self.location.origin).toString());
-            backgroundCacheMedia(cacheKey, url, id);
+            
+            const alreadyInQueue = downloadQueue.some(item => item.trackId === id);
+            if (!alreadyInQueue) {
+                downloadQueue.push({ cacheKey, url, trackId: id });
+            }
         });
+        processQueue();
     }
 });
 
 self.addEventListener('install', event => {
     event.waitUntil(
         caches.open(CACHE_NAME).then(cache => {
-            return Promise.all(APP_ASSETS.map(url => cache.add(url).catch(e => console.warn(e))));
+            return Promise.all(APP_ASSETS.map(url => cache.add(url).catch(e => {})));
         })
     );
     self.skipWaiting();
@@ -86,14 +162,7 @@ self.addEventListener('fetch', event => {
             fetch(req).catch(async () => {
                 const cachedHtml = await caches.match('/index.html');
                 if (cachedHtml) return cachedHtml;
-
-                const cachedRoot = await caches.match('/');
-                if (cachedRoot) return cachedRoot;
-
-                return new Response("Offline Mode: Application unreachable.", { 
-                    status: 503, 
-                    headers: { 'Content-Type': 'text/html' } 
-                });
+                return new Response("Offline", { status: 503 });
             })
         );
         return;
@@ -108,35 +177,20 @@ self.addEventListener('fetch', event => {
                     cache.put(req, res.clone());
                 }
                 return res;
-            }).catch(() => {
-                return new Response("Offline Mode: Resource unavailable.", { 
-                    status: 503,
-                    statusText: "Service Unavailable",
-                    headers: new Headers({ 'Content-Type': 'text/plain' })
-                });
-            });
+            }).catch(() => new Response("Offline", { status: 503 }));
         })
     );
 });
 
 async function handleApiRequest(req) {
     const cache = await caches.open(DATA_CACHE);
-    const url = new URL(req.url);
-    const path = url.pathname;
-
     try {
         const res = await fetch(req);
         if (res.ok && req.method === 'GET') cache.put(req, res.clone());
         return res;
     } catch (err) {
-        if (path.endsWith('/Auth/check')) {
-            return new Response(JSON.stringify({ id: 'offline-id', username: 'Offline User', role: 'User' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-        }
-        if (req.method === 'GET') {
-            const cachedRes = await cache.match(req, { ignoreSearch: true });
-            if (cachedRes) return cachedRes;
-        }
-        return new Response(JSON.stringify({ error: 'OFFLINE_MODE', message: 'Server is currently unreachable.', offlineMode: true }), { status: 503, headers: { 'Content-Type': 'application/json' } });
+        const cachedRes = await cache.match(req, { ignoreSearch: true });
+        return cachedRes || new Response(JSON.stringify({ error: 'OFFLINE' }), { status: 503 });
     }
 }
 
@@ -146,18 +200,14 @@ async function handleImageRequest(req) {
     url.searchParams.delete('v');
     url.searchParams.delete('token');
     const cacheKey = new Request(url.toString());
-
     const cachedRes = await cache.match(cacheKey);
     if (cachedRes) return cachedRes;
-
     try {
         const res = await fetch(req);
         if (res.status === 200) cache.put(cacheKey, res.clone());
         return res;
     } catch (err) {
-        const placeholder = await caches.match('/placeholder.png');
-        if (placeholder) return placeholder;
-        return new Response(FALLBACK_SVG, { headers: { 'Content-Type': 'image/svg+xml' } });
+        return caches.match('/placeholder.png') || new Response(FALLBACK_SVG, { headers: { 'Content-Type': 'image/svg+xml' } });
     }
 }
 
@@ -167,66 +217,10 @@ async function handleMediaRequest(event, req) {
     const trackId = url.pathname.split('/').filter(Boolean).pop().split('?')[0];
     url.searchParams.delete('v');
     const cacheKey = new Request(url.toString());
-
     const cachedRes = await cache.match(cacheKey);
-    // 1. If we have it fully downloaded, slice it and serve it offline instantly
     if (cachedRes) return handleRangeLogic(cachedRes, req);
-
-    // 2. If NOT cached, we trigger the background download for future/offline use
     event.waitUntil(backgroundCacheMedia(cacheKey, req.url, trackId));
-
-    // 3. We instantly return a standard network fetch to the audio player so it 
-    // bypasses the blob wait and starts playing immediately via the browser's native engine.
-    return fetch(req).catch(() => new Response("Network Error", { status: 503 }));
-}
-
-// Dedicated function to silently download and cache media
-async function backgroundCacheMedia(cacheKey, originalUrl, trackId) {
-    const cache = await caches.open(MEDIA_CACHE);
-    
-    // Check if it's already cached or currently being cached to prevent duplicate requests
-    if (await cache.match(cacheKey)) return;
-
-    // Strip range headers so we get the full 200 OK file
-    const fullReq = new Request(originalUrl, { headers: {} });
-
-    try {
-        const res = await fetch(fullReq);
-        if (res.status !== 200) return;
-
-        const contentType = res.headers.get('content-type') || 'audio/mpeg';
-        const reader = res.body.getReader();
-        const total = parseInt(res.headers.get('content-length'), 10);
-        let loaded = 0, chunks = [];
-
-        // Read stream to calculate progress, then save blob
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) {
-                const fullBlob = new Blob(chunks, { type: contentType });
-                const cacheRes = new Response(fullBlob, {
-                    status: 200,
-                    headers: { 
-                        'Content-Type': contentType, 
-                        'Content-Length': fullBlob.size.toString(), 
-                        'Accept-Ranges': 'bytes' 
-                    }
-                });
-                await cache.put(cacheKey, cacheRes);
-                await notifyClientsOfCacheUpdate();
-                broadcastLog(`Stored ${trackId}`);
-                break;
-            }
-            chunks.push(value);
-            loaded += value.byteLength;
-            if (total) {
-                const progress = Math.round((loaded / total) * 100);
-                if (progress % 5 === 0) broadcastProgress(trackId, progress);
-            }
-        }
-    } catch (err) {
-        console.error(`[SW] Background cache failed for ${trackId}:`, err);
-    }
+    return fetch(req);
 }
 
 async function handleRangeLogic(response, request) {
@@ -235,36 +229,16 @@ async function handleRangeLogic(response, request) {
         const size = blob.size;
         const contentType = response.headers.get('Content-Type') || 'audio/mpeg';
         const rangeHeader = request.headers.get('Range');
-
         if (!rangeHeader) {
-            return new Response(blob, {
-                status: 200,
-                headers: {
-                    'Content-Type': contentType,
-                    'Content-Length': size.toString(),
-                    'Accept-Ranges': 'bytes'
-                }
-            });
+            return new Response(blob, { status: 200, headers: { 'Content-Type': contentType, 'Content-Length': size.toString(), 'Accept-Ranges': 'bytes' } });
         }
-
         const parts = rangeHeader.replace(/bytes=/, "").split("-");
         const start = parseInt(parts[0], 10);
         const end = parts[1] ? parseInt(parts[1], 10) : size - 1;
-
-        if (start >= size || end >= size) {
-            return new Response(null, { status: 416, headers: { 'Content-Range': `bytes */${size}` } });
-        }
-
         const chunk = blob.slice(start, end + 1, contentType);
-        
         return new Response(chunk, {
             status: 206,
-            headers: {
-                'Content-Range': `bytes ${start}-${end}/${size}`,
-                'Content-Length': chunk.size.toString(), 
-                'Content-Type': contentType,
-                'Accept-Ranges': 'bytes'
-            }
+            headers: { 'Content-Range': `bytes ${start}-${end}/${size}`, 'Content-Length': chunk.size.toString(), 'Content-Type': contentType, 'Accept-Ranges': 'bytes' }
         });
     } catch (e) {
         return new Response(null, { status: 500 });

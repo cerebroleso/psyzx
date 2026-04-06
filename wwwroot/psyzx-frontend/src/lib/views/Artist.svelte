@@ -1,6 +1,6 @@
 <script>
     import { fade, fly } from 'svelte/transition';
-    import { artistsMap, albumsMap, appSessionVersion, isMaxGlassActive } from '../../store.js';
+    import { artistsMap, albumsMap, appSessionVersion, isMaxGlassActive, viewSize } from '../../store.js';
     import { api } from '../api.js';
 
     export let artistId;
@@ -32,15 +32,14 @@
         isEditing = !isEditing;
     };
 
-    let selectedFile = null; // Aggiungiamo questa variabile per il file binario
+    let selectedFile = null;
 
     const handleFileChange = (e) => {
         const file = e.target.files[0];
         if (!file) return;
         
-        selectedFile = file; // Salviamo il file "puro" per l'invio
+        selectedFile = file;
         
-        // La preview la teniamo così l'utente vede cosa ha scelto
         const reader = new FileReader();
         reader.onload = (event) => {
             previewImage = event.target.result; 
@@ -51,16 +50,13 @@
     const saveArtist = async () => {
         if (!editName.trim()) return;
 
-        // Prepariamo il FormData come vuole il nuovo backend [FromForm]
         const formData = new FormData();
         formData.append('name', editName);
         
-        // Aggiungiamo il file solo se l'utente ne ha scelto uno nuovo
         if (selectedFile) {
             formData.append('imageFile', selectedFile);
         }
 
-        // Chiamiamo l'API passando il FormData
         const success = await api.updateArtist(artist.id, formData);
         
         if (success) {
@@ -68,20 +64,24 @@
                 const a = map.get(parseInt(artistId));
                 if (a) { 
                     a.name = editName;
-                    // Forziamo il refresh dell'immagine se è cambiata
-                    if (selectedFile) window.location.reload();; 
+                    if (selectedFile) window.location.reload(); 
                 }
                 return map;
             });
             appSessionVersion.set(Date.now()); 
             isEditing = false;
-            selectedFile = null; // Puliamo per la prossima volta
+            selectedFile = null;
         } else {
             alert("Errore durante il salvataggio.");
         }
     };
 
     const goAlbum = (id) => { window.location.hash = `#album/${id}`; };
+
+    const updateViewSize = (size) => {
+        viewSize.set(size);
+        localStorage.setItem('psyzx_view_size', size);
+    };
 </script>
 
 {#if artist}
@@ -101,7 +101,7 @@
     </div>
 </div>
 
-<div class="grid-container">
+<div class="grid-container {$viewSize || 'medium'}">
     {#each artistAlbums as album}
         <div class="card" role="button" tabindex="0" on:click={() => goAlbum(album.id)} on:keydown={(e) => e.key === 'Enter' && goAlbum(album.id)}>
             <img src={album.coverPath ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&v=${$appSessionVersion}` : 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxIDEiPjxyZWN0IHdpZHRoPSIxIiBoZWlnaHQ9IjEiIGZpbGw9IiMzMzMiLz48L3N2Zz4='} alt="Album">
@@ -153,6 +153,9 @@
 {/if}
 
 <style>
+    /* Content Padding Fixes */
+    .album-hero { padding: 32px 24px 72px 24px; } /* Ensures the hero doesn't touch the very edges */
+    
     .artist-wrapper { position: relative; display: inline-block; cursor: pointer; border-radius: 50%; overflow: hidden; width: 232px; height: 232px; }
     .artist-wrapper img { width: 100%; height: 100%; object-fit: cover; }
     .edit-overlay-circle {
@@ -218,4 +221,26 @@
     .btn-save:hover { transform: scale(1.02); }
     .btn-cancel { flex: 1; background: rgba(255,255,255,0.1); color: white; border: none; padding: 14px; border-radius: 30px; font-weight: bold; cursor: pointer; transition: background 0.2s; }
     .btn-cancel:hover { background: rgba(255,255,255,0.2); }
+
+    /* Size Controls Layout & Padding Fix */
+    .view-controls-wrapper {
+        display: flex; justify-content: space-between; align-items: center;
+        margin: 32px 0 16px 0; 
+        padding: 0 24px; /* Increased padding to match your typical app bounds */
+    }
+    .section-title { margin: 0; font-size: 20px; font-weight: 700; color: white; }
+    
+    .segmented-control {
+        display: flex; background: rgba(255,255,255,0.08); padding: 4px; border-radius: 10px;
+        border: 1px solid rgba(255,255,255,0.05);
+    }
+    .segmented-control button {
+        background: transparent; border: none; color: white; width: 36px; height: 32px;
+        font-size: 12px; font-weight: 800; cursor: pointer; border-radius: 6px;
+        transition: all 0.2s; display: flex; align-items: center; justify-content: center;
+    }
+    .segmented-control button.active { background: var(--accent-color); color: black; box-shadow: 0 2px 8px rgba(0,0,0,0.3); }
+
+    /* Ensures the grid isn't stuck to the screen edges if it isn't globally handled */
+    .grid-container { padding: 0 24px 32px 24px; }
 </style>

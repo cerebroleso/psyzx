@@ -1,9 +1,9 @@
 <script>
     import { onMount } from 'svelte';
     import { fade } from 'svelte/transition';
-    import { isGlobalColorActive, isMaxGlassActive, isDesktopSwapActive } from '../../store.js';
+    // Added viewSize to imports
+    import { isGlobalColorActive, isMaxGlassActive, isDesktopSwapActive, viewSize, isCacheDebugActive } from '../../store.js';
     import { setVolumeBoost } from '../audio.js';
-    import { isCacheDebugActive } from '../../store.js';
 
     let currentBoost = '1.0';
 
@@ -28,6 +28,12 @@
     const toggleMaxGlass = () => isMaxGlassActive.set(!$isMaxGlassActive);
     const toggleDesktopSwap = () => isDesktopSwapActive.set(!$isDesktopSwapActive);
     
+    // Function to update the global view size
+    const updateViewSize = (size) => {
+        viewSize.set(size);
+        localStorage.setItem('psyzx_view_size', size);
+    };
+
     const toggleCacheDebug = () => {
         const newVal = !$isCacheDebugActive;
         isCacheDebugActive.set(newVal);
@@ -82,6 +88,18 @@
     <div class="settings-section">
         <h2>UI & Look</h2>
         
+        <div class="setting-item">
+            <div class="setting-info">
+                <span class="setting-title">Grid Layout Size</span>
+                <span class="setting-desc">Adjust the scaling of album covers across the app.</span>
+            </div>
+            <div class="segmented-control">
+                <button class:active={$viewSize === 'large'} on:click={() => updateViewSize('large')}>L</button>
+                <button class:active={$viewSize === 'medium'} on:click={() => updateViewSize('medium')}>M</button>
+                <button class:active={$viewSize === 'small'} on:click={() => updateViewSize('small')}>S</button>
+            </div>
+        </div>
+
         <div class="setting-item">
             <div class="setting-info">
                 <span class="setting-title">Dynamic Background</span>
@@ -183,15 +201,28 @@
     .setting-item:last-child, .setting-item-col:last-child { border-bottom: none; padding-bottom: 0; }
     
     .setting-info { display: flex; flex-direction: column; gap: 6px; }
-    .setting-info:not(.w-full) { max-width: 80%; }
+    .setting-info:not(.w-full) { max-width: 60%; }
     .w-full { width: 100%; }
     
     .flex-between { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
     .setting-title { font-size: 16px; font-weight: 600; }
-    .setting-desc { font-size: 13px; color: rgba(255,255,255,0.5); line-height: 1.5; }
+    .setting-desc { font-size: 13px; color: rgba(255,255,255,0.5); line-height: 1.5;}
     .mb-16 { margin-bottom: 16px; }
     .highlight-val { font-weight: 900; font-family: monospace; color: var(--accent-color); font-size: 16px; }
     
+    /* Segmented Control Styles */
+    .segmented-control {
+        display: flex; background: rgba(255,255,255,0.15); padding: 2px; border-radius: 10px;
+        border: 1px solid rgba(255,255,255,0.05);
+        margin-left: 10px;
+    }
+    .segmented-control button {
+        background: transparent; border: none; color: white; width: 36px; height: 32px;
+        font-size: 12px; font-weight: 800; cursor: pointer; border-radius: 6px;
+        transition: all 0.2s; display: flex; align-items: center; justify-content: center;
+    }
+    .segmented-control button.active { background: var(--accent-color); color: black; box-shadow: 0 2px 8px rgba(0,0,0,0.3); }
+
     .toggle-btn {
         width: 52px; height: 28px; border-radius: 14px; background: rgba(255,255,255,0.2); border: none;
         cursor: pointer; position: relative; transition: background 0.3s; padding: 0; flex-shrink: 0;
@@ -211,17 +242,10 @@
     .range-slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 16px; height: 16px; border-radius: 50%; background: white; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,0.4); }
     .range-slider::-moz-range-thumb { width: 16px; height: 16px; border-radius: 50%; background: white; cursor: pointer; border: none; box-shadow: 0 2px 6px rgba(0,0,0,0.4); }
 
-    .btn-refresh {
+    .btn-refresh, .btn-danger {
         padding: 12px 24px; background: rgba(239, 68, 68, 0.1); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.5); 
         border-radius: 24px; font-weight: 700; font-size: 14px; cursor: pointer; display: inline-flex; align-items: center; 
         gap: 8px; transition: all 0.2s ease; width: fit-content;
     }
-    .btn-refresh:hover { background: rgba(239, 68, 68, 0.2); border-color: #ef4444; transform: translateY(-2px); }
-
-    .btn-danger {
-        padding: 12px 24px; background: rgba(239, 68, 68, 0.1); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.5); 
-        border-radius: 24px; font-weight: 700; font-size: 14px; cursor: pointer; display: inline-flex; align-items: center; 
-        gap: 8px; transition: all 0.2s ease; width: fit-content;
-    }
-    .btn-danger:hover { background: rgba(239, 68, 68, 0.2); border-color: #ef4444; transform: translateY(-2px); }
+    .btn-refresh:hover, .btn-danger:hover { background: rgba(239, 68, 68, 0.2); border-color: #ef4444; transform: translateY(-2px); }
 </style>

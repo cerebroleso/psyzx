@@ -366,38 +366,42 @@
                     on:toggleSidebar={() => isMobileSidebarOpen = !isMobileSidebarOpen} 
                     on:refresh={handleRefresh} 
                 />                
-                <div id="main-content" style="position: relative;">
+                <div id="main-content" style="flex: 1; display: grid;">
                     {#key currentHash}
-                    <div in:fade={{duration: 250, delay: 100}} out:fade={{duration: 100}} style="position: absolute; width: 100%;">
-                        {#if currentHash === '' || currentHash === '#' || currentHash === '#/'}
-                            <Library />
-                        {:else if currentHash.startsWith('#artist/')}
-                            <Artist artistId={currentHash.split('/')[1]} />
-                        {:else if currentHash.startsWith('#album/')}
-                            <Album albumId={currentHash.split('/')[1]} />
-                        {:else if currentHash.startsWith('#search/')}
-                            <Search query={decodeURIComponent(currentHash.substring(8))} />
-                        {:else if currentHash === '#playlists'}
-                            <Playlists />
-                        {:else if currentHash.startsWith('#playlist/')} 
-                            <Playlist playlistId={currentHash.split('/')[1]} />
-                        {:else if currentHash === '#account'}
-                            <Account />
-                        {:else if currentHash === '#top'}
-                            <TopPlayed />
-                        {:else if currentHash === '#all'}
-                            <ThePool />
-                        {:else if currentHash === '#offline'}
-                            <Offline />
-                        {:else if currentHash === '#downloader'}
-                            <Downloader />
-                        {:else if currentHash === '#settings'}
-                            <Settings />
-                        {:else}
-                            <div style="padding: 24px; color: var(--text-secondary);">Route not found.</div>
-                        {/if}
+                    <div in:fade={{duration: 250, delay: 100}} out:fade={{duration: 100}} style="grid-area: 1 / 1; display: flex; flex-direction: column; min-height: 100%;">
+                        
+                        <div style="flex-grow: 1;">
+                            {#if currentHash === '' || currentHash === '#' || currentHash === '#/'}
+                                <Library />
+                            {:else if currentHash.startsWith('#artist/')}
+                                <Artist artistId={currentHash.split('/')[1]} />
+                            {:else if currentHash.startsWith('#album/')}
+                                <Album albumId={currentHash.split('/')[1]} />
+                            {:else if currentHash.startsWith('#search/')}
+                                <Search query={decodeURIComponent(currentHash.substring(8))} />
+                            {:else if currentHash === '#playlists'}
+                                <Playlists />
+                            {:else if currentHash.startsWith('#playlist/')} 
+                                <Playlist playlistId={currentHash.split('/')[1]} />
+                            {:else if currentHash === '#account'}
+                                <Account />
+                            {:else if currentHash === '#top'}
+                                <TopPlayed />
+                            {:else if currentHash === '#all'}
+                                <ThePool />
+                            {:else if currentHash === '#offline'}
+                                <Offline />
+                            {:else if currentHash === '#downloader'}
+                                <Downloader />
+                            {:else if currentHash === '#settings'}
+                                <Settings />
+                            {:else}
+                                <div style="padding: 24px; color: var(--text-secondary);">Route not found.</div>
+                            {/if}
+                        </div>
 
                         <Footer />
+                        
                     </div>
                     {/key}
                 </div>
@@ -753,9 +757,9 @@
         overflow: hidden !important;
         pointer-events: none !important; /* Prevents clicking background while player is open */
         filter: brightness(0.6) !important;
-        transition: transform 0.4s cubic-bezier(0.32, 0.72, 0, 1), 
-                    filter 0.4s ease, 
-                    border-radius 0.4s ease !important;
+        transition: transform 0.8s cubic-bezier(0.32, 0.72, 0, 1), 
+                    filter 0.8s ease, 
+                    border-radius 0.8s ease !important;
     }
 
     :global(body) {

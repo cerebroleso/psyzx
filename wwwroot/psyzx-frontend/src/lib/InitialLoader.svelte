@@ -75,7 +75,7 @@
     }
     
     .boot-icon {
-        color: var(--accent-color, #b534d1);
+        color: #b534d1;
         margin-bottom: 16px;
         filter: drop-shadow(0 0 15px rgba(181, 52, 209, 0.4));
     }
