@@ -102,9 +102,6 @@ export const api = {
             }
             const tracks = await res.json();
             
-            // TRIGGER SWEEP: This warms the cache for every album/track metadata
-            triggerMetadataSweep(tracks);
-            
             return tracks;
         } catch (e) {
             if (e.message === 'TIMEOUT' || e.message === 'NETWORK_ERROR') {

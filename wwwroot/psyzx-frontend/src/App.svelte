@@ -175,7 +175,7 @@
 
             if (data?.length > 0) {
                 bootStatus = "Optimizing library...";
-                await localDB.set('psyzx_library_cache', data);
+                localDB.set('psyzx_library_cache', data);
                 bootProgress = 95; // Updated from targetProgress
                 
                 let statsData = null;

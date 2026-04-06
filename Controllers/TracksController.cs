@@ -34,9 +34,26 @@ public class TracksController : ControllerBase
     public async Task<IActionResult> GetAllTracks()
     {
         var tracks = await _context.Tracks
+            .AsNoTracking() 
             .Include(t => t.Album)
             .ThenInclude(a => a.Artist)
+            .Select(t => new {
+                id = t.Id,
+                title = t.Title,
+                filePath = t.FilePath, // Add whatever else your frontend uses
+                album = new {
+                    id = t.Album.Id,
+                    title = t.Album.Title,
+                    coverPath = t.Album.CoverPath,
+                    artist = new {
+                        id = t.Album.Artist.Id,
+                        name = t.Album.Artist.Name,
+                        imagePath = t.Album.Artist.ImagePath
+                    }
+                }
+            })
             .ToListAsync();
+            
         return Ok(tracks);
     }
 

@@ -22,10 +22,12 @@
     {#each artistsArray as artist}
         <div class="card" role="button" tabindex="0" on:click={() => goArtist(artist.id)} on:keydown={(e) => e.key === 'Enter' && goArtist(artist.id)}>
             <img 
-                            src={artist.imagePath ? `/api/Tracks/image?path=${encodeURIComponent(artist.imagePath)}&v=${$appSessionVersion}` : DEFAULT_PLACEHOLDER} 
-                            alt=""
-                            on:error={handleImageError}
-                        >
+                src={artist.imagePath ? `/api/Tracks/image?path=${encodeURIComponent(artist.imagePath)}&v=${$appSessionVersion}` : DEFAULT_PLACEHOLDER} 
+                alt="{artist.name} cover"
+                loading="lazy" 
+                decoding="async"
+                on:error={handleImageError}
+            >
             <div class="card-title">{artist.name}</div>
         </div>
     {/each}
@@ -49,4 +51,9 @@
         transition: all 0.2s; display: flex; align-items: center; justify-content: center;
     }
     .segmented-control button.active { background: var(--accent-color); color: black; box-shadow: 0 2px 8px rgba(0,0,0,0.3); }
+
+    .card {
+        content-visibility: auto;
+        contain-intrinsic-size: 200px 250px; /* Guess the width/height of your card so the scrollbar doesn't jump */
+    }
 </style>
