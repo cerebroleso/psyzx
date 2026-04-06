@@ -15,6 +15,34 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
+@media (max-width: 768px) {
+    :root {
+        /* Adjust this if your mobile player is a different height */
+        --player-height: 90px; 
+    }
+}
+
+/* Inside app.svelte <style> */
+.app-row {
+    display: flex;
+    flex-direction: row;
+    flex: 1;
+    width: 100%;
+    /* Use the variable here! */
+    height: calc(100dvh - var(--player-height)); 
+    overflow: hidden;
+    position: relative;
+}
+
+/* Ensure the main view doesn't grow past this */
+:global(main#main-view) { 
+    flex: 1; 
+    overflow-y: auto; 
+    position: relative;
+    display: flex;
+    flex-direction: column;
+}
+
 html, body {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
     background: radial-gradient(circle at top left, var(--accent-dark) 0%, var(--bg-base) 60%) fixed;

@@ -13,18 +13,6 @@
     };
 </script>
 
-<div class="view-controls-wrapper">
-    <h2 class="section-title">Library</h2>
-    <div class="segmented-control">
-        <button class:active={$viewSize === 'large'} on:click={() => updateViewSize('large')}>L</button>
-        <button class:active={$viewSize === 'medium'} on:click={() => updateViewSize('medium')}>M</button>
-        <button class:active={$viewSize === 'small'} on:click={() => updateViewSize('small')}>S</button>
-        <button class:active={$viewSize === 'lines'} on:click={() => updateViewSize('lines')}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
-        </button>
-    </div>
-</div>
-
 <div class="grid-container {$viewSize || 'medium'}">
     {#each artistsArray as artist}
         <div class="card" role="button" tabindex="0" on:click={() => goArtist(artist.id)} on:keydown={(e) => e.key === 'Enter' && goArtist(artist.id)}>
