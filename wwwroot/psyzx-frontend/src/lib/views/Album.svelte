@@ -76,6 +76,7 @@
     let viewMode = 'list'; 
     let mounted = false;
     import { onMount } from 'svelte';
+    import Artist from './Artist.svelte';
     onMount(() => { setTimeout(() => mounted = true, 50); });
 
     const togglePlayAlbum = () => {
@@ -113,20 +114,15 @@
     let isDownloading = false;
 
     const downloadAlbum = () => {
-        // Ensure album is loaded and service worker is active
         if (album && album.tracks && 'serviceWorker' in navigator && navigator.serviceWorker.controller) {
             isDownloading = true;
-            
-            // Extract just the IDs
             const trackIds = album.tracks.map(t => t.id);
-            
-            // Send to SW
             navigator.serviceWorker.controller.postMessage({
                 type: 'PRELOAD_TRACKS',
-                trackIds
+                trackIds: trackIds,
+                ArtistId: album.artistId,
+                coverPath: album.coverPath
             });
-
-            // Optional: reset button state after a bit, or listen for SW completion messages
             setTimeout(() => { isDownloading = false; }, 2000); 
         }
     };

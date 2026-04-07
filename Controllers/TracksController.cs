@@ -4,7 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using psyzx.Data;
 using psyzx.Models;
-using psyzx.Services; // Aggiunto per poter usare LyricsDownloader
+using psyzx.Services; 
 using System.IO;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -22,7 +22,6 @@ public class TracksController : ControllerBase
     private readonly string _basePath;
     private readonly LyricsDownloader _lyricsDownloader;
 
-    // Iniettiamo il LyricsDownloader direttamente nel controller
     public TracksController(AppDbContext context, IConfiguration config, LyricsDownloader lyricsDownloader)
     {
         _context = context;
@@ -40,11 +39,23 @@ public class TracksController : ControllerBase
             .Select(t => new {
                 id = t.Id,
                 title = t.Title,
-                filePath = t.FilePath, // Add whatever else your frontend uses
+                filePath = t.FilePath, 
+                // --- RESTORED MISSING TRACK DATA ---
+                durationSeconds = t.DurationSeconds,
+                bitrate = t.Bitrate,
+                trackNumber = t.TrackNumber,
+                discNumber = t.DiscNumber,
+                playCount = t.PlayCount,
+                albumId = t.AlbumId, // Critical for Player Cover mapping
+                // -----------------------------------
                 album = new {
                     id = t.Album.Id,
                     title = t.Album.Title,
                     coverPath = t.Album.CoverPath,
+                    // --- RESTORED MISSING ALBUM DATA ---
+                    releaseYear = t.Album.ReleaseYear,
+                    playCount = t.Album.PlayCount,
+                    // -----------------------------------
                     artist = new {
                         id = t.Album.Artist.Id,
                         name = t.Album.Artist.Name,

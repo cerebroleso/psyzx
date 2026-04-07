@@ -14,7 +14,15 @@ const FALLBACK_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1">
 
 let downloadQueue = [];
 let activeDownloads = 0;
-const MAX_CONCURRENT = 5; // Increased for metadata sweep
+const MAX_CONCURRENT = 3; 
+
+function getCleanApiRequest(urlStr) {
+    const url = new URL(urlStr, self.location.origin);
+    url.searchParams.delete('v');
+    url.searchParams.delete('token');
+    url.searchParams.delete('_');
+    return url.toString(); 
+}
 
 const broadcastProgress = async (trackId, progress) => {
     const clients = await self.clients.matchAll();
@@ -42,7 +50,7 @@ const processQueue = async () => {
         const targetCacheName = type === 'MEDIA' ? MEDIA_CACHE : DATA_CACHE;
         const cache = await caches.open(targetCacheName);
         
-        const existing = await cache.match(cacheKey, { ignoreVary: true });
+        const existing = await cache.match(cacheKey); 
         if (existing) continue;
 
         activeDownloads++;
@@ -52,9 +60,8 @@ const processQueue = async () => {
                 if (type === 'MEDIA') {
                     await backgroundCacheMedia(cacheKey, url, trackId);
                 } else {
-                    // Optimized for JSON/Images
                     const res = await fetch(new Request(url, { credentials: 'include' }));
-                    if (res.ok || res.type === 'opaque') await cache.put(cacheKey, res);
+                    if (res.ok) await cache.put(cacheKey, res); 
                 }
             } catch (e) {
                 console.error(e);
@@ -69,40 +76,35 @@ const processQueue = async () => {
 async function backgroundCacheMedia(cacheKey, originalUrl, trackId) {
     const cache = await caches.open(MEDIA_CACHE);
     const fullReq = new Request(originalUrl, { credentials: 'include' });
-    fullReq.headers.delete('Range');
 
     try {
         const res = await fetch(fullReq);
         if (!res.ok) return;
 
-        const contentType = res.headers.get('content-type') || 'audio/mpeg';
-        const reader = res.body.getReader();
+        const cachePromise = cache.put(cacheKey, res.clone());
+        
         const total = parseInt(res.headers.get('content-length'), 10);
-        let loaded = 0, chunks = [];
+        if (!total) {
+            await cachePromise;
+            await notifyClientsOfCacheUpdate();
+            broadcastLog(`Stored ${trackId}`);
+            return;
+        }
+
+        const reader = res.body.getReader();
+        let loaded = 0;
 
         while (true) {
             const { done, value } = await reader.read();
             if (done) {
-                const fullBlob = new Blob(chunks, { type: contentType });
-                const cacheRes = new Response(fullBlob, {
-                    status: 200,
-                    headers: { 
-                        'Content-Type': contentType, 
-                        'Content-Length': fullBlob.size.toString(), 
-                        'Accept-Ranges': 'bytes' 
-                    }
-                });
-                await cache.put(cacheKey, cacheRes);
+                await cachePromise; 
                 await notifyClientsOfCacheUpdate();
                 broadcastLog(`Stored ${trackId}`);
                 break;
             }
-            chunks.push(value);
             loaded += value.byteLength;
-            if (total) {
-                const progress = Math.round((loaded / total) * 100);
-                if (progress % 5 === 0) broadcastProgress(trackId, progress);
-            }
+            const progress = Math.round((loaded / total) * 100);
+            if (progress % 5 === 0) broadcastProgress(trackId, progress);
         }
     } catch (err) {
         broadcastLog(`Failed ${trackId}`);
@@ -110,38 +112,46 @@ async function backgroundCacheMedia(cacheKey, originalUrl, trackId) {
 }
 
 self.addEventListener('message', event => {
-    // 1. Existing Full Download (Audio + Meta + Image)
     if (event.data && event.data.type === 'PRELOAD_TRACKS') {
+        if (event.data.coverPath) {
+            const coverUrl = `/api/Tracks/image?path=${encodeURIComponent(event.data.coverPath)}`;
+            downloadQueue.push({ type: 'DATA', cacheKey: getCleanApiRequest(coverUrl), url: coverUrl, trackId: 'cover' });
+        }
+
         event.data.trackIds.forEach(id => {
             const streamUrl = `/api/Tracks/stream/${id}`;
-            downloadQueue.push({ type: 'MEDIA', cacheKey: new Request(new URL(streamUrl, self.location.origin).toString()), url: streamUrl, trackId: id });
-            
+            downloadQueue.push({ type: 'MEDIA', cacheKey: getCleanApiRequest(streamUrl), url: streamUrl, trackId: id });
             queueMetadata(id);
         });
         processQueue();
     }
 
-    // 2. NEW: Metadata Only Sweep (JSON + Image + Lyrics for the whole DB)
     if (event.data && event.data.type === 'PRELOAD_METADATA') {
         event.data.trackIds.forEach(id => queueMetadata(id));
         processQueue();
     }
 });
 
-// Helper to keep the queue logic DRY
 function queueMetadata(id) {
-    const metaUrl = `/api/Tracks/${id}`;
-    const imgUrl = `/api/Tracks/image/${id}`;
     const lyricsUrl = `/api/Tracks/lyrics/${id}`;
-
-    downloadQueue.push({ type: 'DATA', cacheKey: new Request(new URL(metaUrl, self.location.origin).toString()), url: metaUrl, trackId: id });
-    downloadQueue.push({ type: 'DATA', cacheKey: new Request(new URL(imgUrl, self.location.origin).toString()), url: imgUrl, trackId: id });
-    downloadQueue.push({ type: 'DATA', cacheKey: new Request(new URL(lyricsUrl, self.location.origin).toString()), url: lyricsUrl, trackId: id });
+    downloadQueue.push({ type: 'DATA', cacheKey: getCleanApiRequest(lyricsUrl), url: lyricsUrl, trackId: id });
 }
 
+// 🔥 FIX 1: Fault-Tolerant iOS Installation
 self.addEventListener('install', event => {
-    event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(APP_ASSETS)));
     self.skipWaiting();
+    event.waitUntil(
+        caches.open(CACHE_NAME).then(async cache => {
+            for (let asset of APP_ASSETS) {
+                try {
+                    const res = await fetch(asset);
+                    if (res.ok) await cache.put(asset, res);
+                } catch (err) {
+                    console.warn(`[SW] Ignored missing asset during install: ${asset}`);
+                }
+            }
+        })
+    );
 });
 
 self.addEventListener('activate', event => {
@@ -157,6 +167,16 @@ self.addEventListener('activate', event => {
 self.addEventListener('fetch', event => {
     const req = event.request;
     const url = new URL(req.url);
+
+    if (
+        url.pathname.startsWith('/@') ||            
+        url.pathname.startsWith('/src/') ||          
+        url.pathname.startsWith('/node_modules/') || 
+        url.searchParams.has('import') ||            
+        url.searchParams.has('t')                    
+    ) {
+        return; 
+    }
 
     if (url.pathname.startsWith('/api/Tracks/stream')) {
         if (req.method !== 'GET') return;
@@ -175,13 +195,13 @@ self.addEventListener('fetch', event => {
 
     if (req.method !== 'GET') return;
 
-    if (req.mode === 'navigate') {
-        event.respondWith(
-            fetch(req).catch(async () => {
-                const cachedHtml = await caches.match('/index.html');
-                return cachedHtml || new Response("Offline", { status: 503 });
-            })
-        );
+    if (req.mode === 'navigate' || req.headers.get('accept')?.includes('text/html')) {
+        event.respondWith(handleHtmlRequest(req));
+        return;
+    }
+
+    if (url.origin === self.location.origin && !url.pathname.startsWith('/api/')) {
+        event.respondWith(handleAppAsset(req));
         return;
     }
 
@@ -189,9 +209,10 @@ self.addEventListener('fetch', event => {
         caches.match(req).then(cached => {
             if (cached) return cached;
             return fetch(req).then(async (res) => {
-                if (res.ok && url.protocol.startsWith('http')) {
+                if (!res.ok) throw new Error('Network fallback failed');
+                if (url.protocol.startsWith('http')) {
                     const cache = await caches.open(CACHE_NAME);
-                    cache.put(req, res.clone());
+                    cache.put(req.url, res.clone()); 
                 }
                 return res;
             }).catch(() => new Response("Offline", { status: 503 }));
@@ -199,20 +220,105 @@ self.addEventListener('fetch', event => {
     );
 });
 
+// --- CORE HANDLERS ---
+
+async function handleHtmlRequest(req) {
+    const cache = await caches.open(CACHE_NAME);
+    const origin = self.location.origin;
+
+    try {
+        // 🔥 FIX 2: iOS 'navigate' fetch crash prevention. 
+        // We fetch the raw URL string instead of the Request object.
+        const res = await fetch(req.url);
+        if (!res.ok) throw new Error(`Server returned ${res.status}`);
+        
+        await cache.put(origin + '/', res.clone());
+        await cache.put(origin + '/index.html', res.clone());
+        
+        return res;
+    } catch (err) {
+        const cachedHtml = (await cache.match(origin + '/')) 
+            || (await cache.match(origin + '/index.html'))
+            || (await cache.match('/'));
+            
+        return cachedHtml || new Response("<h2 style='text-align:center;font-family:sans-serif;margin-top:20vh;'>App Offline</h2>", { status: 503, headers: { 'Content-Type': 'text/html' } });
+    }
+}
+
+async function handleAppAsset(req) {
+    const cache = await caches.open(CACHE_NAME);
+    const reqUrl = new URL(req.url);
+    const cleanUrlStr = reqUrl.origin + reqUrl.pathname; 
+    
+    // 1. Cache First
+    let cached = await cache.match(cleanUrlStr);
+    if (!cached) cached = await cache.match(req.url); // iOS Safe: URL string
+    if (cached) return cached;
+
+    // 2. Network Fallback
+    try {
+        // 🔥 iOS BUG FIX: Fetch the string URL, not the strict Request object.
+        // iOS Safari sometimes blocks intercepted module script requests.
+        const fetchRes = await fetch(req.url);
+        if (!fetchRes.ok) throw new Error(`Asset fetch failed: ${fetchRes.status}`);
+        
+        cache.put(cleanUrlStr, fetchRes.clone()); 
+        return fetchRes;
+    } catch (err) {
+        // 3. Fuzzy Matcher (In case of an update while offline)
+        if (reqUrl.pathname.startsWith('/assets/')) {
+            const keys = await cache.keys();
+            const match = reqUrl.pathname.match(/\/assets\/([^/]+)-[a-zA-Z0-9_-]+\.(js|css)$/);
+            
+            if (match) {
+                const baseName = match[1];
+                const ext = match[2];
+                const fuzzyReq = keys.find(k => {
+                    const kUrl = new URL(k.url);
+                    return kUrl.pathname.startsWith(`/assets/${baseName}-`) && kUrl.pathname.endsWith(`.${ext}`);
+                });
+                // iOS Safe: Match the URL string of the found key
+                if (fuzzyReq) return await cache.match(fuzzyReq.url);
+            }
+        }
+        
+        // 4. Visual Offline Fallback
+        const ext = reqUrl.pathname.split('.').pop();
+        if (ext === 'js') {
+            const visualErrorJS = `
+                window.onload = function() { 
+                    document.body.innerHTML = "<div style='padding:20px; text-align:center; font-family:sans-serif; margin-top:20vh;'><h2>App Offline</h2><p>Cannot load required assets. Please reconnect to the server once to sync.</p></div>"; 
+                };
+                console.error("App Offline: JavaScript module unavailable.");
+            `;
+            return new Response(visualErrorJS, { status: 200, headers: { 'Content-Type': 'application/javascript' } });
+        } else if (ext === 'css') {
+            return new Response('/* Offline */', { status: 200, headers: { 'Content-Type': 'text/css' } });
+        }
+
+        return new Response(null, { status: 503 });
+    }
+}
+
 async function handleApiRequest(req) {
     const cache = await caches.open(DATA_CACHE);
-    const url = new URL(req.url);
-    url.searchParams.delete('token');
-    url.searchParams.delete('v');
-    url.searchParams.delete('_'); 
-    const cacheKey = new Request(url.toString());
+    const cacheKey = getCleanApiRequest(req.url);
 
     try {
         const res = await fetch(req);
+        if (req.method === 'GET' && res.status >= 500) throw new Error('Proxy Offline');
+        
         if (res.ok && req.method === 'GET') cache.put(cacheKey, res.clone());
         return res;
     } catch (err) {
-        const cachedRes = await cache.match(cacheKey, { ignoreVary: true });
+        if (req.method !== 'GET') {
+            return new Response(JSON.stringify({ ok: false, error: 'ACTION_UNAVAILABLE_OFFLINE' }), { 
+                status: 503,
+                headers: { 'Content-Type': 'application/json' }
+            });
+        }
+        
+        const cachedRes = await cache.match(cacheKey);
         return cachedRes || new Response(JSON.stringify({ error: 'OFFLINE' }), { 
             status: 503,
             headers: { 'Content-Type': 'application/json' }
@@ -222,19 +328,19 @@ async function handleApiRequest(req) {
 
 async function handleImageRequest(req) {
     const cache = await caches.open(DATA_CACHE);
-    const url = new URL(req.url);
-    url.searchParams.delete('v');
-    url.searchParams.delete('token');
-    url.searchParams.delete('_');
-    const cacheKey = new Request(url.toString());
+    const cacheKey = getCleanApiRequest(req.url);
 
-    const cachedRes = await cache.match(cacheKey, { ignoreVary: true });
+    const cachedRes = await cache.match(cacheKey);
     if (cachedRes) return cachedRes;
 
     try {
         const res = await fetch(req);
-        if (res.ok || res.type === 'opaque') cache.put(cacheKey, res.clone());
-        return res;
+        if (req.method === 'GET' && res.status >= 500) throw new Error('Proxy Offline');
+        if (res.ok || res.type === 'opaque') {
+            cache.put(cacheKey, res.clone());
+            return res;
+        }
+        throw new Error("Bad Image Response");
     } catch (err) {
         return caches.match('/placeholder.png') || new Response(FALLBACK_SVG, { headers: { 'Content-Type': 'image/svg+xml' } });
     }
@@ -242,16 +348,18 @@ async function handleImageRequest(req) {
 
 async function handleMediaRequest(event, req) {
     const cache = await caches.open(MEDIA_CACHE);
+    const cacheKey = getCleanApiRequest(req.url);
     const url = new URL(req.url);
     const trackId = url.pathname.split('/').filter(Boolean).pop().split('?')[0];
-    url.searchParams.delete('v');
-    const cacheKey = new Request(url.toString());
     
-    const cachedRes = await cache.match(cacheKey, { ignoreVary: true });
+    const cachedRes = await cache.match(cacheKey);
     if (cachedRes) return handleRangeLogic(cachedRes, req);
     
-    event.waitUntil(backgroundCacheMedia(cacheKey, req.url, trackId));
-    return fetch(req).catch(() => new Response(null, { status: 503 }));
+    if (activeDownloads < MAX_CONCURRENT && navigator.onLine) {
+        event.waitUntil(backgroundCacheMedia(cacheKey, req.url, trackId));
+    }
+    
+    return fetch(req).catch(() => Response.error());
 }
 
 async function handleRangeLogic(response, request) {
@@ -260,16 +368,33 @@ async function handleRangeLogic(response, request) {
         const size = blob.size;
         const contentType = response.headers.get('Content-Type') || 'audio/mpeg';
         const rangeHeader = request.headers.get('Range');
+        
         if (!rangeHeader) {
-            return new Response(blob, { status: 200, headers: { 'Content-Type': contentType, 'Content-Length': size.toString(), 'Accept-Ranges': 'bytes' } });
+            return new Response(blob, { 
+                status: 200, 
+                headers: { 
+                    'Content-Type': contentType, 
+                    'Content-Length': size.toString(), 
+                    'Accept-Ranges': 'bytes',
+                    'Access-Control-Allow-Origin': '*' 
+                } 
+            });
         }
+        
         const parts = rangeHeader.replace(/bytes=/, "").split("-");
         const start = parseInt(parts[0], 10);
         const end = parts[1] ? parseInt(parts[1], 10) : size - 1;
         const chunk = blob.slice(start, end + 1, contentType);
+        
         return new Response(chunk, {
             status: 206,
-            headers: { 'Content-Range': `bytes ${start}-${end}/${size}`, 'Content-Length': chunk.size.toString(), 'Content-Type': contentType, 'Accept-Ranges': 'bytes' }
+            headers: { 
+                'Content-Range': `bytes ${start}-${end}/${size}`, 
+                'Content-Length': chunk.size.toString(), 
+                'Content-Type': contentType, 
+                'Accept-Ranges': 'bytes',
+                'Access-Control-Allow-Origin': '*' 
+            }
         });
     } catch (e) {
         return new Response(null, { status: 500 });

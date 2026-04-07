@@ -19,4 +19,10 @@
         /* This pushes it to the bottom of the flex container in app.svelte */
         margin-top: auto; 
     }
+
+    @media (max-width: 768px) {
+        .global-footer {
+            padding: 40px 0px 80px 0px; /* Reduced from 140px */
+        }
+    }
 </style>

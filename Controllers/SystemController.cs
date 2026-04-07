@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Authorization;
 using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using System.IO;
 
 [Authorize]
 [ApiController]
@@ -114,91 +115,136 @@ public class SystemController : ControllerBase
     private async Task ProcessQueue(string fullBasePath)
     {
         var ytDlpPath = Path.Combine(fullBasePath, "yt-dlp_linux");
+        var spotDlPath = Path.Combine(fullBasePath, "spotdl_linux");
         var cookiePath = Path.Combine(fullBasePath, "cookies.txt");
         var cookieArg = System.IO.File.Exists(cookiePath) ? $"--cookies \"{cookiePath}\" " : "";
 
         while (_downloadQueue.TryDequeue(out var url))
         {
             _currentTrackInfo = $"Fetch: {url}";
-            string firstArtist = "Unknown Artist";
+            bool isSpotify = url.Contains("spotify.com", StringComparison.OrdinalIgnoreCase);
+
+            if (isSpotify)
+            {
+                try
+                {
+                    _currentProcess = new Process
+                    {
+                        StartInfo = new ProcessStartInfo
+                        {
+                            FileName = spotDlPath,
+                            Arguments = $"\"{url}\" --output \"{fullBasePath}/{{artist}}/{{album}}/{{title}}.{{ext}}\"",
+                            RedirectStandardOutput = true,
+                            RedirectStandardError = true,
+                            UseShellExecute = false,
+                            CreateNoWindow = true,
+                            WorkingDirectory = fullBasePath
+                        }
+                    };
+
+                    _currentProcess.OutputDataReceived += (sender, e) => {
+                        if (!string.IsNullOrEmpty(e.Data)) {
+                            _currentTrackInfo = "SpotDL active...";
+                        }
+                    };
+
+                    _currentProcess.Start();
+                    _currentProcess.BeginOutputReadLine();
+                    
+                    await _currentProcess.WaitForExitAsync();
+                }
+                catch { }
+                finally
+                {
+                    _currentProcess = null;
+                }
+            }
+            else
+            {
+                string firstArtist = "Unknown Artist";
+
+                try 
+                {
+                    var getArtistProc = new Process
+                    {
+                        StartInfo = new ProcessStartInfo
+                        {
+                            FileName = ytDlpPath,
+                            Arguments = $"{cookieArg}--js-runtimes node -i -I 1 --print \"%(artist,uploader|Unknown Artist)s\" \"{url}\"",
+                            RedirectStandardOutput = true,
+                            UseShellExecute = false,
+                            CreateNoWindow = true
+                        }
+                    };
+                    getArtistProc.Start();
+                    firstArtist = (await getArtistProc.StandardOutput.ReadToEndAsync()).Trim();
+                    await getArtistProc.WaitForExitAsync();
+                    
+                    if (string.IsNullOrEmpty(firstArtist)) 
+                    {
+                        firstArtist = "Unknown Artist";
+                    }
+                    else
+                    {
+                        string[] seps = { ",", "&", " feat", " ft.", " x ", " vs ", " and " };
+                        int minIdx = firstArtist.Length;
+                        
+                        foreach (var sep in seps)
+                        {
+                            int idx = firstArtist.IndexOf(sep, StringComparison.OrdinalIgnoreCase);
+                            if (idx > 0 && idx < minIdx) minIdx = idx;
+                        }
+                        
+                        if (minIdx < firstArtist.Length) 
+                        {
+                            firstArtist = firstArtist.Substring(0, minIdx).Trim();
+                        }
+                    }
+                } 
+                catch { }
+
+                string safeArtist = SanitizePath(firstArtist);
+
+                try
+                {
+                    _currentProcess = new Process
+                    {
+                        StartInfo = new ProcessStartInfo
+                        {
+                            FileName = ytDlpPath,
+                            Arguments = $"{cookieArg}--js-runtimes node -i -x --audio-format mp3 --audio-quality 0 --embed-metadata --embed-thumbnail --replace-in-metadata \"artist\" \".*\" \"{firstArtist}\" --replace-in-metadata \"album_artist\" \".*\" \"{firstArtist}\" -o \"{fullBasePath}/{safeArtist}/%(album,playlist_title|Unknown Album)s/%(title)s.%(ext)s\" \"{url}\"",
+                            RedirectStandardOutput = true,
+                            RedirectStandardError = true,
+                            UseShellExecute = false,
+                            CreateNoWindow = true
+                        }
+                    };
+
+                    _currentProcess.OutputDataReceived += (sender, e) => {
+                        if (!string.IsNullOrEmpty(e.Data) && e.Data.Contains("[download] Destination:")) {
+                            var filename = Path.GetFileNameWithoutExtension(e.Data.Substring(e.Data.IndexOf("Destination:") + 13).Trim());
+                            _currentTrackInfo = filename;
+                        }
+                    };
+
+                    _currentProcess.Start();
+                    _currentProcess.BeginOutputReadLine();
+                    
+                    await _currentProcess.WaitForExitAsync();
+                }
+                catch { }
+                finally {
+                    _currentProcess = null;
+                }
+            }
 
             try 
             {
-                var getArtistProc = new Process
-                {
-                    StartInfo = new ProcessStartInfo
-                    {
-                        FileName = ytDlpPath,
-                        Arguments = $"{cookieArg}--js-runtimes node -i -I 1 --print \"%(artist,uploader|Unknown Artist)s\" \"{url}\"",
-                        RedirectStandardOutput = true,
-                        UseShellExecute = false,
-                        CreateNoWindow = true
-                    }
-                };
-                getArtistProc.Start();
-                firstArtist = (await getArtistProc.StandardOutput.ReadToEndAsync()).Trim();
-                await getArtistProc.WaitForExitAsync();
-                
-                if (string.IsNullOrEmpty(firstArtist)) 
-                {
-                    firstArtist = "Unknown Artist";
-                }
-                else
-                {
-                    string[] seps = { ",", "&", " feat", " ft.", " x ", " vs ", " and " };
-                    int minIdx = firstArtist.Length;
-                    
-                    foreach (var sep in seps)
-                    {
-                        int idx = firstArtist.IndexOf(sep, StringComparison.OrdinalIgnoreCase);
-                        if (idx > 0 && idx < minIdx) minIdx = idx;
-                    }
-                    
-                    if (minIdx < firstArtist.Length) 
-                    {
-                        firstArtist = firstArtist.Substring(0, minIdx).Trim();
-                    }
-                }
-            } 
-            catch { }
-
-            string safeArtist = SanitizePath(firstArtist);
-
-            try
-            {
-                _currentProcess = new Process
-                {
-                    StartInfo = new ProcessStartInfo
-                    {
-                        FileName = ytDlpPath,
-                        Arguments = $"{cookieArg}--js-runtimes node -i -x --audio-format mp3 --audio-quality 0 --embed-metadata --embed-thumbnail --replace-in-metadata \"artist\" \".*\" \"{firstArtist}\" --replace-in-metadata \"album_artist\" \".*\" \"{firstArtist}\" -o \"{fullBasePath}/{safeArtist}/%(album,playlist_title|Unknown Album)s/%(title)s.%(ext)s\" \"{url}\"",
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true,
-                        UseShellExecute = false,
-                        CreateNoWindow = true
-                    }
-                };
-
-                _currentProcess.OutputDataReceived += (sender, e) => {
-                    if (!string.IsNullOrEmpty(e.Data) && e.Data.Contains("[download] Destination:")) {
-                        var filename = Path.GetFileNameWithoutExtension(e.Data.Substring(e.Data.IndexOf("Destination:") + 13).Trim());
-                        _currentTrackInfo = filename;
-                    }
-                };
-
-                _currentProcess.Start();
-                _currentProcess.BeginOutputReadLine();
-                
-                await _currentProcess.WaitForExitAsync();
-                
                 using var scope = _scopeFactory.CreateScope();
                 var scanner = scope.ServiceProvider.GetRequiredService<psyzx.Services.LibraryScanner>();
                 await scanner.ScanAsync();
-            }
+            } 
             catch { }
-            finally {
-                _currentProcess = null;
-            }
         }
 
         _currentTrackInfo = "";
@@ -247,15 +293,12 @@ public class SystemController : ControllerBase
 
         if (imageFile != null && imageFile.Length > 0)
         {
-            // Prendiamo l'estensione originale (es: .webp, .png, .jpg)
             var extension = Path.GetExtension(imageFile.FileName).ToLower();
-            if (string.IsNullOrEmpty(extension)) extension = ".jpg"; // Fallback
+            if (string.IsNullOrEmpty(extension)) extension = ".jpg"; 
 
             var fileName = "artist" + extension;
             var filePath = Path.Combine(newDir, fileName);
 
-            // Pulizia: se esisteva un vecchio artist.jpg e ora carichi artist.webp, 
-            // dobbiamo cancellare quello vecchio per non fare confusione.
             var oldFiles = Directory.GetFiles(newDir, "artist.*");
             foreach (var f in oldFiles) System.IO.File.Delete(f);
 

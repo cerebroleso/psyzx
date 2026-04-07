@@ -90,14 +90,29 @@ export const initAudioEngine = async () => {
 
 export const primeEngine = async () => {
     if (!isEngineInitialized) await initAudioEngine();
-    if (audioCtx?.state === 'suspended') await audioCtx.resume();
+    // Background safety check
+    if (audioCtx?.state === 'suspended') audioCtx.resume().catch(() => {});
 };
 
-export const unlockAudioContext = async () => {
-    await primeEngine();
+export const unlockAudioContext = () => { // 🔥 REMOVED ASYNC
+    // 1. MUST create the context synchronously in the click thread if it doesn't exist
+    if (!audioCtx) {
+        const AudioCtx = window.AudioContext || window['webkitAudioContext'];
+        audioCtx = new AudioCtx();
+    }
+
+    // 2. MUST command it to resume immediately, synchronously
+    if (audioCtx.state === 'suspended') {
+        audioCtx.resume().catch(() => {});
+    }
+
+    // 3. Command the silent anchor to play synchronously
     if (silentAnchorEl && silentAnchorEl.paused) {
         silentAnchorEl.play().catch(() => {});
     }
+
+    // 4. Fire the rest of the node routing in the background (Fire and forget)
+    primeEngine();
 };
 
 export const registerAudioElement = (el) => {
@@ -130,15 +145,18 @@ export const updateMediaSession = (track, album, handlers) => {
         album: album?.title,
         artwork: [{ src: album?.coverPath ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&size=thumb` : '', sizes: '512x512', type: 'image/jpeg' }]
     });
+    
+    navigator.mediaSession.setActionHandler('pause', async () => {
+        handlers.pause();
+        if (audioCtx && audioCtx.state === 'running') {
+            await audioCtx.suspend(); 
+        }
+        if (silentAnchorEl) silentAnchorEl.pause();
+    });
 
     navigator.mediaSession.setActionHandler('play', async () => {
         await unlockAudioContext();
         handlers.play();
-    });
-    
-    navigator.mediaSession.setActionHandler('pause', () => {
-        handlers.pause();
-        if (silentAnchorEl) silentAnchorEl.pause();
     });
 
     if (handlers.seek) {

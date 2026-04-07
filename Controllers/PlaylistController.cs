@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using psyzx.Data;
 using psyzx.Models;
 using System.Security.Claims;
+using System.Linq;
 
 namespace psyzx.Controllers;
 
@@ -29,17 +30,34 @@ public class PlaylistsController : ControllerBase
     public async Task<IActionResult> GetMyPlaylists()
     {
         var userId = GetCurrentUserId();
-        var playlists = await _db.Playlists
+
+        // 1. Fetch raw data. 
+        // FIX: Removed .ToList() inside the projection. EF Core cannot translate it to SQL.
+        // FIX: Restored trackCount which was missing.
+        var playlistData = await _db.Playlists
+            .AsNoTracking()
             .Where(p => p.UserId == userId)
-            .Select(p => new 
-            { 
-                id = p.Id, 
-                name = p.Name, 
-                trackCount = p.PlaylistTracks.Count 
+            .Select(p => new {
+                id = p.Id,
+                name = p.Name,
+                trackCount = p.PlaylistTracks.Count,
+                allCovers = p.PlaylistTracks.Select(pt => pt.Track.Album.CoverPath)
             })
             .ToListAsync();
 
-        return Ok(playlists);
+        // 2. Perform distinct/take filtering in-memory (Client-side)
+        var result = playlistData.Select(p => new {
+            id = p.id,
+            name = p.name,
+            trackCount = p.trackCount,
+            covers = p.allCovers
+                .Where(c => !string.IsNullOrEmpty(c))
+                .Distinct()
+                .Take(4)
+                .ToList()
+        });
+
+        return Ok(result);
     }
 
     [HttpPost]
@@ -57,7 +75,8 @@ public class PlaylistsController : ControllerBase
         _db.Playlists.Add(playlist);
         await _db.SaveChangesAsync();
 
-        return Ok(new { id = playlist.Id, name = playlist.Name, trackCount = 0 });
+        // FIX: Return empty covers array to prevent Svelte from panicking
+        return Ok(new { id = playlist.Id, name = playlist.Name, trackCount = 0, covers = new List<string>() });
     }
 
     [HttpPost("{id}/tracks")]

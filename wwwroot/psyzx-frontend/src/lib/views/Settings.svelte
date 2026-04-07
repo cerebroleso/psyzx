@@ -247,5 +247,5 @@
         border-radius: 24px; font-weight: 700; font-size: 14px; cursor: pointer; display: inline-flex; align-items: center; 
         gap: 8px; transition: all 0.2s ease; width: fit-content;
     }
-    .btn-refresh:hover, .btn-danger:hover { background: rgba(239, 68, 68, 0.2); border-color: #ef4444; transform: translateY(-2px); }
+    .btn-refresh:hover, .btn-danger:hover { background: rgba(239, 68, 68, 0.2); border-color: #ef4444; }
 </style>

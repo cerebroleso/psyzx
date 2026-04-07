@@ -11,12 +11,14 @@
     let tracks = [];
     let isLoading = true;
 
-    $: totalSeconds = tracks.reduce((sum, t) => sum + t.durationSeconds, 0);
+    $: totalSeconds = tracks.reduce((sum, t) => sum + (t.durationSeconds || 0), 0);
     $: hrs = Math.floor(totalSeconds / 3600);
     $: mins = Math.floor((totalSeconds % 3600) / 60);
     $: timeString = hrs > 0 ? `${hrs} hr ${mins} min` : `${mins} min`;
 
-    $: isPlayingPlaylist = $isPlaying && tracks.length > 0 && $currentPlaylist.some(t => tracks.find(pt => pt.id === t.id));
+    $: isPlayingPlaylist = $isPlaying && tracks.length > 0 && ($currentPlaylist?.some(t => tracks.find(pt => pt.id === t.id)) ?? false);
+
+    $: playlistCovers = tracks ? [...new Set(tracks.map(t => t.album?.coverPath).filter(Boolean))].slice(0, 4) : [];
 
     onMount(async () => {
         if (playlistId) {
@@ -30,15 +32,22 @@
 
     const togglePlayPlaylist = () => {
         if (tracks.length === 0) return;
+        const audio = document.querySelector('audio');
+        if (!audio) return;
+
         if (isPlayingPlaylist) {
-            document.querySelector('audio').pause();
+            audio.pause();
         } else {
-            if ($currentPlaylist.some(t => tracks.find(pt => pt.id === t.id))) {
-                document.querySelector('audio').play(); 
+            if ($currentPlaylist?.some(t => tracks.find(pt => pt.id === t.id))) {
+                audio.play(); 
             } else {
                 currentPlaylist.set(tracks);
-                if ($isShuffle) { shuffleHistory.set([]); currentIndex.set(Math.floor(Math.random() * tracks.length)); } 
-                else { currentIndex.set(0); }
+                if ($isShuffle) { 
+                    shuffleHistory.set([]); 
+                    currentIndex.set(Math.floor(Math.random() * tracks.length)); 
+                } else { 
+                    currentIndex.set(0); 
+                }
             }
         }
     };
@@ -47,11 +56,19 @@
         if (tracks.length === 0) return;
         isShuffle.set(!$isShuffle);
         currentPlaylist.set(tracks);
-        if ($isShuffle) { shuffleHistory.set([]); currentIndex.set(Math.floor(Math.random() * tracks.length)); } 
-        else { currentIndex.set(0); }
+        if ($isShuffle) { 
+            shuffleHistory.set([]); 
+            currentIndex.set(Math.floor(Math.random() * tracks.length)); 
+        } else { 
+            currentIndex.set(0); 
+        }
     };
 
-    const playSpecificTrack = (index) => { shuffleHistory.set([]); currentPlaylist.set(tracks); currentIndex.set(index); };
+    const playSpecificTrack = (index) => { 
+        shuffleHistory.set([]); 
+        currentPlaylist.set(tracks); 
+        currentIndex.set(index); 
+    };
 
     function swipeToQueue(node, track) {
         let startX = 0, currentX = 0, isSwiping = false, hasVibrated = false;
@@ -97,8 +114,20 @@
     <div class="album-header-block">
         <div class="album-hero">
             <div class="cover-wrapper">
-                <div class="playlist-placeholder">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
+                <div class="playlist-cover-wrapper playlist-hero-cover">
+                    {#if playlistCovers.length >= 4}
+                        <div class="dynamic-grid-cover">
+                            {#each playlistCovers as cover}
+                                <img src="/api/Tracks/image?path={encodeURIComponent(cover)}" alt="Cover fragment" />
+                            {/each}
+                        </div>
+                    {:else if playlistCovers.length > 0}
+                        <img src="/api/Tracks/image?path={encodeURIComponent(playlistCovers[0])}" class="single-cover" alt="Playlist Cover" />
+                    {:else}
+                        <div class="empty-cover">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
+                        </div>
+                    {/if}
                 </div>
             </div>
             <div class="album-info">
@@ -134,18 +163,18 @@
             </div>
             
             {#each tracks as track, index}
-                <div class="list-item" class:active={$currentPlaylist.length > 0 && $currentPlaylist[$currentIndex]?.id === track.id}>
+                <div class="list-item" class:active={($currentPlaylist?.length ?? 0) > 0 && $currentPlaylist[$currentIndex]?.id === track.id}>
                     <div class="swipe-bg"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg></div>
                     <div class="list-item-content" role="button" tabindex="0" use:swipeToQueue={track} on:click={() => playSpecificTrack(index)} on:keydown={(e) => e.key === 'Enter' && playSpecificTrack(index)}>
                         <div class="list-item-num">{index + 1}</div>
                         <div style="min-width: 0; display: flex; align-items: center; gap: 16px; flex-grow: 1;">
-                            <img src={`/api/Tracks/image?path=${encodeURIComponent(track.album.coverPath)}`} alt="cover" class="tiny-cover" />
+                            <img src={`/api/Tracks/image?path=${encodeURIComponent(track.album?.coverPath || '')}`} alt="cover" class="tiny-cover" />
                             <div style="min-width: 0;">
                                 <div class="list-item-title">{track.title}</div>
-                                <div class="list-item-artist">{track.album.artist.name}</div>
+                                <div class="list-item-artist">{track.album?.artist?.name || 'Unknown Artist'}</div>
                             </div>
                         </div>
-                        <div class="list-item-time">{formatTime(track.durationSeconds)}</div>
+                        <div class="list-item-time">{formatTime(track.durationSeconds || 0)}</div>
                     </div>
                 </div>
             {/each}
@@ -159,7 +188,6 @@
 {/if}
 
 <style>
-    /* Usa lo stesso layout core di Album.svelte */
     .view-wrapper { position: relative; min-height: 100%; padding-bottom: 120px; }
     
     .album-header-block { display: flex; flex-direction: column; gap: 0; margin-bottom: 24px; background: rgba(255, 255, 255, 0.03); backdrop-filter: blur(32px) saturate(150%); -webkit-backdrop-filter: blur(32px) saturate(150%); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 24px; padding: 20px; box-shadow: 0 8px 32px rgba(0,0,0,0.2), inset 1px 1px 0 rgba(255,255,255,0.05); }
@@ -167,13 +195,27 @@
     .action-bar { display: flex; align-items: center; gap: 16px; margin-bottom: 0; }
     .header-separator { height: 1px; background: rgba(255,255,255,0.1); margin: 16px 0; width: 100%; }
     
-    .playlist-placeholder { width: 232px; height: 232px; border-radius: 12px; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; color: rgba(255,255,255,0.3); border: 1px solid rgba(255,255,255,0.05); box-shadow: 0 16px 32px rgba(0,0,0,0.4); }
+    .playlist-cover-wrapper.playlist-hero-cover {
+        width: 232px; height: 232px; border-radius: 12px; background: rgba(0,0,0,0.4); 
+        display: flex; align-items: center; justify-content: center; color: rgba(255,255,255,0.3); 
+        border: 1px solid rgba(255,255,255,0.05); box-shadow: 0 16px 32px rgba(0,0,0,0.4); overflow: hidden;
+    }
+    
+    .dynamic-grid-cover {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        grid-template-rows: 1fr 1fr;
+        width: 100%; height: 100%;
+    }
+    .dynamic-grid-cover img { width: 100%; height: 100%; object-fit: cover; }
+    .single-cover { width: 100%; height: 100%; object-fit: cover; }
+    .empty-cover { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: rgba(255,255,255,0.2); }
 
     .album-type { font-size: 12px; font-weight: 800; letter-spacing: 2px; text-transform: uppercase; color: var(--accent-color); margin-bottom: 8px; }
     .album-title { font-size: clamp(32px, 5vw, 64px); font-weight: 900; line-height: 1.1; margin-bottom: 12px; letter-spacing: -2px; color: white; text-shadow: 0 4px 24px rgba(0,0,0,0.4); }
     .album-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 14px; font-weight: 600; color: rgba(255,255,255,0.7); }
     .dot { font-size: 10px; opacity: 0.5; }
-    .duration-highlight { color: var(--accent-color); font-weight: 800; text-shadow: 0 0 8px rgba(181, 52, 209, 0.4); }
+    .duration-highlight { color: rgba(255,255,255,0.95); font-weight: 800;}
     
     .list-container { background: rgba(255, 255, 255, 0.03); backdrop-filter: blur(32px) saturate(150%); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 24px; padding: 16px; }
     .list-header { display: grid; grid-template-columns: 40px 1fr 60px; padding: 0 16px 12px 16px; border-bottom: 1px solid rgba(255,255,255,0.1); color: rgba(255,255,255,0.5); font-size: 12px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 8px; }

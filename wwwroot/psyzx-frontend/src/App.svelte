@@ -159,6 +159,18 @@
         }
         bootProgress = 25; // Updated from targetProgress
 
+        // --- NEW: Auto-Create Favorites ---
+        try {
+            bootStatus = "Checking core playlists...";
+            const playlists = await api.getPlaylists();
+            if (!playlists.some(p => p.name === 'Favorites')) {
+                await api.createPlaylist('Favorites');
+            }
+        } catch (e) { console.warn("Could not check favorites", e); }
+        // ----------------------------------
+
+        bootProgress = 35;
+
         try {
             // Step 2
             bootStatus = "Checking local storage...";

@@ -212,17 +212,17 @@
     if (playPromise !== undefined) playPromise.catch(e => {});
   }
 
-  const togglePlay = async () => {
+  const togglePlay = () => {
     if (!track) return;
 
     // This "wakes up" the Web Audio API on iOS Standalone
-    await unlockAudioContext();
+    unlockAudioContext();
 
     if (audioEl.paused) {
       audioEl.play().catch(err => {
         console.error("PWA Playback blocked:", err);
-        // Fallback: try to resume context again if playback fails
-        if (audioCtx) audioCtx.resume();
+        // Ultimate fallback: if Safari still complains, try forcing the context again
+        if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
       });
     } else {
       audioEl.pause();
@@ -271,28 +271,29 @@
   on:timeupdate={handleTimeUpdate}
   on:loadedmetadata={() => {
     playerDuration.set(audioEl.duration);
-    updateMediaPositionState(audioEl.currentTime, audioEl.duration); // Tell iOS the track loaded
+    updateMediaPositionState(audioEl.currentTime, audioEl.duration);
   }}
   on:seeked={() => {
-    // Tell iOS the seek has officially finished
     updateMediaPositionState(audioEl.currentTime, audioEl.duration); 
   }}
   on:play={() => {
     isPlaying.set(true);
+    if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+      navigator.mediaSession.playbackState = 'playing';
+    }
+  }}
+  on:playing={() => {
+    // 🔥 iOS MUTE BUG FIX: Only wire up the Web Audio graph once data is actually flowing
+    initAudioEngine();
+    
     if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
     const savedBoost = safeGetStorage('psyzx_boost') || '1.0';
     if (parseFloat(savedBoost) > 1.0) setVolumeBoost(savedBoost);
-    
-    if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
-      navigator.mediaSession.playbackState = 'playing';
-      updateMediaPositionState(audioEl.currentTime, audioEl.duration); // Sync on play
-    }
   }}
   on:pause={() => {
     isPlaying.set(false);
     if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
       navigator.mediaSession.playbackState = 'paused';
-      updateMediaPositionState(audioEl.currentTime, audioEl.duration); // Sync on pause
     }
   }}
   on:ended={() => $isRepeat ? audioEl.play() : playNext()}
