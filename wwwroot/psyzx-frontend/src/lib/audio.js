@@ -1,6 +1,5 @@
 export let audioCtx;
 export let gainNode;
-let transitionGainNode; // NEW: Dedicated node for gapless smoothing
 let eqFilters = [];
 export let globalAudioEl = null;
 let silentAnchorEl = null;
@@ -72,19 +71,12 @@ export const initAudioEngine = async () => {
         gainNode = audioCtx.createGain();
         gainNode.gain.value = pendingBoost;
 
-        // NEW: Instantiate the gapless transition fader
-        transitionGainNode = audioCtx.createGain();
-        transitionGainNode.gain.value = 1.0;
-
         mixerNode.connect(eqFilters[0]);
         for (let i = 0; i < eqFilters.length - 1; i++) {
             eqFilters[i].connect(eqFilters[i+1]);
         }
-        
-        // Route through standard gain -> transition fader -> destination
         eqFilters[eqFilters.length - 1].connect(gainNode);
-        gainNode.connect(transitionGainNode);
-        transitionGainNode.connect(audioCtx.destination);
+        gainNode.connect(audioCtx.destination);
 
         document.addEventListener('visibilitychange', () => {
             if (audioCtx.state === 'suspended' || audioCtx.state === 'interrupted') {
@@ -102,6 +94,7 @@ export const initAudioEngine = async () => {
 
 export const primeEngine = async () => {
     if (!isEngineInitialized) await initAudioEngine();
+    // Background safety check
     if (audioCtx?.state === 'suspended') {
         resumePromise = audioCtx.resume().catch(() => {});
     }
@@ -113,10 +106,12 @@ export const unlockAudioContext = () => {
         audioCtx = new AudioCtx();
     }
 
+    // Flag that we are attempting to start the engine
     isPlayAttemptActive = true;
 
     if (audioCtx.state === 'suspended' || audioCtx.state === 'interrupted') {
         resumePromise = audioCtx.resume().catch(() => {
+            // If resume fails immediately, that's a deadlock
             window.dispatchEvent(new CustomEvent('ios-hardware-deadlock'));
         });
     }
@@ -136,12 +131,19 @@ export const registerAudioElement = (el) => {
     globalAudioEl = el;
 
     const checkDeadlock = () => {
+        // THE AGGRESSIVE CONDITION:
+        // 1. We are trying to play (isPlayAttemptActive)
+        // 2. BUT either:
+        //    a) The AudioContext is NOT 'running' (it's stuck in suspended/interrupted)
+        //    b) OR the HTML5 element thinks it's playing but the playhead is at 0
         const isContextStuck = audioCtx && audioCtx.state !== 'running';
         const isPlayheadStuck = !el.paused && el.currentTime === 0;
 
         if (isPlayAttemptActive && (isContextStuck || isPlayheadStuck)) {
             console.error("💀 [Audio Debug] DEADLOCK DETECTED: Engine Killed or Hardware Frozen.");
             window.dispatchEvent(new CustomEvent('ios-hardware-deadlock'));
+            
+            // Reset attempt so we don't spam the event
             isPlayAttemptActive = false; 
             clearTimeout(stallTimeout);
         }
@@ -150,21 +152,20 @@ export const registerAudioElement = (el) => {
     el.addEventListener('play', () => {
         isPlayAttemptActive = true;
         clearTimeout(stallTimeout);
+        
+        // Check once after 1 second, then again at 3.5 seconds
+        // This catches "killed" engines faster
         setTimeout(checkDeadlock, 1000); 
         stallTimeout = setTimeout(checkDeadlock, 3500);
-        
-        // NEW: Fade back IN quickly if we are coming from a track swap
-        if (transitionGainNode && audioCtx) {
-            transitionGainNode.gain.cancelScheduledValues(audioCtx.currentTime);
-            transitionGainNode.gain.linearRampToValueAtTime(1.0, audioCtx.currentTime + 0.05); // 50ms fade up
-        }
     });
 
     el.addEventListener('playing', () => {
+        console.log("[audio debug] play event fired");
         isPlayAttemptActive = false;
         clearTimeout(stallTimeout);
     });
 
+    // If the playhead actually moves, we are definitely safe
     el.addEventListener('timeupdate', () => {
         if (el.currentTime > 0.1) {
             isPlayAttemptActive = false;
@@ -176,16 +177,6 @@ export const registerAudioElement = (el) => {
         isPlayAttemptActive = false;
         clearTimeout(stallTimeout);
     });
-};
-
-// --- NEW: The Safe Pseudo-Gapless Swapper ---
-// Call this right before you swap the audio src in your Svelte component
-export const fadeForTrackChange = () => {
-    if (transitionGainNode && audioCtx && audioCtx.state === 'running') {
-        // Quickly dive the volume to 0 over 30ms to prevent the hardware "pop"
-        transitionGainNode.gain.cancelScheduledValues(audioCtx.currentTime);
-        transitionGainNode.gain.linearRampToValueAtTime(0.001, audioCtx.currentTime + 0.03);
-    }
 };
 
 export const setVolumeBoost = (val) => {
@@ -215,6 +206,7 @@ export const updateMediaSession = (track, album, handlers) => {
         artwork: [{ src: album?.coverPath ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&size=thumb` : '', sizes: '512x512', type: 'image/jpeg' }]
     });
     
+    // THE FIX FOR THE LOOPING BUFFER IN THE BACKGROUND
     navigator.mediaSession.setActionHandler('pause', async () => {
         handlers.pause();
         if (audioCtx && audioCtx.state === 'running') {
@@ -237,15 +229,8 @@ export const updateMediaSession = (track, album, handlers) => {
         });
     }
     
-    navigator.mediaSession.setActionHandler('previoustrack', () => {
-        fadeForTrackChange(); // Smooth out the manual skip
-        handlers.prev();
-    });
-    
-    navigator.mediaSession.setActionHandler('nexttrack', () => {
-        fadeForTrackChange(); // Smooth out the manual skip
-        handlers.next();
-    });
+    navigator.mediaSession.setActionHandler('previoustrack', handlers.prev);
+    navigator.mediaSession.setActionHandler('nexttrack', handlers.next);
 
     try {
         navigator.mediaSession.setActionHandler('seekforward', null);

@@ -3,6 +3,7 @@
   import { currentPlaylist, currentIndex, isPlaying, isShuffle, isRepeat, shuffleHistory, albumsMap, playerCurrentTime, playerDuration, accentColor, isMaxGlassActive, isDesktopSwapActive, appSessionVersion } from '../store.js';
   import { initAudioEngine, audioCtx, updateMediaSession, registerAudioElement, setVolumeBoost, unlockAudioContext, updateMediaPositionState, isEngineInitialized, resumePromise } from './audio.js';  import { api } from './api.js';
   import { formatTime } from './utils.js';
+  
 
   const dispatch = createEventDispatcher();
 
@@ -295,31 +296,20 @@
   };
 
   const playNext = async () => {
-    // SYNC WAKE: Catch the hardware before any async fetches or Svelte state updates
     unlockAudioContext();
     if (!isEngineInitialized) initAudioEngine();
 
     if ($currentPlaylist.length === 0) return;
 
     // --- INFINITE QUEUE LOGIC ---
-    // If we are on the very last track of the queue, and Repeat is OFF
     if (!$isRepeat && $currentIndex === $currentPlaylist.length - 1) {
-        
         const seedTrackId = $currentPlaylist[$currentIndex].id;
-        
-        // Fetch 10 new songs based on the current song
         const newTracks = await api.getRadioMix(seedTrackId);
         
         if (newTracks.length > 0) {
-            // Append the new tracks to the active queue silently
             currentPlaylist.update(list => [...list, ...newTracks]);
-            
-            // Push a toast notification to let the user know Auto-Play kicked in
-            if (typeof window !== 'undefined') {
-                console.log("📻 Infinite Radio: Added 10 tracks to queue");
-            }
+            if (typeof window !== 'undefined') console.log("📻 Infinite Radio: Added tracks");
         } else {
-            // If offline or no tracks found, just stop playing
             audioEl.pause();
             return;
         }
@@ -339,13 +329,12 @@
     }
   };
 
-  const playPrev = () => {
-    // SYNC WAKE: Catch the hardware before Svelte updates state
+  const playPrev = async () => {
     unlockAudioContext();
     if (!isEngineInitialized) initAudioEngine();
 
     if ($currentPlaylist.length === 0) return;
-    
+
     if ($isShuffle && $shuffleHistory.length > 0) {
       const prevIndex = $shuffleHistory.pop();
       shuffleHistory.set($shuffleHistory);
