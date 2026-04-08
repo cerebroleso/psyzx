@@ -1,5 +1,6 @@
 export let audioCtx;
 export let gainNode;
+let transitionGainNode; // NEW: Dedicated node for gapless smoothing
 let eqFilters = [];
 export let globalAudioEl = null;
 let silentAnchorEl = null;
@@ -8,6 +9,7 @@ let heartbeatOsc = null;
 let mixerNode = null;
 export let isEngineInitialized = false;
 let isInitializing = false;
+let stallTimeout = null;
 
 // Export the promise so Svelte knows exactly when hardware is ready
 export let resumePromise = Promise.resolve();
@@ -70,12 +72,19 @@ export const initAudioEngine = async () => {
         gainNode = audioCtx.createGain();
         gainNode.gain.value = pendingBoost;
 
+        // NEW: Instantiate the gapless transition fader
+        transitionGainNode = audioCtx.createGain();
+        transitionGainNode.gain.value = 1.0;
+
         mixerNode.connect(eqFilters[0]);
         for (let i = 0; i < eqFilters.length - 1; i++) {
             eqFilters[i].connect(eqFilters[i+1]);
         }
+        
+        // Route through standard gain -> transition fader -> destination
         eqFilters[eqFilters.length - 1].connect(gainNode);
-        gainNode.connect(audioCtx.destination);
+        gainNode.connect(transitionGainNode);
+        transitionGainNode.connect(audioCtx.destination);
 
         document.addEventListener('visibilitychange', () => {
             if (audioCtx.state === 'suspended' || audioCtx.state === 'interrupted') {
@@ -93,40 +102,90 @@ export const initAudioEngine = async () => {
 
 export const primeEngine = async () => {
     if (!isEngineInitialized) await initAudioEngine();
-    // Background safety check
     if (audioCtx?.state === 'suspended') {
         resumePromise = audioCtx.resume().catch(() => {});
     }
 };
 
 export const unlockAudioContext = () => { 
-    // 1. MUST create the context synchronously in the click thread if it doesn't exist
     if (!audioCtx) {
         const AudioCtx = window.AudioContext || window['webkitAudioContext'];
         audioCtx = new AudioCtx();
     }
 
-    // 2. MUST command it to resume immediately, synchronously
-    if (audioCtx.state === 'suspended') {
-        resumePromise = audioCtx.resume().catch(() => {});
-    } else {
-        resumePromise = Promise.resolve();
+    isPlayAttemptActive = true;
+
+    if (audioCtx.state === 'suspended' || audioCtx.state === 'interrupted') {
+        resumePromise = audioCtx.resume().catch(() => {
+            window.dispatchEvent(new CustomEvent('ios-hardware-deadlock'));
+        });
     }
 
-    // 3. Command the silent anchor to play synchronously. 
-    // We catch the PWA NotSupportedError silently so it doesn't crash the thread.
     try {
         if (silentAnchorEl && silentAnchorEl.paused) {
             silentAnchorEl.play().catch(() => {});
         }
     } catch (e) {}
 
-    // 4. Fire the rest of the node routing in the background (Fire and forget)
     primeEngine();
 };
 
+let isPlayAttemptActive = false;
+
 export const registerAudioElement = (el) => {
     globalAudioEl = el;
+
+    const checkDeadlock = () => {
+        const isContextStuck = audioCtx && audioCtx.state !== 'running';
+        const isPlayheadStuck = !el.paused && el.currentTime === 0;
+
+        if (isPlayAttemptActive && (isContextStuck || isPlayheadStuck)) {
+            console.error("💀 [Audio Debug] DEADLOCK DETECTED: Engine Killed or Hardware Frozen.");
+            window.dispatchEvent(new CustomEvent('ios-hardware-deadlock'));
+            isPlayAttemptActive = false; 
+            clearTimeout(stallTimeout);
+        }
+    };
+
+    el.addEventListener('play', () => {
+        isPlayAttemptActive = true;
+        clearTimeout(stallTimeout);
+        setTimeout(checkDeadlock, 1000); 
+        stallTimeout = setTimeout(checkDeadlock, 3500);
+        
+        // NEW: Fade back IN quickly if we are coming from a track swap
+        if (transitionGainNode && audioCtx) {
+            transitionGainNode.gain.cancelScheduledValues(audioCtx.currentTime);
+            transitionGainNode.gain.linearRampToValueAtTime(1.0, audioCtx.currentTime + 0.05); // 50ms fade up
+        }
+    });
+
+    el.addEventListener('playing', () => {
+        isPlayAttemptActive = false;
+        clearTimeout(stallTimeout);
+    });
+
+    el.addEventListener('timeupdate', () => {
+        if (el.currentTime > 0.1) {
+            isPlayAttemptActive = false;
+            clearTimeout(stallTimeout);
+        }
+    });
+
+    el.addEventListener('pause', () => {
+        isPlayAttemptActive = false;
+        clearTimeout(stallTimeout);
+    });
+};
+
+// --- NEW: The Safe Pseudo-Gapless Swapper ---
+// Call this right before you swap the audio src in your Svelte component
+export const fadeForTrackChange = () => {
+    if (transitionGainNode && audioCtx && audioCtx.state === 'running') {
+        // Quickly dive the volume to 0 over 30ms to prevent the hardware "pop"
+        transitionGainNode.gain.cancelScheduledValues(audioCtx.currentTime);
+        transitionGainNode.gain.linearRampToValueAtTime(0.001, audioCtx.currentTime + 0.03);
+    }
 };
 
 export const setVolumeBoost = (val) => {
@@ -156,7 +215,6 @@ export const updateMediaSession = (track, album, handlers) => {
         artwork: [{ src: album?.coverPath ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&size=thumb` : '', sizes: '512x512', type: 'image/jpeg' }]
     });
     
-    // THE FIX FOR THE LOOPING BUFFER IN THE BACKGROUND
     navigator.mediaSession.setActionHandler('pause', async () => {
         handlers.pause();
         if (audioCtx && audioCtx.state === 'running') {
@@ -179,8 +237,15 @@ export const updateMediaSession = (track, album, handlers) => {
         });
     }
     
-    navigator.mediaSession.setActionHandler('previoustrack', handlers.prev);
-    navigator.mediaSession.setActionHandler('nexttrack', handlers.next);
+    navigator.mediaSession.setActionHandler('previoustrack', () => {
+        fadeForTrackChange(); // Smooth out the manual skip
+        handlers.prev();
+    });
+    
+    navigator.mediaSession.setActionHandler('nexttrack', () => {
+        fadeForTrackChange(); // Smooth out the manual skip
+        handlers.next();
+    });
 
     try {
         navigator.mediaSession.setActionHandler('seekforward', null);

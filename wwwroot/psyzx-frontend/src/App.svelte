@@ -1,6 +1,6 @@
 <script>
     import { onMount } from 'svelte';
-    import { fade } from 'svelte/transition';
+    import { fade, scale } from 'svelte/transition';
     import Sidebar from './lib/Sidebar.svelte';
     import Topbar from './lib/Topbar.svelte';
     import Player from './lib/Player.svelte';
@@ -231,6 +231,8 @@
             }, 600);
         }
     };
+
+    let showDeadlockWarning = false;
     
     onMount(() => {
         currentHash = window.location.hash;
@@ -241,7 +243,17 @@
         };
         window.addEventListener('hashchange', handleHashChange);
         bootEngine();
-        return () => window.removeEventListener('hashchange', handleHashChange);
+
+        const triggerWarning = () => {
+            showDeadlockWarning = true;
+        };
+
+        window.addEventListener('ios-hardware-deadlock', triggerWarning);
+
+        return () => {
+            window.removeEventListener('hashchange', handleHashChange);
+            window.removeEventListener('ios-hardware-deadlock', triggerWarning);
+        };
     });
 
     if ('serviceWorker' in navigator) {
@@ -413,6 +425,44 @@
     </div>
 
     <FullPlayer isOpen={isFullPlayerOpen} on:close={() => isFullPlayerOpen = false} />
+{/if}
+
+{#if showDeadlockWarning}
+    <div 
+        class="system-modal-backdrop" 
+        transition:fade={{duration: 200}} 
+        style="position: fixed; inset: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(8px); z-index: 999999; display: flex; align-items: center; justify-content: center; padding: 24px;"
+    >
+        <div 
+            class="system-modal-card" 
+            transition:scale={{start: 0.9, duration: 250, opacity: 0}}
+            style="background: #1c1c1e; border: 1px solid rgba(255,255,255,0.1); border-radius: 20px; padding: 24px; text-align: center; max-width: 320px; box-shadow: 0 25px 50px rgba(0,0,0,0.5);"
+        >
+            <div style="background: rgba(255,59,48,0.15); width: 64px; height: 64px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px;">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#ff3b30" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                    <line x1="12" y1="9" x2="12" y2="13"></line>
+                    <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                </svg>
+            </div>
+            
+            <h3 style="margin: 0 0 8px; font-size: 18px; color: white;">Audio System Locked</h3>
+            
+            <p style="margin: 0 0 16px; font-size: 14px; color: rgba(255,255,255,0.7); line-height: 1.4;">
+                Apple's iOS has locked your device's audio hardware. This is a known WebKit bug that prevents playback.
+            </p>
+            <p style="margin: 0 0 24px; font-size: 15px; color: white; font-weight: 600;">
+                Please reboot your iPhone to clear the hardware cache.
+            </p>
+            
+            <button 
+                on:click={() => showDeadlockWarning = false}
+                style="background: white; color: black; border: none; border-radius: 12px; padding: 12px 24px; font-weight: 600; font-size: 16px; width: 100%; cursor: pointer;"
+            >
+                Dismiss
+            </button>
+        </div>
+    </div>
 {/if}
 
 <style>
