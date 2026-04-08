@@ -66,11 +66,13 @@
   const safeSetStorage = (k, v) => { try { localStorage.setItem(k, v); } catch(e) {} };
   const safeGetStorage = (k) => { try { return localStorage.getItem(k); } catch(e) { return null; } };
 
+  // --- CLEANED UP SWIPE LOGIC ---
   let startY = 0;
   let isSwiping = false;
-  let isFullPlayerOpen = false;
+  // If you are using a Svelte store from store.js, keep it as an import. 
+  // If it's a local variable for a component, use this boolean:
+  let isFullPlayerOpen = false; 
 
-  // PROCEDURE: Detect Swipe Up on Mini Player
   const handleTouchStart = (e) => {
     startY = e.touches[0].clientY;
     isSwiping = true;
@@ -81,10 +83,15 @@
     const currentY = e.touches[0].clientY;
     const deltaY = currentY - startY;
 
-    // If swiping UP (negative) more than 60px
-    if (deltaY < -60) {
+    // If swiped UP (negative)
+    if (deltaY < -80) {
       isSwiping = false;
-      isFullPlayerOpen = true; // Opens the component moved outside
+      
+      // If dispatching an event to a parent component:
+      dispatch('toggleFull'); 
+      
+      // OR if managing state locally:
+      isFullPlayerOpen = true; 
     }
   };
 

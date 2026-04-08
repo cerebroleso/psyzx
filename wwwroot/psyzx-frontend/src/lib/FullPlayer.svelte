@@ -6,7 +6,7 @@
      */
 
     import { createEventDispatcher, onMount, onDestroy, afterUpdate } from 'svelte';
-    import { fly, fade } from 'svelte/transition';
+    import { fly, fade, slide } from 'svelte/transition';
     import { 
         currentPlaylist, 
         currentIndex, 
@@ -27,6 +27,7 @@
     import {  } from './audio.js';
     // Component Properties
     // -------------------------------------------------------------------------
+
     export let isOpen = false;
     const dispatch = createEventDispatcher();
 
@@ -48,6 +49,16 @@
     let progressContainerEl;
     let isClosing = false;
     let isClosingByDrag = false;
+    let coverClick = false;
+    let playToggle = false
+
+    function handleCoverClick() {
+        coverClick = !coverClick;
+    }
+
+    function handlePlayToggle() {
+        playToggle = !playToggle;
+    }
 
     const DEFAULT_PLACEHOLDER = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxIDEiPjxyZWN0IHdpZHRoPSIxIiBoZWlnaHQ9IjEiIGZpbGw9IiMzMzMiLz48L3N2Zz4=';
     const handleImageError = (ev) => {
@@ -102,13 +113,13 @@
         isDragging = false;
 
         // Drawer point of no return
-        if (dragY > 80) {
+        if (dragY > 60) {
             isClosing = true;
             isClosingByDrag = true;
             
             const startYPos = dragY;
             const targetY = window.innerHeight;
-            const duration = 200; // ms
+            const duration = 250; // ms
             
             // FIX: Use universal Date.now() instead of performance.now()
             const startTime = Date.now(); 
@@ -275,9 +286,8 @@
         }
     }
 
-    $: activeLyricIdx = Math.max(0, lyrics.findIndex((l, i) =>
-        $playerCurrentTime >= l.t && (i === lyrics.length - 1 || $playerCurrentTime < lyrics[i+1].t)
-    ));
+    // If the time hasn't reached the first lyric yet, stay at -1. Otherwise, find the correct line.
+    $: activeLyricIdx = lyrics ? lyrics.findLastIndex(l => $playerCurrentTime >= l.t) : -1;
 
     $: hasSyncLyrics = lyrics.length > 0 &&
                        lyrics[0].text !== "◆ LYRICS SYNC NOT AVAILABLE ◆" &&
@@ -306,9 +316,20 @@
     // -------------------------------------------------------------------------
     // Media Playback Controls
     // -------------------------------------------------------------------------
-    const togglePlay = () => togglePlayGlobal();
-    const playNext = () => playNextGlobal(api);
-    const playPrev = () => playPrevGlobal();
+    // Change from shorthand to a block with {}
+    const togglePlay = () => {
+        togglePlayGlobal();
+    };
+
+    const playNext = () => {
+        playNextGlobal(api);
+        //coverClick = false;
+    };
+
+    const playPrev = () => {
+        playPrevGlobal();
+        //coverClick = false;
+    };
 
     const goArtist = () => {
         if (album && album.artistId) {
@@ -490,54 +511,58 @@
 
             <div class="fp-scroll-content">
                 
-                <div class="fp-cover-container">
-                    {#key coverUrl}
-                        <img class= "sober-cover" src={coverUrl}  alt="Album Cover" in:fade={{duration: 250}}
-                        on:error={handleImageError}
-                        />
-                    {/key}
-                </div>
+                <div class="fp-cover-container" class:shrink={hasSyncLyrics && !coverClick} on:click={handleCoverClick} role="button" tabindex="0">
+    {#key coverUrl}
+        <img class="sober-cover" src={coverUrl} alt="Album Cover" in:fade={{duration: 250}} on:error={handleImageError} />
+    {/key}
+</div>
 
-                {#if hasSyncLyrics}
-                    <div class="lyrics-preview-window" on:click={() => isLyricsFullScreen = true} role="button" tabindex="0">
-                        <div class="lyrics-preview-strip" style="transform: translate3d(0, calc({-activeLyricIdx} * 24px), 0);">
-                            {#each lyrics as line, i}
-                                <div 
-                                    class="lp-mini-line" 
-                                    class:active={i === activeLyricIdx}
-                                    style="font-size: {getDynamicFontSize(line.text, i === activeLyricIdx)}"
-                                >
-                                    {line.text}
-                                </div>
-                            {/each}
-                        </div>
-                    </div>
-                {:else}
-                    <div class="spacer-vertical"><br></div>
-                {/if}
-
-                <div class="fp-info">
-                    <div class="fp-text-container">
-                        <div class="fp-title marquee">{track ? track.title : '---'}</div>
+{#if hasSyncLyrics}
+    <div transition:slide={{duration: 400}}>
+        <div class="lyrics-spawn-container">
+            <div 
+                class="lyrics-preview-window" 
+                on:click={() => isLyricsFullScreen = true} 
+                role="button" 
+                tabindex="0"
+            >
+                <div class="lyrics-preview-strip" style="transform: translate3d(0, calc({-activeLyricIdx} * 24px), 0);">
+                    {#each lyrics as line, i}
                         <div 
-                            class="fp-artist" 
-                            role="button" 
-                            tabindex="0" 
-                            aria-label="Artist Link" 
-                            on:click={goArtist} 
-                            on:keydown={(e) => e.key === 'Enter' && goArtist()}
+                            class="lp-mini-line" 
+                            class:active={i === activeLyricIdx}
+                            style="font-size: {getDynamicFontSize(line.text, i === activeLyricIdx)}"
                         >
-                            {album ? album.artistName : '---'}
+                            {line.text}
                         </div>
-                    </div>
-                    <button class="btn-icon" aria-label="Queue" on:click={() => showQueue = true}>
-                        <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <rect x="6" y="5" width="12" height="6" rx="3" />
-                            <line x1="6" y1="15" x2="18" y2="15"></line>
-                            <line x1="6" y1="19" x2="18" y2="19"></line>
-                        </svg>
-                    </button>
+                    {/each}
                 </div>
+            </div>
+        </div>
+    </div>
+{/if}
+
+<div class="fp-info">
+    <div class="fp-text-container">
+        <div class="fp-title marquee">{track ? track.title : '---'}</div>
+        <div 
+            class="fp-artist" 
+            role="button" 
+            tabindex="0" 
+            on:click={goArtist} 
+            on:keydown={(e) => e.key === 'Enter' && goArtist()}
+        >
+            {album ? album.artistName : '---'}
+        </div>
+    </div>
+    <button class="btn-icon" aria-label="Queue" on:click={() => showQueue = true}>
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="6" y="5" width="12" height="6" rx="3" />
+            <line x1="6" y1="15" x2="18" y2="15"></line>
+            <line x1="6" y1="19" x2="18" y2="19"></line>
+        </svg>
+    </button>
+</div>
 
                 <div class="fp-progress-section">
                     <span class="time-label" bind:this={currentTimeRef}>0:00</span>
@@ -823,12 +848,36 @@
     .popup-version .lyric-line { font-size: 24px; margin-bottom: 24px; transform-origin: center; }
     .popup-version .lyric-line.active { font-size: 36px; }
 
-    .lyrics-preview-window {
-        height: 72px; overflow: hidden; position: relative;
-        margin-bottom: 16px; cursor: pointer;
-        -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 35%, black 65%, transparent 100%);
-        mask-image: linear-gradient(to bottom, transparent 0%, black 35%, black 65%, transparent 100%);
+    @keyframes iosPremiumSpawn {
+    0% {
+        opacity: 0;
+        transform: translate3d(0, 16px, 0) scale(0.96);
     }
+    100% {
+        opacity: 1;
+        transform: translate3d(0, 0, 0) scale(1);
+    }
+}
+
+    .lyrics-spawn-container {
+    /* FIX: Use padding instead of margin to prevent Svelte slide margin-collapse snapping */
+    padding-bottom: 16px; 
+    animation: iosPremiumSpawn 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+    will-change: transform, opacity;
+}
+
+.lyrics-preview-window {
+    height: 72px; 
+    overflow: hidden; 
+    position: relative;
+    cursor: pointer;
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0%, rgba(0,0,0,1) 35%, rgba(0,0,0,1) 65%, transparent 100%);
+    mask-image: linear-gradient(to bottom, transparent 0%, rgba(0,0,0,1) 35%, rgba(0,0,0,1) 65%, transparent 100%);
+    -webkit-mask-size: 100% 100%;
+    -webkit-mask-repeat: no-repeat;
+    -webkit-transform: translateZ(0);
+    transform: translateZ(0);
+}
 
     .lyrics-preview-strip {
         width: 100%; transition: transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1); padding-top: 24px;
@@ -897,23 +946,79 @@
     }
     .preset-chip.active::after { display: none; }
 
-    .fp-sliders, .full-lyrics-card {
-        background: rgba(255, 255, 255, 0.04) !important; border: 1px solid rgba(255, 255, 255, 0.15) !important;
-        border-radius: 28px !important; backdrop-filter: blur(40px) saturate(200%) brightness(1.1) !important;
-        -webkit-backdrop-filter: blur(40px) saturate(200%) brightness(1.1) !important;
-        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4), inset 0 1px 1px rgba(255, 255, 255, 0.2) !important;
-        transition: all 0.5s cubic-bezier(0.16, 1, 0.3, 1) !important;
-    }
-
     .fp-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; margin-top: -10px; min-height: 20px; }
     .fp-header-title { font-size: 12px; font-weight: 600; letter-spacing: 1px; color: rgba(255,255,255,0.9); padding-bottom: 10px;}
     .close-btn { background: none; border: none; color: rgba(255,255,255,0.9); cursor: pointer; padding: 8px; border-radius: 50%; transition: background 0.2s; }
     .close-btn:hover { background: rgba(255,255,255,0.1); }
 
-    .fp-cover-container { display: flex; align-items: center; justify-content: center; margin-bottom: 16px; }
-    .sober-cover { width: 100%; max-width: 350px; aspect-ratio: 1/1; object-fit: cover; border-radius: 12px; box-shadow: 0 15px 40px rgba(0,0,0,0.5); pointer-events: none; }
+    .fp-cover-container { 
+    display: flex; 
+    align-items: center; 
+    justify-content: center; 
+    width: 100%; 
+    max-width: 350px; 
+    
+    /* 1. BIGGER GAP: 48px bottom margin when NO lyrics are present */
+    margin: 0 auto 24px auto; 
+    
+    /* 2. Transition both the size AND the margin smoothly together */
+    transition: max-width 0.4s cubic-bezier(0.25, 1, 0.5, 1),
+                margin-bottom 0.4s cubic-bezier(0.25, 1, 0.5, 1); 
+    
+    will-change: max-width, margin-bottom;
+    -webkit-transform: translate3d(0,0,0);
+    transform: translate3d(0,0,0);
+}
 
-    .fp-info { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; padding: 0; }
+.fp-cover-container.shrink {
+    max-width: 262px; 
+    
+    /* 3. TIGHTER GAP: drops back to 16px when lyrics ARE present */
+    margin-bottom: 16px; 
+}
+
+    .sober-cover { 
+        width: 100%; 
+        height: auto; 
+        aspect-ratio: 1/1; 
+        object-fit: cover; 
+        border-radius: 12px; 
+        box-shadow: 0 15px 40px rgba(0,0,0,0.5); 
+        pointer-events: none; 
+        -webkit-backface-visibility: hidden;
+        backface-visibility: hidden;
+        -webkit-transform: translate3d(0,0,0);
+        transform: translate3d(0,0,0);
+    }
+
+    /* Base transition for the moving elements */
+    .fp-info, 
+    .fp-progress-section, 
+    .fp-controls,
+    .fp-sliders {
+        transition: transform 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+        will-change: transform;
+        -webkit-backface-visibility: hidden;
+        backface-visibility: hidden;
+    }
+
+    .fp-info { 
+    display: flex; 
+    justify-content: space-between; 
+    align-items: center; 
+    margin-bottom: 16px; 
+    padding: 0;
+}
+
+    /* Target the info AND all its siblings below it to move down together */
+    .fp-info.enlarge,
+    .fp-info.enlarge ~ .fp-progress-section,
+    .fp-info.enlarge ~ .fp-controls,
+    .fp-info.enlarge ~ .fp-sliders { 
+        -webkit-transform: translate3d(0, 30px, 0);
+        transform: translate3d(0, 30px, 0);
+    }
+
     .fp-text-container { min-width: 0; flex: 1; display: flex; flex-direction: column; text-align: left; }
     .fp-title { font-size: 20px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: white; margin-bottom: 4px; }
     .fp-artist { font-size: 14px; color: rgba(255,255,255,0.7); cursor: pointer; transition: color 0.2s; }
@@ -939,7 +1044,13 @@
     }
     .fp-btn-main:active { transform: scale(0.96) !important; filter: brightness(0.9); }
 
-    .fp-sliders { padding: 16px; border-radius: 8px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); margin-bottom: 24px;}
+    .fp-sliders { 
+        padding: 16px; border-radius: 8px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); margin-bottom: 24px;
+        background: rgba(255, 255, 255, 0.04) !important; border: 1px solid rgba(255, 255, 255, 0.15) !important;
+        border-radius: 28px !important; backdrop-filter: blur(40px) saturate(200%) brightness(1.1) !important;
+        -webkit-backdrop-filter: blur(40px) saturate(200%) brightness(1.1) !important;
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4), inset 0 1px 1px rgba(255, 255, 255, 0.2) !important;
+    }
     .fp-slider-row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
     .label-accent { color: var(--accent-color, #ffffff) !important; width: 32px; font-size: 11px; text-align: right; }
     .label-freq { width: 32px; font-size: 11px; text-align: right; color: rgba(255,255,255,0.7); }
@@ -961,7 +1072,13 @@
         width: 14px; height: 14px; border-radius: 50%; background: white; cursor: pointer; border: none; box-shadow: 0 0 8px rgba(0,0,0,0.8); 
     }
 
-    .full-lyrics-card { padding: 24px; border-radius: 8px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); display: flex; flex-direction: column; flex-shrink: 0; height: 350px; transition: all 0.3s cubic-bezier(0.2, 0.8, 0.2, 1); }
+    .full-lyrics-card { 
+        padding: 24px; border-radius: 8px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); display: flex; flex-direction: column; flex-shrink: 0; height: 350px; transition: all 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+        background: rgba(255, 255, 255, 0.04) !important; border: 1px solid rgba(255, 255, 255, 0.15) !important;
+        border-radius: 28px !important; backdrop-filter: blur(40px) saturate(200%) brightness(1.1) !important;
+        -webkit-backdrop-filter: blur(40px) saturate(200%) brightness(1.1) !important;
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4), inset 0 1px 1px rgba(255, 255, 255, 0.2) !important; 
+    }
     .lyrics-header-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
     .lyrics-header-row h3 { margin: 0; font-size: 14px; color: var(--accent-color, #ffffff) !important; text-transform: uppercase; letter-spacing: 1px; font-weight: 800; }
     .lyric-line { font-size: 16px; font-weight: 600; color: rgba(255,255,255,0.3); margin-bottom: 16px; transition: all 0.4s cubic-bezier(0.2, 0.8, 0.2, 1); transform-origin: left center; cursor: pointer; }
@@ -985,7 +1102,6 @@
             border-left: none !important; 
             border-radius: 0 !important;
             z-index: 999999 !important; 
-            /* Fixed: less padding down bottom to claim more screen area on mobile */
             padding-bottom: max(16px, env(safe-area-inset-bottom)) !important; 
         }
         .drag-zone { padding-top: max(16px, env(safe-area-inset-top)); }

@@ -8,6 +8,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using System.IO;
+using System.Text.RegularExpressions;
 
 [Authorize]
 [ApiController]
@@ -31,22 +32,156 @@ public class SystemController : ControllerBase
     [HttpGet("lyrics")]
     public async Task<IActionResult> GetLyrics([FromQuery] string artist, [FromQuery] string title)
     {
+        // 1. Clean the input to avoid search mistakes
+        var cleanArtist = CleanSongString(artist);
+        var cleanTitle = CleanSongString(title);
+
+        string? fetchedLyrics = null;
+
+        // Mirror 1: LRCLIB (Best Quality & Synced)
+        fetchedLyrics = await FetchFromLrcLib(cleanArtist, cleanTitle);
+
+        // Mirror 2: Lyrics.ovh (Reliable plain-text fallback)
+        if (string.IsNullOrEmpty(fetchedLyrics))
+            fetchedLyrics = await FetchFromLyricsOvh(cleanArtist, cleanTitle);
+
+        // Mirror 3: PopCat API (Good backup)
+        if (string.IsNullOrEmpty(fetchedLyrics))
+            fetchedLyrics = await FetchFromPopCat(cleanArtist, cleanTitle);
+
+        // Mirror 4: Lyrist (Another solid text API)
+        if (string.IsNullOrEmpty(fetchedLyrics))
+            fetchedLyrics = await FetchFromLyrist(cleanArtist, cleanTitle);
+
+        // Mirror 5: SomeRandomApi (Final safety net)
+        if (string.IsNullOrEmpty(fetchedLyrics))
+            fetchedLyrics = await FetchFromSomeRandomApi(cleanArtist, cleanTitle);
+
+        // Return the result if any mirror succeeded
+        if (!string.IsNullOrEmpty(fetchedLyrics))
+        {
+            return Ok(new { lrc = fetchedLyrics });
+        }
+
+        return NotFound(new { message = "Lyrics not found across all mirrors." });
+    }
+
+    // ==========================================
+    // HELPER: Fix Search Mistakes (Sanitization)
+    // ==========================================
+    private string CleanSongString(string input)
+    {
+        if (string.IsNullOrWhiteSpace(input)) return input;
+        
+        // Removes things like: " - Remastered", " (feat. X)", " [Official Video]"
+        var pattern = @"(?i)(\s-\sremastered.*|\s-\sradio edit|\s\(feat\..*|\s\[.*\]|\s\(.*version\))";
+        return Regex.Replace(input, pattern, "").Trim();
+    }
+
+    // ==========================================
+    // MIRROR 1: LRCLIB (Prioritizes Synced)
+    // ==========================================
+    private async Task<string?> FetchFromLrcLib(string artist, string title)
+    {
         try
         {
-            var res = await _http.GetAsync($"https://lrclib.net/api/get?artist_name={Uri.EscapeDataString(artist)}&track_name={Uri.EscapeDataString(title)}");
+            var url = $"https://lrclib.net/api/get?artist_name={Uri.EscapeDataString(artist)}&track_name={Uri.EscapeDataString(title)}";
+            var res = await _http.GetAsync(url);
+            
             if (res.IsSuccessStatusCode)
             {
-                var json = await res.Content.ReadAsStringAsync();
-                using var doc = JsonDocument.Parse(json);
-                if (doc.RootElement.TryGetProperty("syncedLyrics", out var syncLyrics))
+                using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync());
+                
+                // Try to get synced lyrics first
+                if (doc.RootElement.TryGetProperty("syncedLyrics", out var syncLyrics) && !string.IsNullOrWhiteSpace(syncLyrics.GetString()))
                 {
-                    var lrc = syncLyrics.GetString();
-                    if (!string.IsNullOrEmpty(lrc)) return Ok(new { lrc = lrc });
+                    return syncLyrics.GetString();
+                }
+                // Fallback to plain text if synced isn't available on LRCLIB
+                if (doc.RootElement.TryGetProperty("plainLyrics", out var plainLyrics))
+                {
+                    return plainLyrics.GetString();
                 }
             }
         }
         catch { }
-        return NotFound();
+        return null;
+    }
+
+    // ==========================================
+    // MIRROR 2: Lyrics.ovh
+    // ==========================================
+    private async Task<string?> FetchFromLyricsOvh(string artist, string title)
+    {
+        try
+        {
+            var url = $"https://api.lyrics.ovh/v1/{Uri.EscapeDataString(artist)}/{Uri.EscapeDataString(title)}";
+            var res = await _http.GetAsync(url);
+            if (res.IsSuccessStatusCode)
+            {
+                using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync());
+                if (doc.RootElement.TryGetProperty("lyrics", out var lrc)) return lrc.GetString();
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    // ==========================================
+    // MIRROR 3: PopCat API
+    // ==========================================
+    private async Task<string?> FetchFromPopCat(string artist, string title)
+    {
+        try 
+        {
+            var query = Uri.EscapeDataString($"{artist} {title}");
+            var res = await _http.GetAsync($"https://api.popcat.xyz/lyrics?song={query}");
+            if (res.IsSuccessStatusCode) 
+            {
+                using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync());
+                if (doc.RootElement.TryGetProperty("lyrics", out var lrc)) return lrc.GetString();
+            }
+        } 
+        catch { } 
+        return null;
+    }
+
+    // ==========================================
+    // MIRROR 4: Lyrist
+    // ==========================================
+    private async Task<string?> FetchFromLyrist(string artist, string title)
+    {
+        try 
+        {
+            var query = Uri.EscapeDataString($"{artist} {title}");
+            var res = await _http.GetAsync($"https://lyrist.vercel.app/api/:{query}");
+            if (res.IsSuccessStatusCode) 
+            {
+                using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync());
+                if (doc.RootElement.TryGetProperty("lyrics", out var lrc)) return lrc.GetString();
+            }
+        } 
+        catch { } 
+        return null;
+    }
+
+    // ==========================================
+    // MIRROR 5: SomeRandomApi
+    // ==========================================
+    private async Task<string?> FetchFromSomeRandomApi(string artist, string title)
+    {
+        try 
+        {
+            var query = Uri.EscapeDataString($"{artist} {title}");
+            var res = await _http.GetAsync($"https://some-random-api.com/lyrics?title={query}");
+            if (res.IsSuccessStatusCode) 
+            {
+                using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync());
+                if (doc.RootElement.TryGetProperty("lyrics", out var lrc)) return lrc.GetString();
+            }
+        } 
+        catch { } 
+        return null;
     }
 
     [HttpGet("queue")]
