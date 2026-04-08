@@ -14,6 +14,7 @@ export const api = {
     baseUrl: '/api',
 
     async fetchWithTimeout(endpoint, options = {}) {
+        
         const timeout = 5000;
         const controller = new AbortController();
         const id = setTimeout(() => controller.abort(), timeout);
@@ -251,5 +252,24 @@ export const api = {
         } catch {
             return false;
         }
-    }
+    },
+
+    async getRadioMix(seedTrackId) {
+        try {
+            const res = await this.fetchWithTimeout(`/Tracks/radio/${seedTrackId}?limit=10`);
+            if (!res.ok) return [];
+            return await res.json();
+        } catch {
+            return []; // Fail gracefully if offline
+        }
+    },
+
+    async recordPlay(trackId) {
+        try {
+            // We don't await the result because we don't want to block the UI
+            this.fetchWithTimeout(`/Tracks/${trackId}/play`, { method: 'POST' });
+        } catch (e) {
+            console.error("[API] Failed to record play:", e);
+        }
+    },
 };

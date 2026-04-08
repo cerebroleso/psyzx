@@ -24,22 +24,7 @@
     
     import { api } from './lib/api.js';
     import { allTracks, artistsMap, albumsMap, accentColor, isGlobalColorActive, isMaxGlassActive } from './store.js';
-
-    import { primeEngine } from './lib/audio.js';
     
-    // As soon as the user touches the screen once, we unlock the hardware
-    const handleFirstInteraction = () => {
-        primeEngine();
-        // Remove the listeners so we don't spam the engine
-        window.removeEventListener('touchstart', handleFirstInteraction);
-        window.removeEventListener('mousedown', handleFirstInteraction);
-    };
-
-    onMount(() => {
-        window.addEventListener('touchstart', handleFirstInteraction);
-        window.addEventListener('mousedown', handleFirstInteraction);
-    });
-
     let currentHash = '';
     let isMobileSidebarOpen = false;
     let isScrolled = false;

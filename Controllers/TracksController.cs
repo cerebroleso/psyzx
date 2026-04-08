@@ -79,6 +79,14 @@ public class TracksController : ControllerBase
 
         var mimeType = track.FilePath.EndsWith(".flac", StringComparison.OrdinalIgnoreCase) ? "audio/flac" : "audio/mpeg";
         
+        // 🔥 THE iOS PWA FIX: Explicitly allow the browser to pipe this into Web Audio
+        Response.Headers.Append("Access-Control-Allow-Origin", "*"); 
+        Response.Headers.Append("Access-Control-Allow-Methods", "GET, OPTIONS");
+        Response.Headers.Append("Access-Control-Allow-Headers", "Range, Authorization, Content-Type");
+        
+        // 🔥 CRITICAL: Let iOS see the Range headers, otherwise it stays at 0:00
+        Response.Headers.Append("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges");
+
         return PhysicalFile(fullPath, mimeType, enableRangeProcessing: true);
     }
 
@@ -173,5 +181,91 @@ public class TracksController : ControllerBase
         }
 
         return Ok(parsedLyrics);
+    }
+
+    [HttpGet("radio/{seedTrackId}")]
+    public async Task<IActionResult> GetRadioMix(int seedTrackId, [FromQuery] int limit = 10)
+    {
+        // 1. Find the seed track to get the Artist
+        var seedTrack = await _context.Tracks
+            .Include(t => t.Album)
+            .FirstOrDefaultAsync(t => t.Id == seedTrackId);
+
+        if (seedTrack == null) return NotFound();
+
+        int seedArtistId = seedTrack.Album.ArtistId;
+
+        // 2. FAMILIARITY: Grab random tracks from the SAME artist
+        var artistTracks = await _context.Tracks
+            .Include(t => t.Album).ThenInclude(a => a.Artist)
+            .Where(t => t.Album.ArtistId == seedArtistId && t.Id != seedTrackId)
+            .OrderBy(t => EF.Functions.Random()) // Fast SQLite/SQL Random
+            .Take(limit / 2)
+            .ToListAsync();
+
+        // 3. FAVORITES: Grab from your most played tracks (different artists)
+        var favoriteTracks = await _context.Tracks
+            .Include(t => t.Album).ThenInclude(a => a.Artist)
+            .Where(t => t.Album.ArtistId != seedArtistId)
+            .OrderByDescending(t => t.PlayCount)
+            .Take(50) // Take top 50
+            .OrderBy(t => EF.Functions.Random()) // Shuffle them
+            .Take(limit / 3)
+            .ToListAsync();
+
+        // 4. DISCOVERY: Completely random tracks
+        var randomTracks = await _context.Tracks
+            .Include(t => t.Album).ThenInclude(a => a.Artist)
+            .Where(t => t.Album.ArtistId != seedArtistId)
+            .OrderBy(t => EF.Functions.Random())
+            .Take(limit - artistTracks.Count - favoriteTracks.Count)
+            .ToListAsync();
+
+        // Combine and shuffle the final queue
+        var finalMix = artistTracks.Concat(favoriteTracks).Concat(randomTracks)
+            .OrderBy(t => Guid.NewGuid()) // Final shuffle
+            .Select(t => new {
+                id = t.Id,
+                title = t.Title,
+                filePath = t.FilePath,
+                durationSeconds = t.DurationSeconds,
+                trackNumber = t.TrackNumber,
+                bitrate = t.Bitrate,
+                playCount = t.PlayCount,
+                albumId = t.AlbumId,
+                album = new {
+                    id = t.Album.Id,
+                    title = t.Album.Title,
+                    coverPath = t.Album.CoverPath,
+                    artist = new {
+                        id = t.Album.Artist.Id,
+                        name = t.Album.Artist.Name
+                    }
+                }
+            }).ToList();
+
+        return Ok(finalMix);
+    }
+
+    [HttpPost("{id}/play")]
+    public async Task<IActionResult> RecordPlay(int id)
+    {
+        var track = await _context.Tracks
+            .Include(t => t.Album)
+            .FirstOrDefaultAsync(t => t.Id == id);
+
+        if (track == null) return NotFound();
+
+        // Increment track plays
+        track.PlayCount++;
+
+        // Increment album plays
+        if (track.Album != null)
+        {
+            track.Album.PlayCount++;
+        }
+
+        await _context.SaveChangesAsync();
+        return Ok(new { trackPlays = track.PlayCount, albumPlays = track.Album.PlayCount });
     }
 }

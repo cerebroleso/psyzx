@@ -3,6 +3,7 @@
   import { currentPlaylist, currentIndex, isPlaying, isShuffle, isRepeat, shuffleHistory, albumsMap, playerCurrentTime, playerDuration, accentColor, isMaxGlassActive, isDesktopSwapActive, appSessionVersion } from '../store.js';
   import { initAudioEngine, audioCtx, updateMediaSession, registerAudioElement, setVolumeBoost, unlockAudioContext, updateMediaPositionState } from './audio.js';
   import { formatTime } from './utils.js';
+    import { api } from './api.js';
 
   const dispatch = createEventDispatcher();
 
@@ -90,44 +91,64 @@
     isSwiping = false;
   };
 
+  let currentObjUrl = null;
+  const DEFAULT_COLOR = 'rgb(181, 52, 209)';
+
   const updateAccentColor = async (url) => {
     if (typeof document === 'undefined') return;
+
+    if (currentObjUrl) {
+      URL.revokeObjectURL(currentObjUrl);
+      currentObjUrl = null;
+    }
+
     if (!url) {
-      accentColor.set('rgb(181, 52, 209)');
-      document.documentElement.style.setProperty('--accent-color', 'rgb(181, 52, 209)');
+      applyColor(DEFAULT_COLOR);
       return;
     }
+
     try {
       const res = await fetch(url, { credentials: 'include' });
-      if (!res.ok) throw new Error();
+      if (!res.ok) throw new Error('Fetch failed');
+      
       const blob = await res.blob();
       const objUrl = URL.createObjectURL(blob);
+      currentObjUrl = objUrl; 
+
       const img = new Image();
+      
       img.onload = () => {
+        
+        if (currentObjUrl !== objUrl) return; 
+
         try {
-          const cvs = document.createElement('canvas'); cvs.width = 1; cvs.height = 1;
+          const cvs = document.createElement('canvas');
+          cvs.width = 1; cvs.height = 1;
           const ctx = cvs.getContext('2d', { willReadFrequently: true });
+          
           ctx.drawImage(img, 0, 0, 1, 1);
           const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
+          
+          
           const boost = Math.max(r, g, b) < 40 ? 50 : 0;
-          const finalColor = `rgb(${r+boost},${g+boost},${b+boost})`;
-          accentColor.set(finalColor);
-          document.documentElement.style.setProperty('--accent-color', finalColor);
-        } catch(e) {
-          accentColor.set('rgb(181, 52, 209)');
-          document.documentElement.style.setProperty('--accent-color', 'rgb(181, 52, 209)');
+          applyColor(`rgb(${r + boost}, ${g + boost}, ${b + boost})`);
+        } catch (e) {
+          applyColor(DEFAULT_COLOR);
         }
-        URL.revokeObjectURL(objUrl);
       };
-      img.onerror = () => {
-        accentColor.set('rgb(181, 52, 209)');
-        document.documentElement.style.setProperty('--accent-color', 'rgb(181, 52, 209)');
-      };
+
+      img.onerror = () => applyColor(DEFAULT_COLOR);
       img.src = objUrl;
+
     } catch (e) {
-      accentColor.set('rgb(181, 52, 209)');
-      document.documentElement.style.setProperty('--accent-color', 'rgb(181, 52, 209)');
+      applyColor(DEFAULT_COLOR);
     }
+  };
+
+  
+  const applyColor = (color) => {
+    accentColor.set(color);
+    document.documentElement.style.setProperty('--accent-color', color);
   };
 
   $: updateAccentColor(coverUrl);
@@ -210,27 +231,77 @@
     audioEl.load();
     const playPromise = audioEl.play();
     if (playPromise !== undefined) playPromise.catch(e => {});
+
+    // --- FIX: Increment Play Count & Force UI Reactivity ---
+    if (track) {
+      // 1. Tell the backend to update the database
+      api.recordPlay(track.id);
+      
+      // 2. Mutate the local Svelte store instantly so the UI reflects the new count
+      albumsMap.update(map => {
+        const targetAlbum = map.get(track.albumId);
+        if (targetAlbum) {
+          targetAlbum.playCount = (targetAlbum.playCount || 0) + 1;
+          
+          const targetTrack = targetAlbum.tracks.find(t => t.id === track.id);
+          if (targetTrack) {
+            targetTrack.playCount = (targetTrack.playCount || 0) + 1;
+          }
+        }
+        // Returning a NEW map forces Svelte to trigger reactivity on RightSidebar & Album views
+        return new Map(map); 
+      });
+    }
   }
 
   const togglePlay = () => {
     if (!track) return;
 
-    // This "wakes up" the Web Audio API on iOS Standalone
-    unlockAudioContext();
+    // 1. Wake context immediately (no await)
+    unlockAudioContext(); 
+    
+    // 2. Attach graph immediately
+    initAudioEngine();
 
     if (audioEl.paused) {
+      // 3. Play immediately, catch errors silently
       audioEl.play().catch(err => {
         console.error("PWA Playback blocked:", err);
-        // Ultimate fallback: if Safari still complains, try forcing the context again
-        if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
       });
     } else {
       audioEl.pause();
     }
   };
 
-  const playNext = () => {
+  const playNext = async () => {
     if ($currentPlaylist.length === 0) return;
+
+    // --- INFINITE QUEUE LOGIC ---
+    // If we are on the very last track of the queue, and Repeat is OFF
+    if (!$isRepeat && $currentIndex === $currentPlaylist.length - 1) {
+        
+        const seedTrackId = $currentPlaylist[$currentIndex].id;
+        
+        // Fetch 10 new songs based on the current song
+        const newTracks = await api.getRadioMix(seedTrackId);
+        
+        if (newTracks.length > 0) {
+            // Append the new tracks to the active queue silently
+            currentPlaylist.update(list => [...list, ...newTracks]);
+            
+            // Push a toast notification to let the user know Auto-Play kicked in
+            if (typeof window !== 'undefined') {
+                console.log("📻 Infinite Radio: Added 10 tracks to queue");
+            }
+        } else {
+            // If offline or no tracks found, just stop playing
+            audioEl.pause();
+            return;
+        }
+    }
+    // ----------------------------
+
+    // Standard Play Next Logic
     if ($isShuffle) {
       let unplayed = Array.from({length: $currentPlaylist.length}, (_, i) => i).filter(i => !$shuffleHistory.includes(i) && i !== $currentIndex);
       if (unplayed.length === 0) {
@@ -265,35 +336,33 @@
 
 <audio
   bind:this={audioEl}
-  crossorigin="anonymous"
   playsinline
   preload="auto"
   on:timeupdate={handleTimeUpdate}
   on:loadedmetadata={() => {
     playerDuration.set(audioEl.duration);
-    updateMediaPositionState(audioEl.currentTime, audioEl.duration);
+    updateMediaPositionState(audioEl.currentTime, audioEl.duration); // Tell iOS the track loaded
   }}
   on:seeked={() => {
+    // Tell iOS the seek has officially finished
     updateMediaPositionState(audioEl.currentTime, audioEl.duration); 
   }}
   on:play={() => {
     isPlaying.set(true);
-    if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
-      navigator.mediaSession.playbackState = 'playing';
-    }
-  }}
-  on:playing={() => {
-    // 🔥 iOS MUTE BUG FIX: Only wire up the Web Audio graph once data is actually flowing
-    initAudioEngine();
-    
     if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
     const savedBoost = safeGetStorage('psyzx_boost') || '1.0';
     if (parseFloat(savedBoost) > 1.0) setVolumeBoost(savedBoost);
+    
+    if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+      navigator.mediaSession.playbackState = 'playing';
+      updateMediaPositionState(audioEl.currentTime, audioEl.duration); // Sync on play
+    }
   }}
   on:pause={() => {
     isPlaying.set(false);
     if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
       navigator.mediaSession.playbackState = 'paused';
+      updateMediaPositionState(audioEl.currentTime, audioEl.duration); // Sync on pause
     }
   }}
   on:ended={() => $isRepeat ? audioEl.play() : playNext()}
@@ -399,18 +468,18 @@
 <style>
   /* 1. CONTROL CENTER: Edit these values to resize and position everything */
   :root {
-    --footer-h: 110px; /* Standard Height */
-    --footer-h-max: 110px; /* Floating (Max-Glass) Height */
-    --footer-w: 98vw; /* Standard Width */
-    --footer-w-max: calc(98vw - 32px); /* Floating Width */
+    --footer-h: 110px; 
+    --footer-h-max: 110px; 
+    --footer-w: 98vw; 
+    --footer-w-max: calc(98vw - 32px); 
     
     /* BUBBLE DIMENSIONS */
-    --np-bubble-w: 320px; /* Title Bubble Width */
-    --np-bubble-h: 60px; /* Title Bubble Height */
+    --np-bubble-w: 720px; 
+    --np-bubble-h: 60px; 
 
-    /* POSITIONING: Adjust X (horizontal) and Y (vertical) in px */
-    --np-x: 10px; /* Positive = Right, Negative = Left */
-    --np-y: -5px; /* Positive = Down, Negative = Up */
+    /* POSITIONING */
+    --np-x: 10px; 
+    --np-y: -5px; 
 
     --metal-shine: conic-gradient(
         from 180deg at 50% 50%,
@@ -419,16 +488,14 @@
     );
   }
 
-  /* STRIPPED PARENT CONTAINER */
+  /* --- FIX 1: The Parent Footer (No Backgrounds/Blurs here to protect WebKit) --- */
   footer#player {
     position: fixed;
     bottom: 0;
     left: 50%;
-    /* FIX: Combine the centering transform with a 3D trigger to force the GPU layer early */
     -webkit-transform: translateX(-50%) translate3d(0, 0, 0);
     transform: translateX(-50%) translate3d(0, 0, 0);
     will-change: transform;
-    isolation: isolate !important; /* Force a strict stacking context */
     
     width: var(--footer-w);
     height: var(--footer-h);
@@ -438,15 +505,13 @@
     padding: 0 24px;
     box-sizing: border-box;
     transition: all 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+    
     background: transparent !important;
     border: none !important;
     box-shadow: none !important;
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
-    overflow: visible !important;
   }
 
-  /* ISOLATED BACKGROUND LAYER */
+  /* --- FIX 1B: The Dedicated Glass Layer --- */
   footer#player::before {
     content: ""; 
     position: absolute; 
@@ -454,18 +519,16 @@
     z-index: -1; 
     pointer-events: none; 
     border-radius: inherit;
-    background: rgba(0, 0, 0, 0.6);
-    backdrop-filter: blur(20px); 
-    -webkit-backdrop-filter: blur(20px);
-    border-top: 1px solid rgba(255,255,255,0.05);
+    background: rgba(0, 0, 0, 0.65);
+    -webkit-backdrop-filter: blur(25px) saturate(120%);
+    backdrop-filter: blur(25px) saturate(120%);
+    border-top: 1px solid rgba(255,255,255,0.08);
     transition: all 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
-    /* Keep this clean: no transforms or will-change here, the parent handles it now */
   }
 
   footer#player.max-glass {
     bottom: 16px !important;
     left: 50% !important;
-    /* FIX: Maintain the 3D lock during the class toggle */
     -webkit-transform: translateX(-50%) translate3d(0, 0, 0) !important;
     transform: translateX(-50%) translate3d(0, 0, 0) !important;
     width: var(--footer-w-max) !important;
@@ -477,43 +540,36 @@
   }
 
   footer#player.max-glass::before {
-    background: rgba(255, 255, 255, 0.03) !important;
-    backdrop-filter: blur(32px) saturate(120%) !important;
-    -webkit-backdrop-filter: blur(32px) saturate(120%) !important;
-    border: 1px solid rgba(255, 255, 255, 0.1) !important;
-    box-shadow: 0 16px 40px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.1) !important;
+    background: rgba(255, 255, 255, 0.04);
+    -webkit-backdrop-filter: blur(40px) saturate(150%);
+    backdrop-filter: blur(40px) saturate(150%);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-top: 1px solid rgba(255, 255, 255, 0.25);
+    box-shadow: 0 25px 50px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.1);
   }
 
   /* GENERAL BLOOM FOR THE WHOLE PLAYER */
-    footer#player.bloom-effect {
-        position: fixed;
-        overflow: visible !important; /* Allows the bloom to slightly bleed out if desired */
-    }
+  footer#player.bloom-effect {
+      overflow: visible !important; 
+  }
 
-    footer#player.bloom-effect::after {
-        content: "";
-        position: absolute;
-        /* inset: 0 ensures it covers the whole footer area */
-        inset: 0; 
-        border-radius: inherit;
-        pointer-events: none; /* CRITICAL: Prevents the bloom from blocking button clicks */
-        
-        /* The Light Gradient */
-        background: radial-gradient(
-            circle at var(--m-x) var(--m-y), 
-            rgba(255, 255, 255, 0.08), 
-            transparent 400px /* Larger radius for a "general" feel */
-        );
-        
-        opacity: 0;
-        transition: opacity 0.5s ease;
-        z-index: 1; /* Sits above the background but below buttons/text */
-    }
+  footer#player.bloom-effect::after {
+      content: "";
+      position: absolute;
+      inset: 0; 
+      border-radius: inherit;
+      pointer-events: none; 
+      background: radial-gradient(
+          circle at var(--m-x) var(--m-y), 
+          rgba(255, 255, 255, 0.08), 
+          transparent 400px 
+      );
+      opacity: 0;
+      transition: opacity 0.5s ease;
+      z-index: 1; 
+  }
 
-    /* Show the light when hovering anywhere on the player */
-    footer#player.bloom-effect:hover::after {
-        opacity: 1;
-    }
+  footer#player.bloom-effect:hover::after { opacity: 1; }
 
   .max-glass #player-main {
     height: calc(var(--footer-h-max) - 40px);
@@ -523,21 +579,12 @@
 
   .max-glass .np-info-hover {
     background: rgba(255, 255, 255, 0.08) !important;
-    backdrop-filter: blur(16px) saturate(120%) !important;
     -webkit-backdrop-filter: blur(16px) saturate(120%) !important;
+    backdrop-filter: blur(16px) saturate(120%) !important;
     border-radius: 20px !important;
     border: 1px solid rgba(255, 255, 255, 0.1) !important;
     box-shadow: inset 1px 1px 0 rgba(255, 255, 255, 0.2), 0 4px 16px rgba(0,0,0,0.1) !important;
-    display: flex; 
-    align-items: center; 
     padding: 4px 16px 4px 6px !important;
-
-    /* FIX: Force GPU compositor to protect blur */
-    -webkit-transform: translate3d(var(--np-x), var(--np-y), 0) !important;
-    transform: translate3d(var(--np-x), var(--np-y), 0) !important;
-    -webkit-backface-visibility: hidden;
-    backface-visibility: hidden;
-    will-change: transform, backdrop-filter;
   }
 
   .max-glass #progress-wrapper { 
@@ -553,6 +600,7 @@
     align-items: center; 
     gap: 12px; 
     margin-top: -6px; 
+    position: relative;
     z-index: 2; 
   }
 
@@ -572,9 +620,7 @@
     position: relative; 
   }
 
-  #progress-container:hover #progress-bar { 
-    background: white !important; 
-  }
+  #progress-container:hover #progress-bar { background: white !important; }
 
   #progress-bar { 
     height: 100%; 
@@ -583,43 +629,62 @@
     transition: background 0.2s; 
   }
 
+  /* --- FIX 2: Flexbox Math Layout to naturally center controls and stop overlap --- */
   #player-main { 
     display: flex; 
     justify-content: space-between; 
     align-items: center; 
+    gap: 16px; /* Buffer zone so elements never touch */
     height: calc(var(--footer-h) - 16px); 
-    padding-top: 8px; 
+    padding-top: 8px;
+    position: relative;
+    z-index: 2; 
+  }
+
+  #controls { 
+    flex: 0 0 auto; /* Locks the controls to their natural width */
+    display: flex; 
+    align-items: center; 
+    justify-content: center; 
   }
 
   .np-info-hover {
+    flex: 1 1 0%; /* Acts as equal left weight */
+    max-width: var(--np-bubble-w); 
+    width: 100%;
+    height: var(--np-bubble-h) !important;
+    
     display: flex; 
     align-items: center; 
     gap: 14px; 
     padding: 6px 8px; 
     border-radius: 20px !important; 
     cursor: pointer;
-    width: var(--np-bubble-w);
-    height: var(--np-bubble-h) !important;
-    flex-shrink: 0; 
     box-sizing: border-box;
-    margin-left: -8px;
     background: rgba(255, 255, 255, 0.03);
     border: 1px solid rgba(255, 255, 255, 0.05);
     position: relative;
     overflow: hidden;
     
-    /* Position - FIX: Upgraded to translate3d to force hardware layer */
     -webkit-transform: translate3d(var(--np-x), var(--np-y), 0) !important;
     transform: translate3d(var(--np-x), var(--np-y), 0) !important;
     -webkit-backface-visibility: hidden;
     backface-visibility: hidden;
     
-    /* Smooth transitions for all states */
     transition: background 0.3s ease, box-shadow 0.3s ease, filter 0.3s ease, transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
-    justify-content: center;
   }
 
-  /* MOUSE BLOOM EFFECT */
+  #nerdy-info {
+    flex: 1 1 0%; /* Acts as equal right weight, perfectly centering #controls */
+    max-width: var(--np-bubble-w);
+    width: 100%;
+    height: var(--np-bubble-h);
+    
+    display: flex; 
+    align-items: center; 
+    justify-content: flex-end;
+  }
+
   .np-info-hover::after {
     content: "";
     position: absolute;
@@ -634,195 +699,80 @@
     z-index: 10;
   }
 
-  .np-info-hover:hover::after {
-    opacity: 1;
-  }
+  .np-info-hover:hover::after { opacity: 1; }
 
-  /* 1. HOVER: Illuminate blurred area */
   .np-info-hover:not(.disabled):hover {
     background: rgba(255, 255, 255, 0.1);
     border-color: rgba(255, 255, 255, 0.2);
     box-shadow: 0 0 30px rgba(255, 255, 255, 0.1), inset 0 0 10px rgba(255, 255, 255, 0.1);
-    filter: brightness(1.2); /* Illuminates the content and blurred bg */
+    filter: brightness(1.2);
   }
 
-  /* 2. CLICK: Real Bubble Pop/Squish */
   .np-info-hover:not(.disabled):active {
-    /* FIX: Match translate3d to retain hardware layer during active state */
     -webkit-transform: translate3d(var(--np-x), var(--np-y), 0) scale(0.94) !important;
     transform: translate3d(var(--np-x), var(--np-y), 0) scale(0.94) !important;
     filter: brightness(0.9);
     transition: transform 0.1s ease;
   }
 
-  /* 3. DISABLED: No song state */
   .np-info-hover.disabled {
     cursor: default;
     opacity: 0.5;
     filter: grayscale(1) !important;
-    pointer-events: none; /* Disables all interactions */
-  }
-
-  #np-cover { 
-    width: 48px; 
-    height: 48px; 
-    border-radius: 8px; 
-    object-fit: cover; 
-  }
-
-  #now-playing { 
-    display: flex; 
-    flex-direction: column; 
-    justify-content: center; 
-    overflow: hidden; 
-    white-space: nowrap; 
-    flex: 1; 
-  }
-
-  #np-title { 
-    font-size: 12px; 
-    font-weight: 600; 
-    color: white; 
-    overflow: hidden; 
-    text-overflow: ellipsis; 
-    margin-bottom: 2px; 
-  }
-
-  #np-artist { 
-    font-size: 10px; 
-    color: rgba(255,255,255,0.5); 
-    overflow: hidden; 
-    text-overflow: ellipsis; 
-  }
-
-  #controls { 
-    display: flex; 
-    align-items: center; 
-    justify-content: center; 
-    flex: 1; 
-    max-width: 400px; 
-  }
-
-  /* SYMMETRY: Nerdy info bubble anchor */
-  #nerdy-info {
-    width: var(--np-bubble-w);
-    height: var(--np-bubble-h);
-    flex-shrink: 0; 
-    display: flex; 
-    align-items: center; 
-    justify-content: flex-end;
-  }
-
-  /* SKEUOMORPHIC VOLUME ROCKER */
-  .vol-control { 
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    width: 120px;
-    height: 32px;
-    position: relative;
-    margin-right: 8px;
-  }
-
-  .vol-icon {
-    width: 16px;
-    height: 16px;
-    flex-shrink: 0;
-    color: rgba(255, 255, 255, 0.5);
-    transition: color 0.2s ease;
-  }
-
-  /* Glass Track - light effect is now trapped inside this element */
-  .glass-slider-wrapper {
-    flex: 1;
-    height: 6px; 
-    background: rgba(255, 255, 255, 0.05);
-    backdrop-filter: blur(15px) saturate(180%);
-    -webkit-backdrop-filter: blur(15px) saturate(180%);
-    border-radius: 30px; 
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    box-shadow: inset 0 1px 2px rgba(0,0,0,0.3);
-    position: relative;
-    display: flex;
-    align-items: center;
-    overflow: visible; /* Allows knob to protrude, but bloom will be masked */
-
-    /* FIX: Explicit translateZ(0) to force isolated layer */
-    -webkit-transform: translateZ(0);
-    transform: translateZ(0);
-    -webkit-backface-visibility: hidden;
-    backface-visibility: hidden;
-    will-change: transform, backdrop-filter;
-  }
-
-  /* SCOPED BLOOM: Trapped within the glass bar shape */
-  .glass-slider-wrapper.bloom-effect::after {
-    content: ""; 
-    position: absolute; 
-    inset: 0; 
-    border-radius: inherit; /* Matches the glass bar roundness exactly */
     pointer-events: none;
-    background: radial-gradient(
-        circle at var(--m-x) var(--m-y), 
-        rgba(255, 255, 255, 0.2), 
-        transparent 60%
-    );
-    opacity: 0; 
-    transition: opacity 0.3s ease;
-    z-index: 1;
+  }
+
+  #np-cover { width: 48px; height: 48px; border-radius: 8px; object-fit: cover; }
+
+  #now-playing { display: flex; flex-direction: column; justify-content: center; overflow: hidden; white-space: nowrap; flex: 1; }
+
+  #np-title { font-size: 12px; font-weight: 600; color: white; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px; }
+
+  #np-artist { font-size: 10px; color: rgba(255,255,255,0.5); overflow: hidden; text-overflow: ellipsis; }
+
+  .vol-control { 
+    display: flex; align-items: center; gap: 12px; width: 120px; height: 32px; position: relative; margin-right: 8px;
+  }
+
+  .vol-icon { width: 16px; height: 16px; flex-shrink: 0; color: rgba(255, 255, 255, 0.5); transition: color 0.2s ease; }
+
+  .glass-slider-wrapper {
+    flex: 1; height: 6px; 
+    background: rgba(255, 255, 255, 0.05);
+    -webkit-backdrop-filter: blur(15px) saturate(180%);
+    backdrop-filter: blur(15px) saturate(180%);
+    border-radius: 30px; border: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.3);
+    position: relative; display: flex; align-items: center; overflow: visible;
+    -webkit-transform: translateZ(0); transform: translateZ(0);
+    -webkit-backface-visibility: hidden; backface-visibility: hidden;
+  }
+
+  .glass-slider-wrapper.bloom-effect::after {
+    content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+    background: radial-gradient(circle at var(--m-x) var(--m-y), rgba(255, 255, 255, 0.2), transparent 60%);
+    opacity: 0; transition: opacity 0.3s ease; z-index: 1;
   }
   .glass-slider-wrapper.bloom-effect:hover::after { opacity: 1; }
 
-  /* Glass Highlight Layer */
   .glass-slider-wrapper::before {
     content: ""; position: absolute; top: 0; left: 0; right: 0; height: 50%;
     background: linear-gradient(to bottom, rgba(255,255,255,0.1), transparent);
     border-radius: 30px 30px 0 0; z-index: 1; pointer-events: none;
   }
 
-  /* The Slider & Hard-Stop Fill Logic */
   .volume-slider {
-    -webkit-appearance: none; 
-    appearance: none;
-    width: 100%; 
-    height: 100%; 
-    background: linear-gradient(
-        to right, 
-        var(--accent-color) 0%, 
-        var(--accent-color) var(--val), 
-        rgba(255, 255, 255, 0.05) var(--val)
-    );
-    border-radius: 20px;
-    outline: none;
-    cursor: pointer;
-    position: relative;
-    z-index: 2;
+    -webkit-appearance: none; appearance: none; width: 100%; height: 100%; 
+    background: linear-gradient(to right, var(--accent-color) 0%, var(--accent-color) var(--val), rgba(255, 255, 255, 0.05) var(--val));
+    border-radius: 20px; outline: none; cursor: pointer; position: relative; z-index: 2;
   }
 
-  /* THE IPHONE 4 MECHANICAL METAL RING (Raised) */
   .volume-slider::-webkit-slider-thumb {
-    -webkit-appearance: none; 
-    appearance: none;
-    width: 16px; 
-    height: 16px; 
-    border-radius: 50%;
-    
-    background: 
-        radial-gradient(circle at center, #000 24%, transparent 25%), 
-        radial-gradient(circle at center, #333 26%, transparent 32%), 
-        var(--metal-shine), 
-        linear-gradient(135deg, #fff 0%, #666 100%);
-    
-    background-position: center;
-    background-repeat: no-repeat;
-    border: 1px solid #111;
-    
-    box-shadow: 
-        0 4px 8px rgba(0,0,0,0.7), 
-        inset 0 1px 1px rgba(255,255,255,0.8);
-    
-    transition: transform 0.1s ease;
-    z-index: 20;
+    -webkit-appearance: none; appearance: none; width: 16px; height: 16px; border-radius: 50%;
+    background: radial-gradient(circle at center, #000 24%, transparent 25%), radial-gradient(circle at center, #333 26%, transparent 32%), var(--metal-shine), linear-gradient(135deg, #fff 0%, #666 100%);
+    background-position: center; background-repeat: no-repeat; border: 1px solid #111;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.7), inset 0 1px 1px rgba(255,255,255,0.8);
+    transition: transform 0.1s ease; z-index: 20;
   }
 
   .volume-slider::-moz-range-thumb {
@@ -831,133 +781,116 @@
     box-shadow: 0 4px 8px rgba(0,0,0,0.7);
   }
 
-  .volume-slider:active::-webkit-slider-thumb {
-    transform: scale(1.1);
-    filter: brightness(1.1);
-  }
+  .volume-slider:active::-webkit-slider-thumb { transform: scale(1.1); filter: brightness(1.1); }
+  .volume-slider:hover { height: 8px; }
 
-  /* --- FP Button --- */
   .fp-btn-main {
-    width: 48px;
-    height: 48px;
-    border-radius: 50%;
-    border: none;
-    background: white;
-    color: black;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    position: relative;
-    z-index: 1;
+    width: 48px; height: 48px; border-radius: 50%; border: none; background: white; color: black; display: flex; align-items: center; justify-content: center; cursor: pointer; position: relative; z-index: 1;
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3), 0 0 5px 2px rgba(255, 255, 255, 0.6), 0 0 25px rgba(255, 255, 255, 0.2) !important;
     transition: transform 0.2s cubic-bezier(0.32, 0.72, 0, 1), box-shadow 0.3s ease !important;
   }
-
   .fp-btn-main:hover {
     transform: scale(1.08) !important;
     box-shadow: 0 0 20px rgba(255, 255, 255, 0.4), 0 0 10px rgba(255, 255, 255, 0.2), 0 0 4px rgba(255, 255, 255, 0.1) !important;
   }
+  .fp-btn-main:active { transform: scale(0.96) !important; filter: brightness(0.9); }
 
-  .fp-btn-main:active {
-    transform: scale(0.96) !important;
-    filter: brightness(0.9);
-  }
-
-  /* --- Main Icon Button --- */
   .btn-icon-main {
-    width: 44px;
-    height: 44px;
-    border-radius: 50%;
-    border: none;
-    background: white;
-    color: black;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    margin: 0 8px;
-    flex-shrink: 0;
-    position: relative;
-    z-index: 1;
-    outline: none !important;
-    -webkit-tap-highlight-color: transparent !important;
-    
-    /* The requested white shadow applied here */
+    width: 44px; height: 44px; border-radius: 50%; border: none; background: white; color: black; display: flex; align-items: center; justify-content: center; cursor: pointer; margin: 0 8px; flex-shrink: 0; position: relative; z-index: 1;
+    outline: none !important; -webkit-tap-highlight-color: transparent !important;
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3), 0 0 5px 2px rgba(255, 255, 255, 0.6), 0 0 25px rgba(255, 255, 255, 0.2) !important;
     transition: transform 0.2s cubic-bezier(0.32, 0.72, 0, 1), box-shadow 0.3s ease !important;
   }
-
   .btn-icon-main:hover {
     transform: scale(1.08) !important;
-    /* Hover state white shadow applied here */
     box-shadow: 0 0 20px rgba(255, 255, 255, 0.4), 0 0 10px rgba(255, 255, 255, 0.2), 0 0 4px rgba(255, 255, 255, 0.1) !important;
   }
-
-  .btn-icon-main:active {
-    transform: scale(0.94) !important;
-    filter: brightness(0.85);
-  }
+  .btn-icon-main:active { transform: scale(0.94) !important; filter: brightness(0.85); }
 
   .kbps-badge {
-    display: flex; 
-    align-items: center; 
-    gap: 6px; 
-    background: rgba(0,0,0,0.4); 
-    padding: 4px 8px; 
-    border-radius: 6px;
-    font-size: 11px; 
-    font-family: monospace; 
-    font-weight: bold; 
-    border: 1px solid rgba(255,255,255,0.1); 
-    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-    letter-spacing: 0.5px; 
-    margin-left: -12px;
+    display: flex; align-items: center; gap: 6px; background: rgba(0,0,0,0.4); padding: 4px 8px; border-radius: 6px;
+    font-size: 11px; font-family: monospace; font-weight: bold; border: 1px solid rgba(255,255,255,0.1); 
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3); letter-spacing: 0.5px; margin-left: -12px;
   }
-
   .kbps-badge .ext { color: var(--accent-color); }
 
-  .volume-slider:hover { height: 8px; }
-
-  .volume-slider::-webkit-slider-thumb { 
-    -webkit-appearance: none; 
-    appearance: none; 
-    width: 16px; 
-    height: 16px; 
-    border-radius: 50%; 
-    background: white; 
-    cursor: pointer; 
-    box-shadow: 0 2px 8px rgba(0,0,0,0.6); 
-    transition: transform 0.1s ease; 
-  }
-
+  /* Invert Layout properly swaps flex order now */
   @media (min-width: 769px) {
     :global(footer#player.layout-swapped #player-main) { flex-direction: row-reverse; }
-    :global(footer#player.layout-swapped .np-info-hover) { margin-left: 0 !important; margin-right: 0px !important; flex-direction: row-reverse; text-align: right; width: var(--np-bubble-w) !important; padding-right: 20px !important; }
+    :global(footer#player.layout-swapped .np-info-hover) { flex-direction: row-reverse; text-align: right; }
     :global(footer#player.layout-swapped #now-playing) { align-items: flex-end; margin-left: auto; margin-right: 14px; }
     :global(footer#player.layout-swapped #nerdy-info) { justify-content: flex-start; }
   }
 
   @media (max-width: 768px) {
     .hide-on-mobile { display: none !important; }
-    #player-main { justify-content: space-between; }
-    .np-info-hover { width: auto; height: 60px !important; flex: 1; max-width: none; margin-right: 12px; }
-    #controls { flex: 0; justify-content: flex-end; max-width: none; margin-bottom: 12px;}
+    
+    #player-main { 
+        gap: 8px; 
+        align-items: center; /* Guarantees flex alignment */
+    }
+    
+    .np-info-hover { 
+        flex: 1 1 auto; 
+        max-width: none; 
+        margin-right: 12px; 
+        margin-bottom: 10px;
+        margin-left: 0 !important; /* Resets desktop margin */
+        
+        /* --- FIX 1: Kill the desktop X/Y offset ---
+           This shifts the bubble left to its natural edge 
+           and drops it down 5px so it perfectly aligns with the button! */
+        transform: none !important;
+        -webkit-transform: none !important;
+    }
+    
+    /* --- FIX 2: Prevent jumping when tapping the bubble on mobile --- */
+    .np-info-hover:not(.disabled):active {
+        transform: scale(0.94) !important;
+        -webkit-transform: scale(0.94) !important;
+    }
+    
+    #controls { 
+        justify-content: flex-end; 
+    }
     
     .btn-icon-main {
-      background: rgba(255, 255, 255, 0.15) !important;
-      backdrop-filter: blur(32px) saturate(120%) !important;
-      -webkit-backdrop-filter: blur(32px) saturate(120%) !important;
-      border: 1px solid rgba(255, 255, 255, 0.1) !important;
-      box-shadow: 0 16px 40px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.1) !important;
+      height: var(--np-bubble-h) !important;
+      width: var(--np-bubble-h) !important;
+      border-radius: 50% !important; 
+      
       display: inline-flex;
-      padding: 26px;
+      align-items: center;
+      justify-content: center;
+      padding: 0 !important; 
+      margin: 0 !important; 
+      margin-bottom: 10px !important;
+      
+      -webkit-tap-highlight-color: transparent !important;
+      touch-action: manipulation;
+      
+      background: rgba(255, 255, 255, 0.15) !important;
+      -webkit-backdrop-filter: blur(32px) saturate(120%) !important;
+      backdrop-filter: blur(32px) saturate(120%) !important;
+      border: 1px solid rgba(255, 255, 255, 0.1) !important;
+      
+      box-shadow: 0 10px 25px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.2) !important;
+      transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.2s ease, filter 0.2s ease !important;
+      
+      transform: scale(1) !important; 
+    }
+
+    .btn-icon-main:active {
+      transform: scale(0.92) !important;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.5), inset 0 2px 4px rgba(0,0,0,0.2) !important;
+      filter: brightness(0.85);
+      
+      transition: transform 0.05s ease, box-shadow 0.05s ease, filter 0.05s ease !important;
     }
 
     footer#player.max-glass {
       bottom: 12px !important;
       left: 50% !important;
-      /* FIX: Maintain the 3D lock on mobile */
       -webkit-transform: translateX(-50%) translate3d(0, 0, 0) !important;
       transform: translateX(-50%) translate3d(0, 0, 0) !important;
       width: calc(100vw - 24px) !important;
@@ -967,139 +900,4 @@
       min-height: 80px !important;
     }
   }
-
-  /**
-   * TECHNICAL DOCUMENTATION & COMPONENT SPECIFICATION
-   * -------------------------------------------------------------------------
-   * COMPONENT: PlayerFooter.svelte
-   * AUTHOR: System AI
-   * PURPOSE: Global playback controls, progress monitoring, and audio visualization
-   *
-   * 1. ARCHITECTURE OVERVIEW:
-   * This component acts as the primary interface for the Web Audio Engine. It
-   * utilizes a high-frequency animation frame loop for progress updates,
-   * bypassing the Svelte reactivity system for the progress bar to ensure
-   * 60fps movement even during heavy main-thread activity.
-   *
-   * 2. STATE MANAGEMENT:
-   * - `currentPlaylist`: A writable store containing the queue of track objects.
-   * - `currentIndex`: Integer pointer to the active track within the playlist.
-   * - `isPlaying`: Boolean toggle for playback state.
-   * - `accentColor`: Dynamically updated string extracted from album art.
-   *
-   * 3. AUDIO ENGINE INTEGRATION:
-   * The component communicates with 'audio.js' via functional exports.
-   * `registerAudioElement` hooks the local HTML5 Audio element into the
-   * Web Audio API graph for volume boosting and potential FFT analysis.
-   *
-   * 4. DYNAMIC INTERACTION: MOUSE BLOOM
-   * The "Now Playing" bubble (np-info-hover) now features a dynamic lighting
-   * bloom. This is achieved through the following pipeline:
-   * - MouseMove Event: Dispatched from the DOM, providing clientX/clientY.
-   * - Offset Calculation: e.clientX minus getBoundingClientRect().left.
-   * - CSS Prop Binding: mouseX/Y are bound to --m-x and --m-y variables.
-   * - Layering: A ::after pseudo-element renders a radial gradient at the
-   * computed coordinates, creating a "torch" effect on the glass surface.
-   *
-   * 5. RESPONSIVENESS:
-   * Mobile views collapse the progress timers and nerdy information to
-   * prioritize touch targets for Play/Pause and track navigation. The
-   * 'max-glass' mode transforms the footer into a floating island layout.
-   *
-   * 6. PERSISTENCE LAYER:
-   * Uses `localStorage` via `safeSetStorage` and `safeGetStorage` wrappers.
-   * - 'psyzx_playlist': JSON serialized track list.
-   * - 'psyzx_index': Active track pointer.
-   * - 'psyzx_time': Current timestamp of playback (throttled save).
-   *
-   * 7. KEYBOARD SHORTCUTS:
-   * - [Space]: Toggle Play/Pause.
-   * - [L]: Seek Forward / Shift+L for Next Track.
-   * - [H]: Seek Backward / Shift+H for Previous Track.
-   * - [K/J]: Increment/Decrement Volume.
-   *
-   * 8. ACCESSIBILITY:
-   * Uses ARIA-compliant slider roles for the progress container.
-   * Tab-indexes are provided for navigation elements to support
-   * screen readers and keyboard-only users.
-   *
-   * 9. PERFORMANCE CONSIDERATIONS:
-   * - requestAnimationFrame loop is cleaned up in the `onDestroy` hook.
-   * - Image processing for accent color extraction uses a 1x1 canvas
-   * optimization to minimize memory overhead.
-   * - URL.revokeObjectURL is strictly called to prevent memory leaks
-   * during album cover transitions.
-   *
-   * 10. MEDIA SESSION API:
-   * Integrated with the OS-level media controller to support hardware
-   * buttons and lock-screen displays for metadata and play/pause controls.
-   *
-   * 11. BUBBLE PHYSICS:
-   * The .np-info-hover element uses a cubic-bezier(0.34, 1.56, 0.64, 1)
-   * transition on the transform property to provide a "spring-like" pop
-   * effect when hovered or clicked, enhancing the tactile feel.
-   *
-   * 12. SWIPE LOGIC:
-   * Implements a low-latency touch start/move/end handler set to detect
-   * vertical delta values exceeding 60px to trigger the full-screen
-   * player overlay, providing a native-app feel on mobile devices.
-   *
-   * 13. BITRATE MONITORING:
-   * Dynamically displays track bitrate and file extension badges.
-   * If metadata is unavailable, it defaults to a 'NO SIGNAL' aesthetic
-   * indicator to maintain visual balance in the nerdy-info section.
-   *
-   * 14. VOLUME BOOST:
-   * Fetches 'psyzx_boost' from local storage on playback initiation.
-   * If a boost factor (>1.0) is present, it routes the audio through
-   * a gain node within the audio processing graph for enhanced output.
-   *
-   * 15. Z-INDEX HIERARCHY:
-   * Footer is set to 10000 to ensure it remains the topmost layer above
-   * all page content, while the progress wrapper is staged at 2 to
-   * remain interactable above the background blur filters.
-   *
-   * 16. SERVICE WORKER PRELOADING:
-   * On track change, the component calculates the next 5 track IDs
-   * and sends a 'PRELOAD_TRACKS' message to the Service Worker,
-   * ensuring gapless playback via proactive caching of audio blobs.
-   *
-   * 17. REPEAT & SHUFFLE LOGIC:
-   * - Shuffle utilizes a 'shuffleHistory' store to prevent repeats
-   * of the same track until the entire playlist has been traversed.
-   * - Repeat logic hooks directly into the 'ended' event of the audio
-   * element, forcing a source reload and play command if active.
-   *
-   * 18. FUTURE EXTENSIBILITY:
-   * The layout is designed to support secondary visualizers or lyric
-   * synchronization modules via the 'dispatch' event system without
-   * requiring architectural refactors.
-   *
-   * 19. RE reactivity optimization:
-   * Reactive blocks ($:) are logically grouped to prevent redundant
-   * computations of cover URLs and stream paths.
-   *
-   * 20. THEME ADAPTATION:
-   * The --accent-color variable is globally scoped, allowing this
-   * component to drive the UI color palette of the entire application
-   * based on the primary hue of the current album artwork.
-   *
-   * 21. MARQUEE EFFECTS:
-   * np-title-container uses a CSS-based marquee for titles that
-   * exceed the width of the info bubble, ensuring visibility for long
-   * metadata strings without breaking the bubble boundaries.
-   *
-   * 22. STANDALONE (PWA) SUPPORT:
-   * The 'unlockAudioContext' function is called during the first
-   * user interaction to bypass browser restrictions on audio
-   * contexts that haven't received explicit user input.
-   *
-   * 23. STYLE CLEANLINESS:
-   * All component styles are scoped to the footer#player ID to
-   * prevent leakage into the main app container.
-   *
-   * 24. CONCLUSION:
-   * This module represents the nexus of UI and Audio processing
-   * for the Psyzx platform.
-   */
 </style>

@@ -73,4 +73,10 @@ _ = Task.Run(async () =>
     await scanner.ScanAsync();
 });
 
+app.UseCors(policy => policy
+    .AllowAnyOrigin()
+    .AllowAnyMethod()
+    .AllowAnyHeader()
+    .WithExposedHeaders("Content-Range", "Content-Length", "Accept-Ranges"));
+
 app.Run();

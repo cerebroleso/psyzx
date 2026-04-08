@@ -284,3 +284,13 @@ html, body {
         .vol-control, #nerdy-info, #btn-shuffle, #btn-repeat, #btn-lyrics, #btn-download { display: none !important; }
         .btn-icon-main { width: 40px; height: 40px; }
     }    
+
+    @media (max-width: 768px) {
+    :global(.view-wrapper), 
+    :global(.playlists-container), 
+    :global(#main-view) {
+        padding-bottom: 95px !important; /* Exactly clears the 80px mobile footer + 15px breathing room */
+        margin-bottom: 0 !important;
+        min-height: calc(100dvh - 95px) !important;
+    }
+}
