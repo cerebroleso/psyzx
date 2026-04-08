@@ -1,9 +1,8 @@
 <script>
   import { onMount, createEventDispatcher } from 'svelte';
   import { currentPlaylist, currentIndex, isPlaying, isShuffle, isRepeat, shuffleHistory, albumsMap, playerCurrentTime, playerDuration, accentColor, isMaxGlassActive, isDesktopSwapActive, appSessionVersion } from '../store.js';
-  import { initAudioEngine, audioCtx, updateMediaSession, registerAudioElement, setVolumeBoost, unlockAudioContext, updateMediaPositionState } from './audio.js';
+  import { initAudioEngine, audioCtx, updateMediaSession, registerAudioElement, setVolumeBoost, unlockAudioContext, updateMediaPositionState, isEngineInitialized, resumePromise } from './audio.js';  import { api } from './api.js';
   import { formatTime } from './utils.js';
-    import { api } from './api.js';
 
   const dispatch = createEventDispatcher();
 
@@ -225,43 +224,65 @@
 
   let lastUrl = '';
   $: if (streamUrl && audioEl && streamUrl !== lastUrl) {
+    console.log(`[Audio Debug] URL changed to: ${streamUrl}`);
     lastUrl = streamUrl;
-    audioEl.pause();
-    audioEl.src = streamUrl;
-    audioEl.load();
-    const playPromise = audioEl.play();
-    if (playPromise !== undefined) playPromise.catch(e => {});
 
-    // --- FIX: Increment Play Count & Force UI Reactivity ---
+    const executeSafePlay = async () => {
+        try {
+            // 1. Wait for iOS hardware to finish transitioning BEFORE changing the src.
+            // We use a 300ms race timeout just in case Safari's promise engine hangs.
+            if (resumePromise) {
+                await Promise.race([
+                    resumePromise,
+                    new Promise(resolve => setTimeout(resolve, 300))
+                ]);
+            }
+
+            // 2. NOW change the src safely. The context is stable.
+            audioEl.crossOrigin = "anonymous";
+            audioEl.src = streamUrl;
+            console.log("[Audio Debug] src assigned safely after hardware transition.");
+
+            // 3. Play
+            await audioEl.play();
+            console.log("[Audio Debug] Playback started successfully.");
+
+        } catch (e) {
+            // AbortError is normal HTML5 behavior when tracks are skipped rapidly.
+            if (e.name !== 'AbortError') {
+                console.error("[Audio Debug] Playback blocked by iOS:", e);
+            } else {
+                console.log("[Audio Debug] Previous stream aborted smoothly (Track skipped).");
+            }
+        }
+    };
+
+    // Fire the async sequence
+    executeSafePlay();
+
+    // --- Increment Play Count & Force UI Reactivity ---
     if (track) {
-      // 1. Tell the backend to update the database
       api.recordPlay(track.id);
-      
-      // 2. Mutate the local Svelte store instantly so the UI reflects the new count
       albumsMap.update(map => {
         const targetAlbum = map.get(track.albumId);
         if (targetAlbum) {
           targetAlbum.playCount = (targetAlbum.playCount || 0) + 1;
-          
           const targetTrack = targetAlbum.tracks.find(t => t.id === track.id);
           if (targetTrack) {
             targetTrack.playCount = (targetTrack.playCount || 0) + 1;
           }
         }
-        // Returning a NEW map forces Svelte to trigger reactivity on RightSidebar & Album views
         return new Map(map); 
       });
     }
   }
-
+  
   const togglePlay = () => {
     if (!track) return;
 
-    // 1. Wake context immediately (no await)
+    // 1. Wake context immediately ON THE CLICK (Synchronous)
     unlockAudioContext(); 
-    
-    // 2. Attach graph immediately
-    initAudioEngine();
+    if (!isEngineInitialized) initAudioEngine();
 
     if (audioEl.paused) {
       // 3. Play immediately, catch errors silently
@@ -274,6 +295,10 @@
   };
 
   const playNext = async () => {
+    // SYNC WAKE: Catch the hardware before any async fetches or Svelte state updates
+    unlockAudioContext();
+    if (!isEngineInitialized) initAudioEngine();
+
     if ($currentPlaylist.length === 0) return;
 
     // --- INFINITE QUEUE LOGIC ---
@@ -315,7 +340,12 @@
   };
 
   const playPrev = () => {
+    // SYNC WAKE: Catch the hardware before Svelte updates state
+    unlockAudioContext();
+    if (!isEngineInitialized) initAudioEngine();
+
     if ($currentPlaylist.length === 0) return;
+    
     if ($isShuffle && $shuffleHistory.length > 0) {
       const prevIndex = $shuffleHistory.pop();
       shuffleHistory.set($shuffleHistory);
@@ -336,33 +366,42 @@
 
 <audio
   bind:this={audioEl}
+  crossorigin="anonymous"
   playsinline
   preload="auto"
   on:timeupdate={handleTimeUpdate}
   on:loadedmetadata={() => {
+    console.log("[Audio Debug] loadedmetadata fired. Duration:", audioEl.duration);
     playerDuration.set(audioEl.duration);
-    updateMediaPositionState(audioEl.currentTime, audioEl.duration); // Tell iOS the track loaded
+    updateMediaPositionState(audioEl.currentTime, audioEl.duration); 
+  }}
+  on:canplay={() => {
+    console.log("[Audio Debug] canplay fired. ReadyState:", audioEl.readyState);
   }}
   on:seeked={() => {
-    // Tell iOS the seek has officially finished
     updateMediaPositionState(audioEl.currentTime, audioEl.duration); 
   }}
   on:play={() => {
+    console.log("[Audio Debug] Play event fired.");
     isPlaying.set(true);
-    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    if (audioCtx && audioCtx.state === 'suspended') {
+        console.log("[Audio Debug] Context suspended during play event, attempting resume.");
+        audioCtx.resume();
+    }
     const savedBoost = safeGetStorage('psyzx_boost') || '1.0';
     if (parseFloat(savedBoost) > 1.0) setVolumeBoost(savedBoost);
     
     if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
       navigator.mediaSession.playbackState = 'playing';
-      updateMediaPositionState(audioEl.currentTime, audioEl.duration); // Sync on play
+      updateMediaPositionState(audioEl.currentTime, audioEl.duration); 
     }
   }}
   on:pause={() => {
+    console.log("[Audio Debug] Pause event fired.");
     isPlaying.set(false);
     if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
       navigator.mediaSession.playbackState = 'paused';
-      updateMediaPositionState(audioEl.currentTime, audioEl.duration); // Sync on pause
+      updateMediaPositionState(audioEl.currentTime, audioEl.duration); 
     }
   }}
   on:ended={() => $isRepeat ? audioEl.play() : playNext()}

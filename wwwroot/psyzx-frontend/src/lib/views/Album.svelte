@@ -4,6 +4,7 @@
     import { albumsMap, currentPlaylist, currentIndex, isPlaying, isShuffle, isRepeat, shuffleHistory, accentColor, isGlobalColorActive, isMaxGlassActive, appSessionVersion } from '../../store.js';
     import { formatTime } from '../utils.js';
     import { api } from '../api.js';
+    import { unlockAudioContext, initAudioEngine, isEngineInitialized } from '../audio.js';
     
     function portal(node) {
         document.body.appendChild(node);
@@ -80,6 +81,11 @@
     onMount(() => { setTimeout(() => mounted = true, 50); });
 
     const togglePlayAlbum = () => {
+        if (typeof window !== 'undefined') {
+            unlockAudioContext();
+            if (!isEngineInitialized) initAudioEngine();
+        }
+
         if (isPlayingAlbum) {
             document.querySelector('audio').pause();
         } else {
@@ -100,7 +106,15 @@
         else { currentIndex.set(0); }
     };
 
-    const playSpecificTrack = (index) => { shuffleHistory.set([]); currentPlaylist.set(tracks); currentIndex.set(index); };
+    const playSpecificTrack = (index) => { 
+        if (typeof window !== 'undefined') {
+            unlockAudioContext();
+            if (!isEngineInitialized) initAudioEngine();
+        }
+        shuffleHistory.set([]); 
+        currentPlaylist.set(tracks); 
+        currentIndex.set(index); 
+    };
 
     let toastMessage = '';
     let toastTimeout;
