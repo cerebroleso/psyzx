@@ -427,7 +427,7 @@
     <FullPlayer isOpen={isFullPlayerOpen} on:close={() => isFullPlayerOpen = false} />
 {/if}
 
-{#if showDeadlockWarning}
+<!-- {#if showDeadlockWarning}
     <div 
         class="system-modal-backdrop" 
         transition:fade={{duration: 200}} 
@@ -463,7 +463,7 @@
             </button>
         </div>
     </div>
-{/if}
+{/if} -->
 
 <style>
     :global(body), :global(html) {

@@ -184,9 +184,22 @@ public class TracksController : ControllerBase
     }
 
     [HttpGet("radio/{seedTrackId}")]
-    public async Task<IActionResult> GetRadioMix(int seedTrackId, [FromQuery] int limit = 10)
+    public async Task<IActionResult> GetRadioMix(int seedTrackId, [FromQuery] int limit = 10, [FromQuery] string excludeIds = "")
     {
-        // 1. Find the seed track to get the Artist
+        var excludeList = new HashSet<int> { seedTrackId };
+        
+        if (!string.IsNullOrEmpty(excludeIds))
+        {
+            var parsedIds = excludeIds.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                .Select(id => int.TryParse(id, out var parsed) ? parsed : -1)
+                .Where(id => id != -1);
+            
+            foreach (var id in parsedIds)
+            {
+                excludeList.Add(id);
+            }
+        }
+
         var seedTrack = await _context.Tracks
             .Include(t => t.Album)
             .FirstOrDefaultAsync(t => t.Id == seedTrackId);
@@ -195,35 +208,41 @@ public class TracksController : ControllerBase
 
         int seedArtistId = seedTrack.Album.ArtistId;
 
-        // 2. FAMILIARITY: Grab random tracks from the SAME artist
         var artistTracks = await _context.Tracks
             .Include(t => t.Album).ThenInclude(a => a.Artist)
-            .Where(t => t.Album.ArtistId == seedArtistId && t.Id != seedTrackId)
-            .OrderBy(t => EF.Functions.Random()) // Fast SQLite/SQL Random
+            .Where(t => t.Album.ArtistId == seedArtistId && !excludeList.Contains(t.Id))
+            .OrderBy(t => EF.Functions.Random())
             .Take(limit / 2)
             .ToListAsync();
 
-        // 3. FAVORITES: Grab from your most played tracks (different artists)
+        foreach(var t in artistTracks)
+        {
+            excludeList.Add(t.Id);
+        }
+
         var favoriteTracks = await _context.Tracks
             .Include(t => t.Album).ThenInclude(a => a.Artist)
-            .Where(t => t.Album.ArtistId != seedArtistId)
+            .Where(t => t.Album.ArtistId != seedArtistId && !excludeList.Contains(t.Id))
             .OrderByDescending(t => t.PlayCount)
-            .Take(50) // Take top 50
-            .OrderBy(t => EF.Functions.Random()) // Shuffle them
+            .Take(50)
+            .OrderBy(t => EF.Functions.Random())
             .Take(limit / 3)
             .ToListAsync();
 
-        // 4. DISCOVERY: Completely random tracks
+        foreach(var t in favoriteTracks)
+        {
+            excludeList.Add(t.Id);
+        }
+
         var randomTracks = await _context.Tracks
             .Include(t => t.Album).ThenInclude(a => a.Artist)
-            .Where(t => t.Album.ArtistId != seedArtistId)
+            .Where(t => t.Album.ArtistId != seedArtistId && !excludeList.Contains(t.Id))
             .OrderBy(t => EF.Functions.Random())
             .Take(limit - artistTracks.Count - favoriteTracks.Count)
             .ToListAsync();
 
-        // Combine and shuffle the final queue
         var finalMix = artistTracks.Concat(favoriteTracks).Concat(randomTracks)
-            .OrderBy(t => Guid.NewGuid()) // Final shuffle
+            .OrderBy(t => Guid.NewGuid())
             .Select(t => new {
                 id = t.Id,
                 title = t.Title,

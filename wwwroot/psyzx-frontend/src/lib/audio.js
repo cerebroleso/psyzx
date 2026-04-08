@@ -1,3 +1,6 @@
+import { get } from 'svelte/store';
+import { currentPlaylist, currentIndex, isShuffle, isRepeat, shuffleHistory } from '../store.js';
+
 export let audioCtx;
 export let gainNode;
 let eqFilters = [];
@@ -17,7 +20,7 @@ let pendingBoost = 1.0;
 let pendingEq = [0, 0, 0, 0, 0, 0];
 
 const EQ_FREQS = [60, 250, 1000, 4000, 8000, 14000];
-const SILENCE_B64 = "data:audio/wav;base64,UklGRigAAABXQVZFRm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQQAAAAAAP8H";
+const SILENCE_B64 = "data:audio/wav;base64,UklGRiQAAABXQVZFRm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=";
 
 const initSilentAnchor = () => {
     if (silentAnchorEl) return;
@@ -94,7 +97,6 @@ export const initAudioEngine = async () => {
 
 export const primeEngine = async () => {
     if (!isEngineInitialized) await initAudioEngine();
-    // Background safety check
     if (audioCtx?.state === 'suspended') {
         resumePromise = audioCtx.resume().catch(() => {});
     }
@@ -106,12 +108,10 @@ export const unlockAudioContext = () => {
         audioCtx = new AudioCtx();
     }
 
-    // Flag that we are attempting to start the engine
     isPlayAttemptActive = true;
 
     if (audioCtx.state === 'suspended' || audioCtx.state === 'interrupted') {
         resumePromise = audioCtx.resume().catch(() => {
-            // If resume fails immediately, that's a deadlock
             window.dispatchEvent(new CustomEvent('ios-hardware-deadlock'));
         });
     }
@@ -131,11 +131,6 @@ export const registerAudioElement = (el) => {
     globalAudioEl = el;
 
     const checkDeadlock = () => {
-        // THE AGGRESSIVE CONDITION:
-        // 1. We are trying to play (isPlayAttemptActive)
-        // 2. BUT either:
-        //    a) The AudioContext is NOT 'running' (it's stuck in suspended/interrupted)
-        //    b) OR the HTML5 element thinks it's playing but the playhead is at 0
         const isContextStuck = audioCtx && audioCtx.state !== 'running';
         const isPlayheadStuck = !el.paused && el.currentTime === 0;
 
@@ -143,7 +138,6 @@ export const registerAudioElement = (el) => {
             console.error("💀 [Audio Debug] DEADLOCK DETECTED: Engine Killed or Hardware Frozen.");
             window.dispatchEvent(new CustomEvent('ios-hardware-deadlock'));
             
-            // Reset attempt so we don't spam the event
             isPlayAttemptActive = false; 
             clearTimeout(stallTimeout);
         }
@@ -153,19 +147,20 @@ export const registerAudioElement = (el) => {
         isPlayAttemptActive = true;
         clearTimeout(stallTimeout);
         
-        // Check once after 1 second, then again at 3.5 seconds
-        // This catches "killed" engines faster
+        if (!isEngineInitialized) {
+            unlockAudioContext();
+            initAudioEngine();
+        }
+
         setTimeout(checkDeadlock, 1000); 
         stallTimeout = setTimeout(checkDeadlock, 3500);
     });
 
     el.addEventListener('playing', () => {
-        console.log("[audio debug] play event fired");
         isPlayAttemptActive = false;
         clearTimeout(stallTimeout);
     });
 
-    // If the playhead actually moves, we are definitely safe
     el.addEventListener('timeupdate', () => {
         if (el.currentTime > 0.1) {
             isPlayAttemptActive = false;
@@ -183,7 +178,7 @@ export const setVolumeBoost = (val) => {
     const num = parseFloat(val);
     pendingBoost = num;
     if (gainNode && audioCtx) {
-        gainNode.gain.setTargetAtTime(num, audioCtx.currentTime, 0.02);
+        gainNode.gain.value = num;
     }
 };
 
@@ -192,7 +187,7 @@ export const setEqBand = (index, val) => {
     pendingEq[index] = num;
     if (eqFilters[index] && audioCtx) {
         if (audioCtx.state === 'suspended') audioCtx.resume().catch(()=>{});
-        eqFilters[index].gain.setTargetAtTime(num, audioCtx.currentTime, 0.02);
+        eqFilters[index].gain.value = num;
     }
 };
 
@@ -206,7 +201,6 @@ export const updateMediaSession = (track, album, handlers) => {
         artwork: [{ src: album?.coverPath ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&size=thumb` : '', sizes: '512x512', type: 'image/jpeg' }]
     });
     
-    // THE FIX FOR THE LOOPING BUFFER IN THE BACKGROUND
     navigator.mediaSession.setActionHandler('pause', async () => {
         handlers.pause();
         if (audioCtx && audioCtx.state === 'running') {
@@ -247,5 +241,83 @@ export const updateMediaPositionState = (currentTime, duration) => {
                 position: currentTime
             });
         } catch (e) {}
+    }
+};
+
+// -------------------------------------------------------------------------
+// GLOBAL PLAYBACK CONTROLLERS
+// -------------------------------------------------------------------------
+
+export const togglePlayGlobal = () => { 
+    if (!globalAudioEl) return;
+    
+    unlockAudioContext();
+    if (!isEngineInitialized) initAudioEngine();
+
+    if (globalAudioEl.paused) { 
+        globalAudioEl.play().catch(e => console.error("Playback blocked:", e)); 
+    } else { 
+        globalAudioEl.pause(); 
+    } 
+};
+
+export const playNextGlobal = async (api) => {
+    unlockAudioContext();
+    if (!isEngineInitialized) initAudioEngine();
+
+    const playlist = get(currentPlaylist);
+    const index = get(currentIndex);
+    const shuffle = get(isShuffle);
+    const repeat = get(isRepeat);
+    const history = get(shuffleHistory);
+
+    if (playlist.length === 0) return;
+
+    if (!repeat && index === playlist.length - 1) {
+        const seedTrackId = playlist[index].id;
+        const excludeIds = playlist.map(t => t.id);
+        
+        const newTracks = await api.getRadioMix(seedTrackId, excludeIds);
+        
+        if (newTracks.length > 0) {
+            currentPlaylist.update(list => [...list, ...newTracks]);
+            if (typeof window !== 'undefined') console.log("Infinite Radio: Added tracks");
+        } else {
+            if (globalAudioEl) globalAudioEl.pause();
+            return;
+        }
+    }
+
+    if (shuffle) {
+        let unplayed = Array.from({length: playlist.length}, (_, i) => i).filter(i => !history.includes(i) && i !== index);
+        if (unplayed.length === 0) {
+            shuffleHistory.set([]);
+            unplayed = Array.from({length: playlist.length}, (_, i) => i).filter(i => i !== index);
+        }
+        currentIndex.set(unplayed[Math.floor(Math.random() * unplayed.length)]);
+    } else {
+        currentIndex.set((index + 1) % playlist.length);
+    }
+};
+
+export const playPrevGlobal = () => {
+    unlockAudioContext();
+    if (!isEngineInitialized) initAudioEngine();
+
+    const playlist = get(currentPlaylist);
+    const index = get(currentIndex);
+    const shuffle = get(isShuffle);
+    const history = get(shuffleHistory);
+
+    if (!globalAudioEl || playlist.length === 0) return;
+
+    if (globalAudioEl.currentTime > 3) {
+        globalAudioEl.currentTime = 0;
+    } else if (shuffle && history.length > 0) {
+        const prevIndex = history.pop();
+        shuffleHistory.set(history);
+        currentIndex.set(prevIndex);
+    } else {
+        currentIndex.set((index - 1 + playlist.length) % playlist.length);
     }
 };

@@ -1,14 +1,8 @@
 <script>
     /**
      * @file FullPlayer.svelte
-     * @version 2.4.1
+     * @version 2.5.0
      * @description Professional Music Player with optimized Y-axis drawer physics.
-     * * FIXED IN THIS VERSION:
-     * 1. iOS Background Stack: Bound `isOpen` to toggle the `modal-open` class on document.body for mobile devices.
-     * 2. Parallax Drag Physics: Mapped the Svelte drag engine to dynamically reverse the `#app-layout` scale/brightness when dragging down.
-     * 3. Seekbar UI: Fixed frameLoop ignoring UI updates during manual finger seek by manually updating the DOM inside updateSeek.
-     * 4. Accent Colors: Fixed global CSS overrides hiding the master EQ accent colors and track backgrounds using fallback and !important priorities, and fixed string coercion in Master EQ binding.
-     * 5. Preset Chips: Locked active state brightness filter to prevent native iOS tap decay.
      */
 
     import { createEventDispatcher, onMount, onDestroy, afterUpdate } from 'svelte';
@@ -26,12 +20,11 @@
         appSessionVersion
     } from '../store.js';
     import { formatTime } from './utils.js';
-    import { setEqBand } from './audio.js';
+    import { setEqBand, togglePlayGlobal, playNextGlobal, playPrevGlobal } from './audio.js';
     import { api } from './api.js';
-    import { quintOut, expoIn, expoOut } from 'svelte/easing';
+    import { quintOut, expoIn, expoOut, linear } from 'svelte/easing';
     import { spring } from 'svelte/motion';
-
-    // -------------------------------------------------------------------------
+    import {  } from './audio.js';
     // Component Properties
     // -------------------------------------------------------------------------
     export let isOpen = false;
@@ -54,6 +47,7 @@
     let isSeekingBar = false;
     let progressContainerEl;
     let isClosing = false;
+    let isClosingByDrag = false;
 
     const DEFAULT_PLACEHOLDER = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxIDEiPjxyZWN0IHdpZHRoPSIxIiBoZWlnaHQ9IjEiIGZpbGw9IiMzMzMiLz48L3N2Zz4=';
     const handleImageError = (ev) => {
@@ -69,60 +63,69 @@
     let isDragging = false;
     let startY = 0;
 
-    /**
-     * Resets the drag position whenever the player is toggled.
-     * This ensures clean state on every mount.
-     */
-
     $: if (isOpen) {
-        isClosing = false; // Reset only when fully opening
+        isClosing = false; 
+        isClosingByDrag = false;
+
+        dragY = 0; 
+        startY = 0;
+        isDragging = false;
     }
 
-    $: if (!isOpen) {
+    $: if (!isOpen && !isClosingByDrag) {
         dragY = 0;
         isDragging = false;
-        isClosing = true; // Force the glass kill during the entire Svelte outro
+        isClosing = true; 
     }
 
-    /**
-     * onTouchStart
-     * Captures initial Y coordinate. Prevents drag if sub-menus are active.
-     */
     const onTouchStart = (e) => {
-        if (isLyricsFullScreen || showQueue) return;
+        // FIX: Added `isClosingByDrag` lock to prevent touch reentry
+        if (isLyricsFullScreen || showQueue || isClosingByDrag) return;
         isDragging = true;
         startY = e.touches[0].clientY;
     };
 
-    /**
-     * onTouchMove
-     * Updates the dragY delta. 
-     */
     const onTouchMove = (e) => {
         if (!isDragging) return;
         const currentY = e.touches[0].clientY;
         const deltaY = currentY - startY;
         
-        // We only allow downward movement (deltaY > 0)
         if (deltaY > 0) {
             dragY = deltaY;
+        } else {
+            dragY = deltaY * 0.25;
         }
     };
 
-    /**
-     * onTouchEnd
-     * Decides whether to close the player based on velocity/distance.
-     */
     const onTouchEnd = () => {
         if (!isDragging) return;
         isDragging = false;
 
-        // 120px is the "Point of No Return" for the drawer closure
+        // Drawer point of no return
         if (dragY > 80) {
             isClosing = true;
-            handleClose();
+            isClosingByDrag = true;
+            
+            const startYPos = dragY;
+            const targetY = window.innerHeight;
+            const duration = 200; // ms
+            
+            // FIX: Use universal Date.now() instead of performance.now()
+            const startTime = Date.now(); 
+            
+            // FIX: Remove 'now' argument to avoid rAF epoch desyncs
+            const fall = () => { 
+                const t = Math.min((Date.now() - startTime) / duration, 1);
+                dragY = startYPos + (targetY - startYPos) * t; 
+                
+                if (t < 1) {
+                    requestAnimationFrame(fall);
+                } else {
+                    handleClose();
+                }
+            };
+            requestAnimationFrame(fall);
         } else {
-            // Snap back to 0 if not dragged far enough
             dragY = 0; 
         }
         startY = 0;
@@ -131,8 +134,7 @@
     const handleClose = () => {
         isClosing = true;
         dispatch('close');
-        // Resetting here as well for redundant state protection
-        dragY = 0; 
+        if (!isClosingByDrag) dragY = 0; 
     };
 
     // -------------------------------------------------------------------------
@@ -140,10 +142,8 @@
     // -------------------------------------------------------------------------
     $: if (typeof document !== 'undefined') {
         if (isOpen && isMobile) {
-            // Trigger the App-level CSS transition
             document.body.classList.add('modal-open');
         } else {
-            // Safely clear class when closed or resized to desktop
             document.body.classList.remove('modal-open');
         }
     }
@@ -152,7 +152,6 @@
     // Audio Performance Loop (60FPS)
     // -------------------------------------------------------------------------
     const getAudioEl = () => document.querySelector('audio');
-
     let wasPlayerElPresent = false;
 
     const frameLoop = () => {
@@ -173,11 +172,10 @@
             }
         }
 
-        // Tie Background Scaling to the exact Y bounds of the player component itself
         if (typeof document !== 'undefined') {
             const appLayout = document.getElementById('app-layout');
             if (appLayout) {
-                if (playerEl && isMobile) {
+                if (playerEl && isMobile && dragY >= 0) {
                     wasPlayerElPresent = true;
                     const rect = playerEl.getBoundingClientRect();
                     const currentY = Math.max(0, rect.top);
@@ -192,7 +190,6 @@
                     appLayout.style.setProperty('filter', `brightness(${brightness})`, 'important');
                     appLayout.style.setProperty('border-radius', `${32 * (1 - dragProgress)}px`, 'important');
                 } else if (wasPlayerElPresent || (!isMobile && appLayout.style.transform)) {
-                    // Smoothly release inline styles when component unmounts or resizes
                     wasPlayerElPresent = false;
                     appLayout.style.removeProperty('transition');
                     appLayout.style.removeProperty('transform');
@@ -201,7 +198,6 @@
                 }
             }
         }
-
         rafId = requestAnimationFrame(frameLoop);
     };
 
@@ -211,7 +207,6 @@
 
     onDestroy(() => {
         if (rafId) cancelAnimationFrame(rafId);
-        // Failsafe cleanup
         if (typeof document !== 'undefined') {
             document.body.classList.remove('modal-open');
             const appLayout = document.getElementById('app-layout');
@@ -227,12 +222,9 @@
     // -------------------------------------------------------------------------
     // Equalizer & Audio Engine Interaction
     // -------------------------------------------------------------------------
-    
-    // Smooth spring physics for band transitions
     let eqMaster = spring(0, { stiffness: 0.15, damping: 0.8 });
     let eqBands = spring([0, 0, 0, 0, 0, 0], { stiffness: 0.1, damping: 0.8 });
 
-    // Link Svelte Spring to the Audio Engine
     $: $eqBands.forEach((val, i) => setEqBand(i, val));
 
     const syncMasterEq = (event) => {
@@ -265,7 +257,6 @@
         'Electronic': [5, 3, -1, 2, 4, 5],
         'Vocal Pop': [-1, -1, 3, 4, 2, 0]
     };
-
     let currentPreset = 'Flat';
 
     // -------------------------------------------------------------------------
@@ -301,9 +292,6 @@
         scrollTimeout = setTimeout(() => { isUserScrolling = false; lastScrolledIdx = -1; }, 3000);
     };
 
-    /**
-     * Keeps the active lyric centered in the viewport
-     */
     $: if (lyricsScrollEl && activeLyricIdx >= 0 && !isUserScrolling && activeLyricIdx !== lastScrolledIdx) {
         lastScrolledIdx = activeLyricIdx;
         const activeLine = lyricsScrollEl.querySelectorAll('.lyric-line')[activeLyricIdx];
@@ -318,24 +306,9 @@
     // -------------------------------------------------------------------------
     // Media Playback Controls
     // -------------------------------------------------------------------------
-    const togglePlay = () => { 
-        const audio = getAudioEl(); 
-        if (audio) { audio.paused ? audio.play() : audio.pause(); } 
-    };
-
-    const playNext = () => { 
-        currentIndex.update(n => (n + 1) % $currentPlaylist.length);
-    };
-
-    const playPrev = () => { 
-        const audio = getAudioEl(); 
-        if (!audio) return;
-        if (audio.currentTime > 3) {
-            audio.currentTime = 0;
-        } else {
-            currentIndex.update(n => (n - 1 + $currentPlaylist.length) % $currentPlaylist.length);
-        }
-    };
+    const togglePlay = () => togglePlayGlobal();
+    const playNext = () => playNextGlobal(api);
+    const playPrev = () => playPrevGlobal();
 
     const goArtist = () => {
         if (album && album.artistId) {
@@ -345,22 +318,77 @@
     };
 
     // -------------------------------------------------------------------------
-    // Seekbar Logic
+    // Seekbar Logic & Vinyl Scratch Synth
     // -------------------------------------------------------------------------
-    const onSeekStart = (e) => { isSeekingBar = true; updateSeek(e); };
-    const onSeekMove = (e) => { if (!isSeekingBar) return; e.preventDefault(); updateSeek(e); };
-    const onSeekEnd = () => { isSeekingBar = false; };
+    let scratchAudioCtx;
+    let lastScrubTime = 0;
+    let originalVolume = 1;
+
+    const playScratchGrains = () => {
+        try {
+            if (!scratchAudioCtx) scratchAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            if (scratchAudioCtx.state === 'suspended') scratchAudioCtx.resume();
+            
+            const osc = scratchAudioCtx.createOscillator();
+            const gain = scratchAudioCtx.createGain();
+            osc.type = 'sawtooth';
+            // Random rapid modulation to mimic fast-forwarding tape/vinyl
+            osc.frequency.setValueAtTime(300 + Math.random() * 200, scratchAudioCtx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(50, scratchAudioCtx.currentTime + 0.1);
+            
+            gain.gain.setValueAtTime(0.015, scratchAudioCtx.currentTime); 
+            gain.gain.linearRampToValueAtTime(0, scratchAudioCtx.currentTime + 0.1);
+            
+            osc.connect(gain);
+            gain.connect(scratchAudioCtx.destination);
+            osc.start();
+            osc.stop(scratchAudioCtx.currentTime + 0.1);
+        } catch (e) { /* Ignore context restrictions */ }
+    };
+
+    const onSeekStart = (e) => { 
+        isSeekingBar = true; 
+        const audioEl = getAudioEl();
+        if (audioEl) {
+            originalVolume = audioEl.volume;
+            audioEl.volume = originalVolume * 0.2; // Drop volume heavily during seek
+        }
+        updateSeek(e); 
+    };
+
+    const onSeekMove = (e) => { 
+        if (!isSeekingBar) return; 
+        e.preventDefault(); 
+        updateSeek(e); 
+        
+        const now = Date.now();
+        if (now - lastScrubTime > 80) { // Throttle the fast-forward scratch sound
+            playScratchGrains();
+            lastScrubTime = now;
+        }
+    };
+
+    const onSeekEnd = () => { 
+        isSeekingBar = false; 
+        const audioEl = getAudioEl();
+        if (audioEl) {
+            audioEl.volume = originalVolume; // Restore volume after seek
+        }
+    };
 
     const updateSeek = (e) => {
         if (!$playerDuration || !progressContainerEl) return;
         const rect = progressContainerEl.getBoundingClientRect();
         const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-        const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+        
+        // --- FIX 2: Hard-Cap the Scrub Limit ---
+        // Max is 0.99 so scrubbing to the end never triggers the 'ended' event recursively.
+        const pct = Math.max(0, Math.min(0.990, (clientX - rect.left) / rect.width));
+        
         const seekTime = pct * $playerDuration;
         const audioEl = getAudioEl();
         if (audioEl) audioEl.currentTime = seekTime;
         
-        // Ensure manual finger drag updates DOM visually since frameLoop ignores updates during isSeekingBar
         if (progressRef) {
             progressRef.style.transform = `scaleX(${pct})`;
         }
@@ -403,23 +431,18 @@
         };
     };
 
-    // -------------------------------------------------------------------------
-    // Mouse Bloom Tracking (Presets)
-    // -------------------------------------------------------------------------
     const handlePresetMouseMove = (e) => {
         const rect = e.currentTarget.getBoundingClientRect();
         e.currentTarget.style.setProperty('--m-x', `${e.clientX - rect.left}px`);
         e.currentTarget.style.setProperty('--m-y', `${e.clientY - rect.top}px`);
     };
 
-    // -------------------------------------------------------------------------
-    // Core Store Subscriptions (Reactive)
-    // -------------------------------------------------------------------------
     $: track = $currentPlaylist[$currentIndex];
     $: album = track ? $albumsMap.get(track.albumId) : null;
     $: coverUrl = (album && album.coverPath) 
         ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&v=${$appSessionVersion}` 
-        : DEFAULT_PLACEHOLDER;</script>
+        : DEFAULT_PLACEHOLDER;
+</script>
 
 <svelte:window
     bind:innerWidth={innerWidth}
@@ -435,7 +458,7 @@
         class="player-transition-wrapper" 
         style="position: fixed; inset: 0; z-index: 9990; pointer-events: none;"
         in:fly={{ y: '100%', duration: 550, easing: quintOut, opacity: 1 }}
-        out:fly={{ y: '100%', duration: 350, easing: expoIn, opacity: 1 }}
+        out:fly={{ y: '100%', duration: isClosingByDrag ? 15 : 350, easing: isClosingByDrag ? linear : expoIn, opacity: 1 }}
     >
         <div
             id="full-player"
@@ -453,14 +476,15 @@
                 on:touchmove|preventDefault|nonpassive={onTouchMove} 
                 on:touchend={onTouchEnd}
             >
-                <div class="fp-drag-handle">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                <div class="fp-drag-handle" on:click={handleClose} role="button" tabindex="0">
+                    <div class="ios-handle" class:dragged={isDragging && dragY > 10}>
+                        <div class="ios-handle-left"></div>
+                        <div class="ios-handle-right"></div>
+                    </div>
                 </div>
+                
                 <div class="fp-header">
                     <span class="fp-header-title">NOW PLAYING</span>
-                    <button class="close-btn" aria-label="Close Player" on:click={handleClose}>
-                        <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
-                    </button>
                 </div>
             </div>
 
@@ -655,33 +679,31 @@
 {/if}
 
 <style>
-    /* -------------------------------------------------------------------------
-    * Layout & Container Physics
-    * ------------------------------------------------------------------------- */
     #full-player {
+        --fp-offset: 18px;
+        --base-header-height: 64px;
+        --base-footer-height: 80px;
+
+        /* Perform calculations using the base values */
+        --fp-height-top: calc(var(--base-header-height) + var(--fp-offset));
+        --fp-height-bottom: calc(var(--base-footer-height) - var(--fp-height-top));
+
         position: fixed !important;
-        /* Desktop Positioning: Account for status bars (64px top / 80px bottom) */
-        top: 64px !important; 
-        bottom: 80px !important;
+        top: var(--fp-height-top) !important; 
+        bottom: var(--fp-height-bottom) !important;
         right: 0 !important; 
-        left: auto !important; /* Fixing the left offset */
+        left: auto !important;
         width: 420px !important; 
         max-width: 100vw !important;
-        
-        /* Robust height calculation */
         height: calc(100dvh - 144px) !important;
-        
         display: flex !important; 
         flex-direction: column !important;
         color: white !important;
         overflow: hidden !important; 
         isolation: isolate !important;
-
-        /* Force hardware composite layer for smooth transforms on iOS */
         will-change: transform;
         -webkit-backface-visibility: hidden;
         backface-visibility: hidden;
-        
         background: linear-gradient(to bottom, rgba(255,255,255,0.08) 0%, transparent 15%),
                     linear-gradient(to bottom, rgba(0,0,0,0.45), rgba(0,0,0,0.9)),
                     var(--accent-color) !important;
@@ -689,17 +711,12 @@
         -webkit-backdrop-filter: blur(50px) saturate(210%) brightness(1.1) !important;
     }
 
-    /* Instantly kill transitions during drag to allow 1:1 hardware finger tracking */
-    #full-player.is-dragging {
-        transition: none !important;
-    }
+    #full-player.is-dragging { transition: none !important; }
 
-    /* Smooth snap-back transition if released without closing */
     #full-player:not(.is-dragging) {
-        transition: 
-            transform 0.4s cubic-bezier(0.3, 0, 0.1, 1),
-            backdrop-filter 0.4s ease,
-            -webkit-backdrop-filter 0.4s ease;
+        transition: transform 0.4s cubic-bezier(0.3, 0, 0.1, 1),
+                    backdrop-filter 0.4s ease,
+                    -webkit-backdrop-filter 0.4s ease;
     }
 
     #full-player.is-closing {
@@ -710,33 +727,19 @@
         transition: none !important;
     }
 
-    /* Instantly drop the heavy GPU filters when dragging or closing */
-    #full-player.is-closing,
-    #full-player.is-dragging {
-        backdrop-filter: none !important;
-        -webkit-backdrop-filter: none !important;
-        
-        /* Fallback to a solid opaque gradient so it doesn't look transparent */
-        transition: none !important;
-    }
-
     #full-player.max-glass { 
         height: calc(100dvh - 210px) !important; 
-        top: 76px !important; 
-        right: 12px !important; 
+        top: 80px; 
+        right: 16px !important; 
         border-radius: 32px !important; 
         border: 1px solid rgba(255, 255, 255, 0.2) !important; 
         box-shadow: 0 25px 50px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.1) !important;
     }
 
-    /* -------------------------------------------------------------------------
-    * Interaction Zones
-    * ------------------------------------------------------------------------- */
     .drag-zone { 
-        /* CRITICAL: touch-action none prevents iOS rubber-banding while dragging drawer */
         touch-action: none !important; 
         flex-shrink: 0; 
-        padding: 32px 24px 0 24px; 
+        padding: 16px 24px 0 24px; 
         cursor: grab;
     }
     .drag-zone:active { cursor: grabbing; }
@@ -750,18 +753,41 @@
     }
     .fp-scroll-content::-webkit-scrollbar { display: none; }
 
+    /* Morphing iOS Handle CSS */
     .fp-drag-handle { 
-        display: none; /* Desktop arrow handle */
+        display: flex; 
         width: 100%;
         justify-content: center;
         align-items: center;
-        color: rgba(255, 255, 255, 0.3);
-        margin-bottom: 8px;
+        margin-bottom: 4px;
+        padding: 8px 0;
+        outline: none;
     }
+    .ios-handle {
+        display: flex;
+        width: 40px;
+        height: 24px;
+        justify-content: center;
+        align-items: center;
+        cursor: pointer;
+    }
+    .ios-handle-left, .ios-handle-right {
+        width: 20px;
+        height: 5px;
+        background: rgba(255, 255, 255, 0.3);
+        transition: transform 0.2s ease, background 0.2s ease;
+    }
+    .ios-handle-left {
+        border-radius: 3px 0 0 3px;
+        transform-origin: center right;
+    }
+    .ios-handle-right {
+        border-radius: 0 3px 3px 0;
+        transform-origin: center left;
+    }
+    .ios-handle.dragged .ios-handle-left { transform: rotate(15deg); }
+    .ios-handle.dragged .ios-handle-right { transform: rotate(-15deg); }
 
-    /* -------------------------------------------------------------------------
-    * Sub-views (Queue & Lyrics Popups)
-    * ------------------------------------------------------------------------- */
     .queue-modal {
         position: absolute; inset: 0; z-index: 100000;
         background: rgba(15, 15, 15, 0.95);
@@ -797,9 +823,6 @@
     .popup-version .lyric-line { font-size: 24px; margin-bottom: 24px; transform-origin: center; }
     .popup-version .lyric-line.active { font-size: 36px; }
 
-    /* -------------------------------------------------------------------------
-    * UI Components (Cover, Lyrics Strip, Controls)
-    * ------------------------------------------------------------------------- */
     .lyrics-preview-window {
         height: 72px; overflow: hidden; position: relative;
         margin-bottom: 16px; cursor: pointer;
@@ -839,9 +862,6 @@
         font-variant-numeric: tabular-nums; transform: translateZ(0); will-change: contents;
     }
 
-    /* -------------------------------------------------------------------------
-    * Preset Chips with Mouse Bloom 
-    * ------------------------------------------------------------------------- */
     .preset-scroll {
         display: flex; gap: 8px; overflow-x: auto; border-bottom: 1px solid rgba(255,255,255,0.05);
         padding: 8px 14px !important; margin: -8px -4px 12px -4px !important; align-items: center;
@@ -854,61 +874,28 @@
         font-weight: 700; cursor: pointer; 
         position: relative;
         overflow: hidden;
-        -webkit-tap-highlight-color: transparent; /* Prevent iOS native gray highlight flash */
-        transition: 
-            background 0.3s ease, 
-            box-shadow 0.3s ease, 
-            filter 0.3s ease,
-            transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1),
-            color 0.3s ease,
-            border-color 0.3s ease;
+        -webkit-tap-highlight-color: transparent; 
+        transition: background 0.3s ease, box-shadow 0.3s ease, filter 0.3s ease,
+                    transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), color 0.3s ease, border-color 0.3s ease;
     }
 
-    /* Mouse Bloom Effect for Preset Chips */
     .preset-chip::after {
-        content: "";
-        position: absolute;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        background: radial-gradient(
-            circle at var(--m-x) var(--m-y), 
-            rgba(255, 255, 255, 0.25), 
-            transparent 70%
-        );
-        opacity: 0;
-        transition: opacity 0.4s ease;
-        pointer-events: none;
-        z-index: 0;
+        content: ""; position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+        background: radial-gradient(circle at var(--m-x) var(--m-y), rgba(255, 255, 255, 0.25), transparent 70%);
+        opacity: 0; transition: opacity 0.4s ease; pointer-events: none; z-index: 0;
     }
 
-    .preset-chip:hover::after {
-        opacity: 1;
-    }
-
+    .preset-chip:hover::after { opacity: 1; }
     .preset-chip:hover {
-        background: rgba(255, 255, 255, 0.1); 
-        border-color: rgba(255, 255, 255, 0.2);
-        box-shadow: 0 0 30px rgba(255, 255, 255, 0.1), inset 0 0 10px rgba(255, 255, 255, 0.1);
-        filter: brightness(1.2);
+        background: rgba(255, 255, 255, 0.1); border-color: rgba(255, 255, 255, 0.2);
+        box-shadow: 0 0 30px rgba(255, 255, 255, 0.1), inset 0 0 10px rgba(255, 255, 255, 0.1); filter: brightness(1.2);
     }
-
-    .preset-chip:active {
-        transform: scale(0.94) !important;
-        filter: brightness(0.9);
-        transition: transform 0.1s ease;
-    }
-
+    .preset-chip:active { transform: scale(0.94) !important; filter: brightness(0.9); transition: transform 0.1s ease; }
     .preset-chip.active { 
-        background: white !important; color: black !important; 
-        border-color: white !important; box-shadow: 0 0 15px rgba(255,255,255,0.4) !important; transform: scale(1.05) !important; 
-        filter: brightness(1) !important; /* Lock brightness to prevent hover interference on tap */
+        background: white !important; color: black !important; border-color: white !important; 
+        box-shadow: 0 0 15px rgba(255,255,255,0.4) !important; transform: scale(1.05) !important; filter: brightness(1) !important; 
     }
-    
-    .preset-chip.active::after {
-        display: none; /* Hide bloom when actively selected to keep solid white */
-    }
+    .preset-chip.active::after { display: none; }
 
     .fp-sliders, .full-lyrics-card {
         background: rgba(255, 255, 255, 0.04) !important; border: 1px solid rgba(255, 255, 255, 0.15) !important;
@@ -918,8 +905,8 @@
         transition: all 0.5s cubic-bezier(0.16, 1, 0.3, 1) !important;
     }
 
-    .fp-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; min-height: 28px; }
-    .fp-header-title { font-size: 12px; font-weight: 600; letter-spacing: 1px; color: rgba(255,255,255,0.9); }
+    .fp-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; margin-top: -10px; min-height: 20px; }
+    .fp-header-title { font-size: 12px; font-weight: 600; letter-spacing: 1px; color: rgba(255,255,255,0.9); padding-bottom: 10px;}
     .close-btn { background: none; border: none; color: rgba(255,255,255,0.9); cursor: pointer; padding: 8px; border-radius: 50%; transition: background 0.2s; }
     .close-btn:hover { background: rgba(255,255,255,0.1); }
 
@@ -940,41 +927,19 @@
     .btn-icon:hover { color: white; }
     .btn-icon.active { color: white; }
 
-    /* --- FP Button Ported CSS --- */
     .fp-btn-main { 
-        width: 48px; 
-        height: 48px; 
-        border-radius: 50%; 
-        border: none; 
-        background: white; 
-        color: black; 
-        display: flex; 
-        align-items: center; 
-        justify-content: center; 
-        cursor: pointer; 
-        position: relative; 
-        z-index: 1; 
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3), 
-                    0 0 5px 2px rgba(255, 255, 255, 0.6), 
-                    0 0 25px rgba(255, 255, 255, 0.2) !important; 
-        transition: transform 0.2s cubic-bezier(0.32, 0.72, 0, 1), 
-                    box-shadow 0.3s ease !important; 
+        width: 48px; height: 48px; border-radius: 50%; border: none; background: white; color: black; 
+        display: flex; align-items: center; justify-content: center; cursor: pointer; position: relative; z-index: 1; 
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3), 0 0 5px 2px rgba(255, 255, 255, 0.6), 0 0 25px rgba(255, 255, 255, 0.2) !important; 
+        transition: transform 0.2s cubic-bezier(0.32, 0.72, 0, 1), box-shadow 0.3s ease !important; 
     }
-
     .fp-btn-main:hover { 
         transform: scale(1.08) !important;
-        box-shadow: 0 0 20px rgba(255, 255, 255, 0.4), 
-                    0 0 10px rgba(255, 255, 255, 0.2), 
-                    0 0 4px rgba(255, 255, 255, 0.1) !important; 
+        box-shadow: 0 0 20px rgba(255, 255, 255, 0.4), 0 0 10px rgba(255, 255, 255, 0.2), 0 0 4px rgba(255, 255, 255, 0.1) !important; 
     }
-
-    .fp-btn-main:active { 
-        transform: scale(0.96) !important; 
-        filter: brightness(0.9); 
-    }
+    .fp-btn-main:active { transform: scale(0.96) !important; filter: brightness(0.9); }
 
     .fp-sliders { padding: 16px; border-radius: 8px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); margin-bottom: 24px;}
-
     .fp-slider-row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
     .label-accent { color: var(--accent-color, #ffffff) !important; width: 32px; font-size: 11px; text-align: right; }
     .label-freq { width: 32px; font-size: 11px; text-align: right; color: rgba(255,255,255,0.7); }
@@ -1006,12 +971,9 @@
     .lyrics-scroll-box { flex: 1; overflow-y: auto; padding-right: 8px; display: flex; flex-direction: column; scroll-behavior: smooth; position: relative; scrollbar-width: none; -ms-overflow-style: none;}
     .lyrics-scroll-box::-webkit-scrollbar { display: none; }
 
-    /* -------------------------------------------------------------------------
-    * Final Polish & Mobile Tweaks
-    * ------------------------------------------------------------------------- */
     @media (max-width: 768px) {
         #full-player { 
-            top: 0 !important; 
+            top: 60px !important; 
             bottom: 0 !important; 
             left: 0 !important; 
             right: 0 !important; 
@@ -1023,10 +985,10 @@
             border-left: none !important; 
             border-radius: 0 !important;
             z-index: 999999 !important; 
-            padding-bottom: max(32px, env(safe-area-inset-bottom)) !important; 
+            /* Fixed: less padding down bottom to claim more screen area on mobile */
+            padding-bottom: max(16px, env(safe-area-inset-bottom)) !important; 
         }
-        .fp-drag-handle { display: flex; width: 100%; justify-content: center; align-items: center; color: rgba(255,255,255,0.4); margin-top: -12px; margin-bottom: 8px; }
-        .drag-zone { padding-top: max(32px, env(safe-area-inset-top)); }
+        .drag-zone { padding-top: max(16px, env(safe-area-inset-top)); }
         .close-btn { display: none; }
     }
 </style>

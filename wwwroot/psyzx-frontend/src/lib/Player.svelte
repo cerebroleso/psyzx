@@ -1,7 +1,8 @@
 <script>
   import { onMount, createEventDispatcher } from 'svelte';
   import { currentPlaylist, currentIndex, isPlaying, isShuffle, isRepeat, shuffleHistory, albumsMap, playerCurrentTime, playerDuration, accentColor, isMaxGlassActive, isDesktopSwapActive, appSessionVersion } from '../store.js';
-  import { initAudioEngine, audioCtx, updateMediaSession, registerAudioElement, setVolumeBoost, unlockAudioContext, updateMediaPositionState, isEngineInitialized, resumePromise } from './audio.js';  import { api } from './api.js';
+  import { initAudioEngine, audioCtx, updateMediaSession, registerAudioElement, setVolumeBoost, unlockAudioContext, updateMediaPositionState, isEngineInitialized, resumePromise, togglePlayGlobal, playNextGlobal, playPrevGlobal } from './audio.js';  
+  import { api } from './api.js';
   import { formatTime } from './utils.js';
   
 
@@ -12,7 +13,7 @@
       ev.target.src = DEFAULT_PLACEHOLDER;
   };
 
-  let audioEl;
+  export let audioEl;
   let volume = 100;
   let progressBarNode;
   let animationFrameId;
@@ -278,71 +279,9 @@
     }
   }
   
-  const togglePlay = () => {
-    if (!track) return;
-
-    // 1. Wake context immediately ON THE CLICK (Synchronous)
-    unlockAudioContext(); 
-    if (!isEngineInitialized) initAudioEngine();
-
-    if (audioEl.paused) {
-      // 3. Play immediately, catch errors silently
-      audioEl.play().catch(err => {
-        console.error("PWA Playback blocked:", err);
-      });
-    } else {
-      audioEl.pause();
-    }
-  };
-
-  const playNext = async () => {
-    unlockAudioContext();
-    if (!isEngineInitialized) initAudioEngine();
-
-    if ($currentPlaylist.length === 0) return;
-
-    // --- INFINITE QUEUE LOGIC ---
-    if (!$isRepeat && $currentIndex === $currentPlaylist.length - 1) {
-        const seedTrackId = $currentPlaylist[$currentIndex].id;
-        const newTracks = await api.getRadioMix(seedTrackId);
-        
-        if (newTracks.length > 0) {
-            currentPlaylist.update(list => [...list, ...newTracks]);
-            if (typeof window !== 'undefined') console.log("📻 Infinite Radio: Added tracks");
-        } else {
-            audioEl.pause();
-            return;
-        }
-    }
-    // ----------------------------
-
-    // Standard Play Next Logic
-    if ($isShuffle) {
-      let unplayed = Array.from({length: $currentPlaylist.length}, (_, i) => i).filter(i => !$shuffleHistory.includes(i) && i !== $currentIndex);
-      if (unplayed.length === 0) {
-        shuffleHistory.set([]);
-        unplayed = Array.from({length: $currentPlaylist.length}, (_, i) => i).filter(i => i !== $currentIndex);
-      }
-      currentIndex.set(unplayed[Math.floor(Math.random() * unplayed.length)]);
-    } else {
-      currentIndex.set(($currentIndex + 1) % $currentPlaylist.length);
-    }
-  };
-
-  const playPrev = async () => {
-    unlockAudioContext();
-    if (!isEngineInitialized) initAudioEngine();
-
-    if ($currentPlaylist.length === 0) return;
-
-    if ($isShuffle && $shuffleHistory.length > 0) {
-      const prevIndex = $shuffleHistory.pop();
-      shuffleHistory.set($shuffleHistory);
-      currentIndex.set(prevIndex);
-    } else {
-      currentIndex.set(($currentIndex - 1 + $currentPlaylist.length) % $currentPlaylist.length);
-    }
-  };
+  const togglePlay = () => togglePlayGlobal();
+  const playNext = () => playNextGlobal(api);
+  const playPrev = () => playPrevGlobal();
 
   const handleSeek = (e) => {
     if (!$playerDuration) return;

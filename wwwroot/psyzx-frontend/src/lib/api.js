@@ -254,13 +254,14 @@ export const api = {
         }
     },
 
-    async getRadioMix(seedTrackId) {
+    async getRadioMix(seedTrackId, excludeIds = []) {
         try {
-            const res = await this.fetchWithTimeout(`/Tracks/radio/${seedTrackId}?limit=10`);
+            const excludeString = excludeIds.join(',');
+            const res = await this.fetchWithTimeout(`/Tracks/radio/${seedTrackId}?limit=10&excludeIds=${excludeString}`);
             if (!res.ok) return [];
             return await res.json();
         } catch {
-            return []; // Fail gracefully if offline
+            return []; 
         }
     },
 
