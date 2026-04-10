@@ -2,14 +2,15 @@
     import { onMount } from 'svelte';
     import { fade } from 'svelte/transition';
     import { isGlobalColorActive, isMaxGlassActive, isDesktopSwapActive, viewSize, isCacheDebugActive } from '../../store.js';
-    import { setVolumeBoost } from '../audio.js';
+    import { setVolumeBoost, isWebAudioMode, setWebAudioGaplessMode } from '../audio.js';
 
     let currentBoost = '1.0';
-    let isGaplessEnabled = true;
+    let localWebAudioMode = false;
 
     onMount(() => {
         currentBoost = localStorage.getItem('psyzx_boost') || '1.0';
-        isGaplessEnabled = localStorage.getItem('psyzx_gapless') !== 'false';
+        localWebAudioMode = isWebAudioMode;
+        
         if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
             navigator.serviceWorker.controller.postMessage({
                 type: 'SET_DEBUG_MODE',
@@ -45,9 +46,9 @@
         }
     };
 
-    const toggleGapless = () => {
-        isGaplessEnabled = !isGaplessEnabled;
-        localStorage.setItem('psyzx_gapless', isGaplessEnabled.toString());
+    const toggleGaplessMode = () => {
+        localWebAudioMode = !localWebAudioMode;
+        setWebAudioGaplessMode(localWebAudioMode);
     };
 
     const refreshApp = async () => {
@@ -151,10 +152,10 @@
         
         <div class="setting-item" style="margin-bottom: 24px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 24px;">
             <div class="setting-info">
-                <span class="setting-title">Gapless Playback</span>
-                <span class="setting-desc">Preloads and primes the next track for seamless audio transitions. Optimized for iOS.</span>
+                <span class="setting-title">True Gapless (RAM Engine)</span>
+                <span class="setting-desc">Bypasses HTML5 logic to force 0ms continuous audio using RAM buffers. Makes playback more fluid at the cost of more memory usage. Changing requires reload.</span>
             </div>
-            <button class="toggle-btn" class:active={isGaplessEnabled} on:click={toggleGapless} aria-label="Toggle Gapless Playback">
+            <button class="toggle-btn" class:active={localWebAudioMode} on:click={toggleGaplessMode} aria-label="Toggle WebAudio RAM Engine">
                 <div class="toggle-knob"></div>
             </button>
         </div>

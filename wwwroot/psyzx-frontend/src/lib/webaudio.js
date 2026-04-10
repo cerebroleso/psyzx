@@ -1,5 +1,15 @@
 import { get } from 'svelte/store';
-import { currentPlaylist, currentIndex, isShuffle, isRepeat, shuffleHistory, isPlaying, isBuffering, playerCurrentTime, playerDuration } from '../store.js';
+import {
+    currentPlaylist,
+    currentIndex,
+    isShuffle,
+    isRepeat,
+    shuffleHistory,
+    isPlaying,
+    isBuffering,
+    playerCurrentTime,
+    playerDuration
+} from '../store.js';
 
 export let audioCtx;
 export let gainNode;
@@ -7,30 +17,153 @@ let eqFilters = [];
 let mixerNode = null;
 let heartbeatOsc = null;
 
+export let playerA = null;
+export let playerB = null;
+let html5ActivePlayer = null;
+let html5StandbyPlayer = null;
+
+let gainA = null;
+let gainB = null;
+
 let currentBuffer = null;
 let nextBuffer = null;
 let currentSource = null;
-let nextSource = null;
-
 let trackStartTime = 0;
 let pauseOffset = 0;
-let currentTrackId = null;
-let nextTrackId = null;
+let currentTrackUrl = null;
+let nextTrackUrl = null;
 
-let animationFrameId = null;
+// synthetic clock survives backgrounding better than raf
+let syntheticClockInterval = null;
+
+const decodeCache = new Map();
+
+export let isEngineInitialized = false;
+let hasDoneSilentPrime = false;
+let stallTimeout = null;
+
+// dedicated dom-attached silent player for ios keep-alive
+let silentPlayer = null;
+
+export let isWebAudioMode =
+    typeof window !== 'undefined'
+        ? localStorage.getItem('psyzx_webaudio_gapless') === 'true'
+        : false;
+
+export const setWebAudioGaplessMode = (enabled) => {
+    isWebAudioMode = enabled;
+    if (typeof window !== 'undefined') {
+        localStorage.setItem('psyzx_webaudio_gapless', enabled.toString());
+        window.location.reload();
+    }
+};
 
 let pendingBoost = 1.0;
 let pendingEq = [0, 0, 0, 0, 0, 0];
 const EQ_FREQS = [60, 250, 1000, 4000, 8000, 14000];
 
-export let isEngineInitialized = false;
-export let isWebAudioGaplessEnabled = typeof window !== 'undefined' ? localStorage.getItem('psyzx_webaudio_gapless') === 'true' : false;
+const SILENCE_B64 =
+    'data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4LjEyLjEwMAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAAASW5mbwAAAA8AAAAEAAABIAD+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+AAAAAExhdmM1OC4xMzQAAAAAAAAAAAAAAAAkAAAAAAAAAAABIADZt9snAAAAAAAAAAAAAAAAAAAA//MUZAAAAAGkAAAAAAAAA0gAAAAATEFNRTMuMTAwA8EAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA//MUZAMAAAGkAAAAAAAAA0gAAAAATEFNRTMuMTAwA8EAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 
-export const setWebAudioGaplessMode = (enabled) => {
-    isWebAudioGaplessEnabled = enabled;
-    if (typeof window !== 'undefined') {
-        localStorage.setItem('psyzx_webaudio_gapless', enabled.toString());
+export const activePlayer = {
+    get currentTime() {
+        return isWebAudioMode
+            ? get(playerCurrentTime)
+            : (html5ActivePlayer ? html5ActivePlayer.currentTime : 0);
+    },
+    set currentTime(time) {
+        if (isWebAudioMode) {
+            seekWebAudio(time);
+        } else if (html5ActivePlayer) {
+            html5ActivePlayer.currentTime = time;
+        }
+    },
+    get duration() {
+        return isWebAudioMode
+            ? get(playerDuration)
+            : (html5ActivePlayer ? html5ActivePlayer.duration : 0);
+    },
+    get paused() {
+        return !get(isPlaying);
+    },
+    play: async () => {
+        if (isWebAudioMode) {
+            return playWebAudio();
+        } else if (html5ActivePlayer) {
+            return html5ActivePlayer.play();
+        }
+    },
+    pause: () => {
+        if (isWebAudioMode) {
+            pauseWebAudio();
+        } else if (html5ActivePlayer) {
+            html5ActivePlayer.pause();
+        }
+    },
+    load: () => {
+        if (!isWebAudioMode && html5ActivePlayer) html5ActivePlayer.load();
+    },
+    get src() {
+        return isWebAudioMode
+            ? currentTrackUrl
+            : (html5ActivePlayer ? html5ActivePlayer.src : '');
+    },
+    set src(val) {
+        if (!isWebAudioMode && html5ActivePlayer) html5ActivePlayer.src = val;
     }
+};
+
+const initSilentPlayer = () => {
+    if (typeof document === 'undefined' || silentPlayer) return;
+
+    silentPlayer = document.createElement('audio');
+    silentPlayer.src = SILENCE_B64;
+    silentPlayer.loop = true;
+    silentPlayer.volume = 0.0001;    
+    silentPlayer.preload = 'auto';
+    silentPlayer.autoplay = false;
+    silentPlayer.playsInline = true;
+    silentPlayer.setAttribute('playsinline', '');
+    silentPlayer.setAttribute('webkit-playsinline', '');
+    silentPlayer.setAttribute('aria-hidden', 'true');
+    silentPlayer.setAttribute('x-webkit-airplay', 'allow');
+    silentPlayer.setAttribute('controls', 'false');
+
+    // don't use display:none on ios
+    silentPlayer.style.cssText = `
+        position: fixed;
+        left: -9999px;
+        top: -9999px;
+        width: 1px;
+        height: 1px;
+        opacity: 0;
+        pointer-events: none;
+    `;
+
+    document.body.appendChild(silentPlayer);
+};
+
+const startSilentKeepAlive = () => {
+    initSilentPlayer();
+    if (!silentPlayer) return;
+
+    try {
+        silentPlayer.loop = true;
+        silentPlayer.volume = 0.0001;
+
+        const p = silentPlayer.play();
+        // FIX: Remove 'await'. Do not yield the event loop here.
+        if (p !== undefined) p.catch(() => {});
+    } catch {}
+};
+
+const stopSilentKeepAlive = () => {
+    if (!silentPlayer) return;
+
+    try {
+        silentPlayer.pause();
+        silentPlayer.currentTime = 0;
+    } catch {}
 };
 
 const buildWebAudioGraph = () => {
@@ -39,6 +172,22 @@ const buildWebAudioGraph = () => {
     if (!mixerNode) {
         mixerNode = audioCtx.createGain();
         mixerNode.gain.value = 1.0;
+    }
+
+    if (!isWebAudioMode) {
+        try {
+            const sourceA = audioCtx.createMediaElementSource(playerA);
+            const sourceB = audioCtx.createMediaElementSource(playerB);
+
+            gainA = audioCtx.createGain();
+            gainB = audioCtx.createGain();
+
+            sourceA.connect(gainA);
+            sourceB.connect(gainB);
+
+            gainA.connect(mixerNode);
+            gainB.connect(mixerNode);
+        } catch (e) {}
     }
 
     if (!heartbeatOsc) {
@@ -66,109 +215,72 @@ const buildWebAudioGraph = () => {
 
     mixerNode.connect(eqFilters[0]);
     for (let i = 0; i < eqFilters.length - 1; i++) {
-        eqFilters[i].connect(eqFilters[i+1]);
+        eqFilters[i].connect(eqFilters[i + 1]);
     }
     eqFilters[eqFilters.length - 1].connect(gainNode);
     gainNode.connect(audioCtx.destination);
 };
 
-export const unlockAudioContext = () => {
-    if (isEngineInitialized) return;
+const fetchAndDecode = async (url) => {
+    if (decodeCache.has(url)) return await decodeCache.get(url);
 
-    const AudioCtx = window.AudioContext || window['webkitAudioContext'];
-    if (!audioCtx) audioCtx = new AudioCtx();
+    const p = (async () => {
+        try {
+            const response = await fetch(url);
+            if (!response.ok) throw new Error('fetch failed');
+            const arrayBuffer = await response.arrayBuffer();
 
-    audioCtx.onstatechange = () => {
-        if (audioCtx.state === 'interrupted' && currentSource) {
-            pauseEngine();
+            return new Promise((resolve, reject) => {
+                audioCtx.decodeAudioData(
+                    arrayBuffer,
+                    (buffer) => resolve(buffer),
+                    (err) => reject(err)
+                );
+            });
+        } catch (e) {
+            return null;
         }
-    };
+    })();
 
-    buildWebAudioGraph();
-    
+    decodeCache.set(url, p);
+    return p;
+};
+
+const startSyntheticClock = () => {
+    if (syntheticClockInterval) clearInterval(syntheticClockInterval);
+    let earlyEndFired = false;
+
+    syntheticClockInterval = setInterval(() => {
+        if (get(isPlaying) && currentBuffer && audioCtx) {
+            const currentRealTime = audioCtx.currentTime - trackStartTime + pauseOffset;
+            playerCurrentTime.set(currentRealTime);
+
+            if (isWebAudioMode) {
+                if (currentBuffer.duration - currentRealTime <= 0.15 && !earlyEndFired) {
+                    earlyEndFired = true;
+                    window.dispatchEvent(new CustomEvent('track-ended'));
+                }
+            } else if (currentRealTime >= currentBuffer.duration - 0.05 && !earlyEndFired) {
+                earlyEndFired = true;
+                window.dispatchEvent(new CustomEvent('track-ended'));
+            }
+        }
+    }, 100);
+};
+
+const playWebAudio = () => { // FIX: Removed async
+    if (!currentBuffer || !audioCtx) return;
+
     if (audioCtx.state === 'suspended') {
         audioCtx.resume().catch(() => {});
     }
 
-    isEngineInitialized = true;
-};
-
-const fetchAndDecode = async (url) => {
-    try {
-        const response = await fetch(url);
-        if (!response.ok) throw new Error();
-        const arrayBuffer = await response.arrayBuffer();
-        return await audioCtx.decodeAudioData(arrayBuffer);
-    } catch (e) {
-        return null;
-    }
-};
-
-const startSyntheticClock = () => {
-    if (animationFrameId) cancelAnimationFrame(animationFrameId);
-    
-    const loop = () => {
-        if (get(isPlaying) && currentBuffer) {
-            const currentRealTime = audioCtx.currentTime - trackStartTime + pauseOffset;
-            playerCurrentTime.set(currentRealTime);
-
-            if (currentRealTime >= currentBuffer.duration - 0.05) {
-                handleTrackEnd();
-                return;
-            }
-        }
-        animationFrameId = requestAnimationFrame(loop);
-    };
-    loop();
-};
-
-export const preloadNextTrack = async (url, trackId) => {
-    if (!isWebAudioGaplessEnabled || url === currentTrackId) return;
-    
-    const buffer = await fetchAndDecode(url);
-    if (buffer) {
-        nextBuffer = buffer;
-        nextTrackId = trackId;
-    }
-};
-
-export const loadAndPlayBuffer = async (url, trackId) => {
-    if (!isEngineInitialized) unlockAudioContext();
-    if (audioCtx.state === 'suspended') audioCtx.resume();
-
-    stopEngine();
-    isBuffering.set(true);
-    isPlaying.set(false);
-
-    if (nextBuffer && trackId === nextTrackId) {
-        currentBuffer = nextBuffer;
-        currentTrackId = nextTrackId;
-        nextBuffer = null;
-        nextTrackId = null;
-    } else {
-        currentBuffer = await fetchAndDecode(url);
-        currentTrackId = trackId;
-    }
-
-    if (!currentBuffer) {
-        isBuffering.set(false);
-        return;
-    }
-
-    playerDuration.set(currentBuffer.duration);
-    pauseOffset = 0;
-    
-    playEngine();
-    isBuffering.set(false);
-};
-
-export const playEngine = () => {
-    if (!currentBuffer || !audioCtx) return;
-    if (audioCtx.state === 'suspended') audioCtx.resume();
+    startSilentKeepAlive(); // FIX: Call synchronously
 
     if (currentSource) {
-        try { currentSource.stop(); } catch(e) {}
-        currentSource.disconnect();
+        try { currentSource.stop(); } catch {}
+        try { currentSource.disconnect(); } catch {}
+        currentSource = null;
     }
 
     currentSource = audioCtx.createBufferSource();
@@ -177,62 +289,331 @@ export const playEngine = () => {
 
     trackStartTime = audioCtx.currentTime;
     currentSource.start(0, pauseOffset);
-    
+
     isPlaying.set(true);
     startSyntheticClock();
 };
 
-export const pauseEngine = () => {
+const pauseWebAudio = () => {
     if (!currentSource || !audioCtx) return;
 
-    try { currentSource.stop(); } catch(e) {}
+    try { currentSource.stop(); } catch {}
+    try { currentSource.disconnect(); } catch {}
+    currentSource = null;
+
     pauseOffset += (audioCtx.currentTime - trackStartTime);
-    
-    isPlaying.set(false);
-    if (animationFrameId) cancelAnimationFrame(animationFrameId);
-};
 
-export const togglePlayGlobal = () => {
-    if (!isEngineInitialized) unlockAudioContext();
-    
-    if (get(isPlaying)) {
-        pauseEngine();
-    } else {
-        playEngine();
+    if (!get(isPlaying)) {
+        stopSilentKeepAlive();
     }
+
+    isPlaying.set(false);
+    if (syntheticClockInterval) clearInterval(syntheticClockInterval);
 };
 
-export const stopEngine = () => {
+const stopWebAudio = () => {
     if (currentSource) {
-        try { currentSource.stop(); } catch(e) {}
-        currentSource.disconnect();
+        try { currentSource.stop(); } catch {}
+        try { currentSource.disconnect(); } catch {}
         currentSource = null;
     }
+
+    // do not touch silentPlayer here
     pauseOffset = 0;
-    if (animationFrameId) cancelAnimationFrame(animationFrameId);
+    if (syntheticClockInterval) clearInterval(syntheticClockInterval);
 };
 
-export const seekEngine = (time) => {
+const seekWebAudio = (time) => {
     if (!currentBuffer || !audioCtx) return;
-    
+
     const wasPlaying = get(isPlaying);
-    
-    if (currentSource) {
-        try { currentSource.stop(); } catch(e) {}
-        currentSource.disconnect();
-    }
-    
+    stopWebAudio();
+
     pauseOffset = Math.max(0, Math.min(time, currentBuffer.duration));
     playerCurrentTime.set(pauseOffset);
 
     if (wasPlaying) {
-        playEngine();
+        playWebAudio();
     }
 };
 
-const handleTrackEnd = () => {
-    stopEngine();
-    window.dispatchEvent(new CustomEvent('track-ended'));
+export const unlockAudioContext = () => {
+    if (hasDoneSilentPrime) return;
+
+    const AudioCtx = window.AudioContext || window['webkitAudioContext'];
+    if (!audioCtx) audioCtx = new AudioCtx();
+
+    initSilentPlayer();
+
+    audioCtx.onstatechange = () => {
+        if (audioCtx.state === 'interrupted') {
+            if (isWebAudioMode && currentSource) {
+                pauseWebAudio();
+            } else if (!isWebAudioMode && html5ActivePlayer && !html5ActivePlayer.paused) {
+                html5ActivePlayer.pause();
+            }
+        } else if (audioCtx.state === 'running') {
+            if (!isWebAudioMode && html5ActivePlayer && !html5ActivePlayer.paused) {
+                html5ActivePlayer.pause();
+                const p = html5ActivePlayer.play();
+                if (p !== undefined) p.catch(() => {});
+            }
+        }
+    };
+
+    buildWebAudioGraph();
+
+    if (!isWebAudioMode) {
+        playerA.src = SILENCE_B64;
+        playerB.src = SILENCE_B64;
+
+        const pA = playerA.play();
+        if (pA !== undefined) pA.catch(() => {});
+
+        const pB = playerB.play();
+        if (pB !== undefined) pB.catch(() => {});
+
+        playerA.pause();
+        playerB.pause();
+    } else {
+    if (silentPlayer) {
+        silentPlayer.volume = 0.0001;
+        silentPlayer.loop = true;
+
+        const p = silentPlayer.play();
+        if (p !== undefined) {
+            p.then(() => {
+                // don’t stop it if music is about to play
+                if (!get(isPlaying)) {
+                    silentPlayer.pause();
+                }
+            }).catch(() => {});
+        }
+    }
+
+    if (audioCtx.state === 'suspended') {
+        audioCtx.resume().catch(() => {});
+    }
+}
+
+    hasDoneSilentPrime = true;
+    isEngineInitialized = true;
+};
+
+export const registerAudioElements = (elA, elB) => {
+    playerA = elA;
+    playerB = elB;
+    html5ActivePlayer = playerA;
+    html5StandbyPlayer = playerB;
+
+    if (!isWebAudioMode) {
+        const setupListeners = (el) => {
+            el.addEventListener('loadedmetadata', () => {
+                if (el === html5ActivePlayer) {
+                    playerDuration.set(el.duration);
+                    updateMediaPositionState(el.currentTime, el.duration);
+                }
+            });
+
+            el.addEventListener('timeupdate', () => {
+                if (el === html5ActivePlayer && el.duration > 0) {
+                    playerCurrentTime.set(el.currentTime);
+                    if (el.duration - el.currentTime <= 0.15 && !el._earlyEndFired) {
+                        el._earlyEndFired = true;
+                        window.dispatchEvent(new CustomEvent('track-ended'));
+                    }
+                }
+            });
+
+            el.addEventListener('play', () => {
+                el._earlyEndFired = false;
+                clearTimeout(stallTimeout);
+                stallTimeout = setTimeout(() => checkDeadlock(el), 3500);
+                if (el === html5ActivePlayer) isPlaying.set(true);
+            });
+
+            el.addEventListener('waiting', () => {
+                if (el === html5ActivePlayer) isBuffering.set(true);
+            });
+
+            el.addEventListener('playing', () => {
+                if (el === html5ActivePlayer) {
+                    isBuffering.set(false);
+                    isPlaying.set(true);
+                }
+                clearTimeout(stallTimeout);
+            });
+
+            el.addEventListener('pause', () => {
+                if (el === html5ActivePlayer) isPlaying.set(false);
+                clearTimeout(stallTimeout);
+            });
+        };
+
+        setupListeners(playerA);
+        setupListeners(playerB);
+    }
+};
+
+const checkDeadlock = (el) => {
+    const isContextStuck = audioCtx && audioCtx.state !== 'running';
+    const isPlayheadStuck = !el.paused && el.currentTime === 0;
+
+    if (isContextStuck || isPlayheadStuck) {
+        window.dispatchEvent(new CustomEvent('ios-hardware-deadlock'));
+        clearTimeout(stallTimeout);
+    }
+};
+
+export const preloadNextUrl = async (url) => {
+    if (isWebAudioMode) {
+        if (url === currentTrackUrl) return;
+        await fetchAndDecode(url);
+    } else {
+        const targetPlayer = html5StandbyPlayer;
+        if (targetPlayer && !targetPlayer.src.includes(url)) {
+            targetPlayer.src = url;
+            targetPlayer.preload = 'auto';
+
+            const targetGain = targetPlayer === playerA ? gainA : gainB;
+            if (targetGain && audioCtx) {
+                targetGain.gain.cancelScheduledValues(audioCtx.currentTime);
+                targetGain.gain.value = 0;
+            }
+
+            targetPlayer.load();
+
+            const p = targetPlayer.play();
+            if (p !== undefined) {
+                p.then(() => {
+                    setTimeout(() => {
+                        targetPlayer.pause();
+                        targetPlayer.currentTime = 0;
+                    }, 50);
+                }).catch(() => {});
+            }
+        }
+    }
+};
+
+export const loadAndPlayUrl = async (url) => {
+    if (!isEngineInitialized) unlockAudioContext();
+    
+    // FIX: Prime the context and keep-alive BEFORE the async fetch
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    if (isWebAudioMode) {
+        startSilentKeepAlive(); // Locks the iOS audio session immediately
+    }
+
+    if (isWebAudioMode) {
+        const isNaturalRollover =
+            currentBuffer && ((currentBuffer.duration - get(playerCurrentTime)) <= 0.3);
+
+        if (isNaturalRollover) {
+            currentSource = null;
+        } else {
+            stopWebAudio();
+        }
+
+        isBuffering.set(true);
+        isPlaying.set(false);
+
+        // By the time this fetch completes, silentPlayer has held the session open
+        currentBuffer = await fetchAndDecode(url);
+        currentTrackUrl = url;
+
+        if (!currentBuffer) {
+            isBuffering.set(false);
+            if (!get(isPlaying)) stopSilentKeepAlive();
+            return;
+        }
+
+        playerDuration.set(currentBuffer.duration);
+        pauseOffset = 0;
+
+        playWebAudio(); // Now synchronous
+        isBuffering.set(false);
+    } else {
+        // HTML5 Mode
+        const oldPlayer = html5ActivePlayer;
+        html5ActivePlayer = html5StandbyPlayer;
+        html5StandbyPlayer = oldPlayer;
+
+        const activeTargetGain = html5ActivePlayer === playerA ? gainA : gainB;
+        const oldTargetGain = html5StandbyPlayer === playerA ? gainA : gainB;
+
+        if (!html5ActivePlayer.src.includes(url)) {
+            html5ActivePlayer.src = url;
+            html5ActivePlayer.load();
+        }
+
+        html5ActivePlayer.currentTime = 0;
+
+        try {
+            const playPromise = html5ActivePlayer.play();
+            if (playPromise !== undefined) {
+                playPromise.then(() => {
+                    // FIX: Only pause the standby player AFTER the new player has successfully started.
+                    // This ensures the iOS background audio session is never dropped.
+                    if (audioCtx && oldTargetGain) {
+                        oldTargetGain.gain.cancelScheduledValues(audioCtx.currentTime);
+                        oldTargetGain.gain.setValueAtTime(oldTargetGain.gain.value, audioCtx.currentTime);
+                        oldTargetGain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.15);
+                    }
+                    setTimeout(() => {
+                        html5StandbyPlayer.pause();
+                    }, 200);
+
+                }).catch(() => {
+                    isPlaying.set(false);
+                });
+            }
+            
+            if (audioCtx && activeTargetGain) {
+                activeTargetGain.gain.cancelScheduledValues(audioCtx.currentTime);
+                activeTargetGain.gain.setValueAtTime(0, audioCtx.currentTime);
+                activeTargetGain.gain.linearRampToValueAtTime(1, audioCtx.currentTime + 0.05);
+            }
+            
+            isPlaying.set(true);
+        } catch (e) {
+            isPlaying.set(false);
+        }
+    }
+};
+
+export const togglePlayGlobal = () => {
+    if (!isEngineInitialized) unlockAudioContext();
+
+    if (isWebAudioMode) {
+        if (get(isPlaying)) {
+            pauseWebAudio();
+        } else {
+            void playWebAudio();
+        }
+    } else {
+        if (!html5ActivePlayer) return;
+
+        if (html5ActivePlayer.paused) {
+            if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+
+            const activeTargetGain = html5ActivePlayer === playerA ? gainA : gainB;
+            if (activeTargetGain && audioCtx) {
+                activeTargetGain.gain.cancelScheduledValues(audioCtx.currentTime);
+                activeTargetGain.gain.value = 1;
+            }
+
+            const playPromise = html5ActivePlayer.play();
+            if (playPromise !== undefined) {
+                playPromise.catch(() => {});
+            }
+
+            isPlaying.set(true);
+        } else {
+            html5ActivePlayer.pause();
+            isPlaying.set(false);
+        }
+    }
 };
 
 export const setVolumeBoost = (val) => {
@@ -243,31 +624,49 @@ export const setVolumeBoost = (val) => {
 export const setEqBand = (index, val) => {
     pendingEq[index] = parseFloat(val);
     if (eqFilters[index] && audioCtx) {
-        if (audioCtx.state === 'suspended') audioCtx.resume().catch(()=>{});
+        if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
         eqFilters[index].gain.value = pendingEq[index];
     }
 };
 
 export const updateMediaSession = (track, album, handlers) => {
     if (!track || !('mediaSession' in navigator)) return;
-    
+
     navigator.mediaSession.metadata = new MediaMetadata({
         title: track.title,
         artist: album?.artistName,
         album: album?.title,
-        artwork: [{ src: album?.coverPath ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&size=thumb` : '', sizes: '512x512', type: 'image/jpeg' }]
+        artwork: [
+            {
+                src: album?.coverPath
+                    ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&size=thumb`
+                    : '',
+                sizes: '512x512',
+                type: 'image/jpeg'
+            }
+        ]
     });
-    
-    navigator.mediaSession.setActionHandler('pause', handlers.pause);
-    navigator.mediaSession.setActionHandler('play', handlers.play);
-    
+
+    navigator.mediaSession.setActionHandler('pause', async () => {
+        handlers.pause();
+    });
+
+    navigator.mediaSession.setActionHandler('play', async () => {
+        if (audioCtx?.state === 'suspended') await audioCtx.resume();
+        handlers.play();
+    });
+
     if (handlers.seek) {
         navigator.mediaSession.setActionHandler('seekto', (details) => {
             handlers.seek(details.seekTime);
-            updateMediaPositionState(details.seekTime, currentBuffer ? currentBuffer.duration : 0);
+            if (isWebAudioMode) {
+                updateMediaPositionState(details.seekTime, currentBuffer ? currentBuffer.duration : 0);
+            } else if (html5ActivePlayer && !isNaN(html5ActivePlayer.duration)) {
+                updateMediaPositionState(details.seekTime, html5ActivePlayer.duration);
+            }
         });
     }
-    
+
     navigator.mediaSession.setActionHandler('previoustrack', handlers.prev);
     navigator.mediaSession.setActionHandler('nexttrack', handlers.next);
 };
@@ -275,7 +674,11 @@ export const updateMediaSession = (track, album, handlers) => {
 export const updateMediaPositionState = (currentTime, duration) => {
     if ('mediaSession' in navigator && !isNaN(duration) && duration > 0) {
         try {
-            navigator.mediaSession.setPositionState({ duration, playbackRate: 1.0, position: currentTime });
+            navigator.mediaSession.setPositionState({
+                duration,
+                playbackRate: 1.0,
+                position: currentTime
+            });
         } catch (e) {}
     }
 };
@@ -298,13 +701,14 @@ export const playNextGlobal = async (api) => {
     if (!repeat && index === playlist.length - 1) {
         const seedTrackId = playlist[index].id;
         const excludeIds = playlist.map(t => t.id);
-        
+
         const newTracks = await api.getRadioMix(seedTrackId, excludeIds);
-        
+
         if (newTracks.length > 0) {
             currentPlaylist.update(list => [...list, ...newTracks]);
         } else {
-            pauseEngine();
+            if (isWebAudioMode) pauseWebAudio();
+            else if (html5ActivePlayer) html5ActivePlayer.pause();
             return;
         }
     }
@@ -316,14 +720,14 @@ export const playNextGlobal = async (api) => {
         const recentLimit = Math.floor(playlist.length / 2);
         const recentlyPlayed = updatedHistory.slice(-recentLimit);
 
-        let unplayed = Array.from({length: playlist.length}, (_, i) => i)
+        let unplayed = Array.from({ length: playlist.length }, (_, i) => i)
             .filter(i => !recentlyPlayed.includes(i) && i !== index);
-        
+
         if (unplayed.length === 0) {
-            shuffleHistory.set([]); 
-            unplayed = Array.from({length: playlist.length}, (_, i) => i).filter(i => i !== index);
+            shuffleHistory.set([]);
+            unplayed = Array.from({ length: playlist.length }, (_, i) => i).filter(i => i !== index);
         }
-        
+
         currentIndex.set(unplayed[Math.floor(Math.random() * unplayed.length)]);
     } else {
         currentIndex.set((index + 1) % playlist.length);
@@ -338,8 +742,13 @@ export const playPrevGlobal = () => {
 
     if (playlist.length === 0) return;
 
-    if (pauseOffset > 3) {
-        seekEngine(0);
+    const currentPos = isWebAudioMode
+        ? pauseOffset
+        : (html5ActivePlayer ? html5ActivePlayer.currentTime : 0);
+
+    if (currentPos > 3) {
+        if (isWebAudioMode) seekWebAudio(0);
+        else if (html5ActivePlayer) html5ActivePlayer.currentTime = 0;
     } else if (shuffle && history.length > 0) {
         const prevIndex = history.pop();
         shuffleHistory.set(history);

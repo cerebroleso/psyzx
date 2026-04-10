@@ -75,6 +75,7 @@ src/
     Sidebar.svelte
     Topbar.svelte
     utils.js
+    webaudio.js
   app.css
   App.svelte
   main.js
@@ -678,7 +679,9 @@ async function handleRangeLogic(response, request) {
     import { albumsMap, currentPlaylist, currentIndex, isPlaying, isShuffle, isRepeat, shuffleHistory, accentColor, isGlobalColorActive, isMaxGlassActive, appSessionVersion } from '../../store.js';
     import { formatTime } from '../utils.js';
     import { api } from '../api.js';
-    import { unlockAudioContext, initAudioEngine, isEngineInitialized } from '../audio.js';
+    
+    // 1. IMPORT ONLY WHAT IS NEEDED FROM THE NEW ENGINE
+    import { unlockAudioContext, togglePlayGlobal } from '../audio.js';
     
     function portal(node) {
         document.body.appendChild(node);
@@ -706,7 +709,8 @@ async function handleRangeLogic(response, request) {
     $: maxPlay = Math.max(...tracks.map(t => t.playCount || 0));
     
     $: coverUrl = (album && album.coverPath) ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&v=${$appSessionVersion}` 
-    : DEFAULT_PLACEHOLDER;    $: avgBitrate = tracks.length > 0 ? Math.round(tracks.reduce((s, t) => s + (t.bitrate||0), 0) / tracks.length) : 0;
+    : DEFAULT_PLACEHOLDER;    
+    $: avgBitrate = tracks.length > 0 ? Math.round(tracks.reduce((s, t) => s + (t.bitrate||0), 0) / tracks.length) : 0;
     
     $: isPlayingAlbum = $isPlaying && $currentPlaylist.some(t => tracks.find(pt => pt.id === t.id));
 
@@ -754,17 +758,17 @@ async function handleRangeLogic(response, request) {
     import Artist from './Artist.svelte';
     onMount(() => { setTimeout(() => mounted = true, 50); });
 
-    const togglePlayAlbum = () => {
+    // 2. REFACTORED TO USE NEW ENGINE
+    const togglePlayAlbum = async () => {
         if (typeof window !== 'undefined') {
-            unlockAudioContext();
-            if (!isEngineInitialized) initAudioEngine();
+            await unlockAudioContext(); // Await the unified setup/prime
         }
 
         if (isPlayingAlbum) {
-            document.querySelector('audio').pause();
+            togglePlayGlobal(); // Replaces querySelector('audio').pause()
         } else {
             if ($currentPlaylist.some(t => tracks.find(pt => pt.id === t.id))) {
-                document.querySelector('audio').play(); 
+                togglePlayGlobal(); // Replaces querySelector('audio').play()
             } else {
                 currentPlaylist.set(tracks);
                 if ($isShuffle) { shuffleHistory.set([]); currentIndex.set(Math.floor(Math.random() * tracks.length)); } 
@@ -780,10 +784,10 @@ async function handleRangeLogic(response, request) {
         else { currentIndex.set(0); }
     };
 
-    const playSpecificTrack = (index) => { 
+    // 3. REFACTORED TO USE NEW ENGINE
+    const playSpecificTrack = async (index) => { 
         if (typeof window !== 'undefined') {
-            unlockAudioContext();
-            if (!isEngineInitialized) initAudioEngine();
+            await unlockAudioContext(); // Await the unified setup/prime
         }
         shuffleHistory.set([]); 
         currentPlaylist.set(tracks); 
@@ -3047,14 +3051,16 @@ async function handleRangeLogic(response, request) {
 <script>
     import { onMount } from 'svelte';
     import { fade } from 'svelte/transition';
-    // Added viewSize to imports
     import { isGlobalColorActive, isMaxGlassActive, isDesktopSwapActive, viewSize, isCacheDebugActive } from '../../store.js';
-    import { setVolumeBoost } from '../audio.js';
+    import { setVolumeBoost, isWebAudioMode, setWebAudioGaplessMode } from '../audio.js';
 
     let currentBoost = '1.0';
+    let localWebAudioMode = false;
 
     onMount(() => {
         currentBoost = localStorage.getItem('psyzx_boost') || '1.0';
+        localWebAudioMode = isWebAudioMode;
+        
         if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
             navigator.serviceWorker.controller.postMessage({
                 type: 'SET_DEBUG_MODE',
@@ -3074,7 +3080,6 @@ async function handleRangeLogic(response, request) {
     const toggleMaxGlass = () => isMaxGlassActive.set(!$isMaxGlassActive);
     const toggleDesktopSwap = () => isDesktopSwapActive.set(!$isDesktopSwapActive);
     
-    // Function to update the global view size
     const updateViewSize = (size) => {
         viewSize.set(size);
         localStorage.setItem('psyzx_view_size', size);
@@ -3091,6 +3096,11 @@ async function handleRangeLogic(response, request) {
         }
     };
 
+    const toggleGaplessMode = () => {
+        localWebAudioMode = !localWebAudioMode;
+        setWebAudioGaplessMode(localWebAudioMode);
+    };
+
     const refreshApp = async () => {
         try {
             const keys = await caches.keys();
@@ -3105,7 +3115,7 @@ async function handleRangeLogic(response, request) {
             
             window.location.reload();
         } catch (e) {
-            console.error("Refresh failed", e);
+            console.error(e);
             window.location.reload();
         }
     };
@@ -3188,8 +3198,18 @@ async function handleRangeLogic(response, request) {
     </div>
 
     <div class="settings-section">
-        <h2>Software Pre-Amp</h2>
+        <h2>Audio Engine</h2>
         
+        <div class="setting-item" style="margin-bottom: 24px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 24px;">
+            <div class="setting-info">
+                <span class="setting-title">True Gapless (RAM Engine)</span>
+                <span class="setting-desc">Bypasses HTML5 logic to force 0ms continuous audio using RAM buffers. Uses more device memory. Changing requires reload.</span>
+            </div>
+            <button class="toggle-btn" class:active={localWebAudioMode} on:click={toggleGaplessMode} aria-label="Toggle WebAudio RAM Engine">
+                <div class="toggle-knob"></div>
+            </button>
+        </div>
+
         <div class="setting-item-col">
             <div class="setting-info w-full">
                 <div class="flex-between">
@@ -3256,7 +3276,6 @@ async function handleRangeLogic(response, request) {
     .mb-16 { margin-bottom: 16px; }
     .highlight-val { font-weight: 900; font-family: monospace; color: var(--accent-color); font-size: 16px; }
     
-    /* Segmented Control Styles */
     .segmented-control {
         display: flex; background: rgba(255,255,255,0.15); padding: 2px; border-radius: 10px;
         border: 1px solid rgba(255,255,255,0.05);
@@ -3791,13 +3810,14 @@ export const api = {
         }
     },
 
-    async getRadioMix(seedTrackId) {
+    async getRadioMix(seedTrackId, excludeIds = []) {
         try {
-            const res = await this.fetchWithTimeout(`/Tracks/radio/${seedTrackId}?limit=10`);
+            const excludeString = excludeIds.join(',');
+            const res = await this.fetchWithTimeout(`/Tracks/radio/${seedTrackId}?limit=10&excludeIds=${excludeString}`);
             if (!res.ok) return [];
             return await res.json();
         } catch {
-            return []; // Fail gracefully if offline
+            return []; 
         }
     },
 
@@ -3813,255 +3833,661 @@ export const api = {
 </file>
 
 <file path="src/lib/audio.js">
+import { get } from 'svelte/store';
+import { currentPlaylist, currentIndex, isShuffle, isRepeat, shuffleHistory, isPlaying, isBuffering, playerCurrentTime, playerDuration } from '../store.js';
+
 export let audioCtx;
 export let gainNode;
 let eqFilters = [];
-export let globalAudioEl = null;
-let silentAnchorEl = null;
-let sourceNode = null;
-let heartbeatOsc = null;
 let mixerNode = null;
+let heartbeatOsc = null;
+
+export let playerA = null;
+export let playerB = null;
+let html5ActivePlayer = null;
+let html5StandbyPlayer = null;
+
+let gainA = null;
+let gainB = null;
+
+let currentBuffer = null;
+let nextBuffer = null;
+let currentSource = null;
+let trackStartTime = 0;
+let pauseOffset = 0;
+let currentTrackUrl = null;
+let nextTrackUrl = null;
+let animationFrameId = null;
+
+const decodeCache = new Map();
+
 export let isEngineInitialized = false;
-let isInitializing = false;
+let hasDoneSilentPrime = false;
 let stallTimeout = null;
 
-// Export the promise so Svelte knows exactly when hardware is ready
-export let resumePromise = Promise.resolve();
+export let isWebAudioMode = typeof window !== 'undefined' ? localStorage.getItem('psyzx_webaudio_gapless') === 'true' : false;
+
+export const setWebAudioGaplessMode = (enabled) => {
+    isWebAudioMode = enabled;
+    if (typeof window !== 'undefined') {
+        localStorage.setItem('psyzx_webaudio_gapless', enabled.toString());
+        window.location.reload();
+    }
+};
 
 let pendingBoost = 1.0;
 let pendingEq = [0, 0, 0, 0, 0, 0];
-
 const EQ_FREQS = [60, 250, 1000, 4000, 8000, 14000];
-const SILENCE_B64 = "data:audio/wav;base64,UklGRigAAABXQVZFRm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQQAAAAAAP8H";
 
-const initSilentAnchor = () => {
-    if (silentAnchorEl) return;
-    silentAnchorEl = new Audio();
-    silentAnchorEl.src = SILENCE_B64;
-    silentAnchorEl.loop = true;
-    silentAnchorEl.setAttribute("playsinline", "true");
-    silentAnchorEl.volume = 0.01;
+const SILENCE_B64 = "data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4LjEyLjEwMAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAAASW5mbwAAAA8AAAAEAAABIAD+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+AAAAAExhdmM1OC4xMzQAAAAAAAAAAAAAAAAkAAAAAAAAAAABIADZt9snAAAAAAAAAAAAAAAAAAAA//MUZAAAAAGkAAAAAAAAA0gAAAAATEFNRTMuMTAwA8EAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA//MUZAMAAAGkAAAAAAAAA0gAAAAATEFNRTMuMTAwA8EAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+export const activePlayer = {
+    get currentTime() {
+        return isWebAudioMode ? get(playerCurrentTime) : (html5ActivePlayer ? html5ActivePlayer.currentTime : 0);
+    },
+    set currentTime(time) {
+        if (isWebAudioMode) {
+            seekWebAudio(time);
+        } else if (html5ActivePlayer) {
+            html5ActivePlayer.currentTime = time;
+        }
+    },
+    get duration() {
+        return isWebAudioMode ? get(playerDuration) : (html5ActivePlayer ? html5ActivePlayer.duration : 0);
+    },
+    get paused() {
+        return !get(isPlaying);
+    },
+    play: async () => {
+        if (isWebAudioMode) {
+            playWebAudio();
+        } else if (html5ActivePlayer) {
+            return html5ActivePlayer.play();
+        }
+    },
+    pause: () => {
+        if (isWebAudioMode) {
+            pauseWebAudio();
+        } else if (html5ActivePlayer) {
+            html5ActivePlayer.pause();
+        }
+    },
+    load: () => {
+        if (!isWebAudioMode && html5ActivePlayer) html5ActivePlayer.load();
+    },
+    get src() {
+        return isWebAudioMode ? currentTrackUrl : (html5ActivePlayer ? html5ActivePlayer.src : '');
+    },
+    set src(val) {
+        if (!isWebAudioMode && html5ActivePlayer) html5ActivePlayer.src = val;
+    }
 };
 
-export const initAudioEngine = async () => {
-    if (typeof window === 'undefined' || !globalAudioEl || isEngineInitialized || isInitializing) return;
-    isInitializing = true; 
+const buildWebAudioGraph = () => {
+    if (!audioCtx) return;
 
-    try {
-        const AudioCtx = window.AudioContext || window['webkitAudioContext'];
-        if (!audioCtx) audioCtx = new AudioCtx();
-        
-        initSilentAnchor();
+    if (!mixerNode) {
+        mixerNode = audioCtx.createGain();
+        mixerNode.gain.value = 1.0;
+    }
 
-        if (!mixerNode) {
-            mixerNode = audioCtx.createGain();
-            mixerNode.gain.value = 1.0;
+    if (!isWebAudioMode) {
+        try {
+            const sourceA = audioCtx.createMediaElementSource(playerA);
+            const sourceB = audioCtx.createMediaElementSource(playerB);
+
+            gainA = audioCtx.createGain();
+            gainB = audioCtx.createGain();
+
+            sourceA.connect(gainA);
+            sourceB.connect(gainB);
+
+            gainA.connect(mixerNode);
+            gainB.connect(mixerNode);
+        } catch (e) {}
+    }
+
+    if (!heartbeatOsc) {
+        const hGain = audioCtx.createGain();
+        hGain.gain.value = 0.0000001;
+        heartbeatOsc = audioCtx.createOscillator();
+        heartbeatOsc.type = 'sine';
+        heartbeatOsc.frequency.value = 440;
+        heartbeatOsc.connect(hGain);
+        hGain.connect(mixerNode);
+        heartbeatOsc.start();
+    }
+
+    eqFilters = EQ_FREQS.map((freq, i) => {
+        const filter = audioCtx.createBiquadFilter();
+        filter.type = 'peaking';
+        filter.frequency.value = freq;
+        filter.Q.value = 1.4;
+        filter.gain.value = pendingEq[i];
+        return filter;
+    });
+
+    gainNode = audioCtx.createGain();
+    gainNode.gain.value = pendingBoost;
+
+    mixerNode.connect(eqFilters[0]);
+    for (let i = 0; i < eqFilters.length - 1; i++) {
+        eqFilters[i].connect(eqFilters[i+1]);
+    }
+    eqFilters[eqFilters.length - 1].connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+};
+
+const fetchAndDecode = async (url) => {
+    if (decodeCache.has(url)) {
+        return await decodeCache.get(url);
+    }
+    const p = (async () => {
+        try {
+            const response = await fetch(url);
+            if (!response.ok) throw new Error();
+            const arrayBuffer = await response.arrayBuffer();
+
+            return new Promise((resolve, reject) => {
+                audioCtx.decodeAudioData(arrayBuffer,
+                    (buffer) => resolve(buffer),
+                    (err) => reject(err)
+                );
+            });
+        } catch (e) {
+            return null;
         }
+    })();
+    decodeCache.set(url, p);
+    return p;
+};
 
-        if (!sourceNode) {
-            sourceNode = audioCtx.createMediaElementSource(globalAudioEl);
-            sourceNode.connect(mixerNode);
-        }
+const startSyntheticClock = () => {
+    if (animationFrameId) cancelAnimationFrame(animationFrameId);
+    let earlyEndFired = false;
 
-        if (!heartbeatOsc) {
-            const hGain = audioCtx.createGain();
-            hGain.gain.value = 0.0000001; 
-            heartbeatOsc = audioCtx.createOscillator();
-            heartbeatOsc.type = 'sine';
-            heartbeatOsc.frequency.value = 440;
-            heartbeatOsc.connect(hGain);
-            hGain.connect(mixerNode);
-            heartbeatOsc.start();
-        }
+    const loop = () => {
+        if (get(isPlaying) && currentBuffer) {
+            const currentRealTime = audioCtx.currentTime - trackStartTime + pauseOffset;
+            playerCurrentTime.set(currentRealTime);
 
-        eqFilters = EQ_FREQS.map((freq, i) => {
-            const filter = audioCtx.createBiquadFilter();
-            filter.type = 'peaking';
-            filter.frequency.value = freq;
-            filter.Q.value = 1.4;
-            filter.gain.value = pendingEq[i];
-            return filter;
-        });
-
-        gainNode = audioCtx.createGain();
-        gainNode.gain.value = pendingBoost;
-
-        mixerNode.connect(eqFilters[0]);
-        for (let i = 0; i < eqFilters.length - 1; i++) {
-            eqFilters[i].connect(eqFilters[i+1]);
-        }
-        eqFilters[eqFilters.length - 1].connect(gainNode);
-        gainNode.connect(audioCtx.destination);
-
-        document.addEventListener('visibilitychange', () => {
-            if (audioCtx.state === 'suspended' || audioCtx.state === 'interrupted') {
-                audioCtx.resume().catch(() => {});
+            if (isWebAudioMode) {
+                if (currentBuffer.duration - currentRealTime <= 0.15 && !earlyEndFired) {
+                    earlyEndFired = true;
+                    window.dispatchEvent(new CustomEvent('track-ended'));
+                }
+            } else if (currentRealTime >= currentBuffer.duration - 0.05 && !earlyEndFired) {
+                earlyEndFired = true;
+                window.dispatchEvent(new CustomEvent('track-ended'));
             }
-        });
-
-        isEngineInitialized = true;
-    } catch (e) {
-        console.error(e);
-    } finally {
-        isInitializing = false;
-    }
-};
-
-export const primeEngine = async () => {
-    if (!isEngineInitialized) await initAudioEngine();
-    // Background safety check
-    if (audioCtx?.state === 'suspended') {
-        resumePromise = audioCtx.resume().catch(() => {});
-    }
-};
-
-export const unlockAudioContext = () => { 
-    if (!audioCtx) {
-        const AudioCtx = window.AudioContext || window['webkitAudioContext'];
-        audioCtx = new AudioCtx();
-    }
-
-    // Flag that we are attempting to start the engine
-    isPlayAttemptActive = true;
-
-    if (audioCtx.state === 'suspended' || audioCtx.state === 'interrupted') {
-        resumePromise = audioCtx.resume().catch(() => {
-            // If resume fails immediately, that's a deadlock
-            window.dispatchEvent(new CustomEvent('ios-hardware-deadlock'));
-        });
-    }
-
-    try {
-        if (silentAnchorEl && silentAnchorEl.paused) {
-            silentAnchorEl.play().catch(() => {});
         }
-    } catch (e) {}
-
-    primeEngine();
+        animationFrameId = requestAnimationFrame(loop);
+    };
+    loop();
 };
 
-let isPlayAttemptActive = false;
+const playWebAudio = () => {
+    if (!currentBuffer || !audioCtx) return;
+    if (audioCtx.state === 'suspended') audioCtx.resume();
 
-export const registerAudioElement = (el) => {
-    globalAudioEl = el;
+    if (playerA && playerA.paused) {
+        playerA.src = SILENCE_B64;
+        playerA.loop = true;
+        const p = playerA.play();
+        if (p) p.catch(()=>{});
+    }
 
-    const checkDeadlock = () => {
-        // THE AGGRESSIVE CONDITION:
-        // 1. We are trying to play (isPlayAttemptActive)
-        // 2. BUT either:
-        //    a) The AudioContext is NOT 'running' (it's stuck in suspended/interrupted)
-        //    b) OR the HTML5 element thinks it's playing but the playhead is at 0
-        const isContextStuck = audioCtx && audioCtx.state !== 'running';
-        const isPlayheadStuck = !el.paused && el.currentTime === 0;
+    if (currentSource) {
+        try { currentSource.stop(); } catch(e) {}
+        currentSource.disconnect();
+    }
 
-        if (isPlayAttemptActive && (isContextStuck || isPlayheadStuck)) {
-            console.error("💀 [Audio Debug] DEADLOCK DETECTED: Engine Killed or Hardware Frozen.");
-            window.dispatchEvent(new CustomEvent('ios-hardware-deadlock'));
-            
-            // Reset attempt so we don't spam the event
-            isPlayAttemptActive = false; 
-            clearTimeout(stallTimeout);
+    currentSource = audioCtx.createBufferSource();
+    currentSource.buffer = currentBuffer;
+    currentSource.connect(mixerNode);
+
+    trackStartTime = audioCtx.currentTime;
+    currentSource.start(0, pauseOffset);
+
+    isPlaying.set(true);
+    startSyntheticClock();
+};
+
+const pauseWebAudio = () => {
+    if (!currentSource || !audioCtx) return;
+
+    try { currentSource.stop(); } catch(e) {}
+    currentSource.disconnect();
+    currentSource = null;
+
+    pauseOffset += (audioCtx.currentTime - trackStartTime);
+
+    if (playerA && !playerA.paused) {
+        playerA.pause();
+    }
+
+    isPlaying.set(false);
+    if (animationFrameId) cancelAnimationFrame(animationFrameId);
+};
+
+const stopWebAudio = () => {
+    if (currentSource) {
+        try { currentSource.stop(); } catch(e) {}
+        currentSource.disconnect();
+        currentSource = null;
+    }
+    if (playerA && !playerA.paused) playerA.pause();
+    pauseOffset = 0;
+    if (animationFrameId) cancelAnimationFrame(animationFrameId);
+};
+
+const seekWebAudio = (time) => {
+    if (!currentBuffer || !audioCtx) return;
+
+    const wasPlaying = get(isPlaying);
+    stopWebAudio();
+
+    pauseOffset = Math.max(0, Math.min(time, currentBuffer.duration));
+    playerCurrentTime.set(pauseOffset);
+
+    if (wasPlaying) {
+        playWebAudio();
+    }
+};
+
+export const unlockAudioContext = () => {
+    if (hasDoneSilentPrime) return;
+
+    const AudioCtx = window.AudioContext || window['webkitAudioContext'];
+    if (!audioCtx) audioCtx = new AudioCtx();
+
+    audioCtx.onstatechange = () => {
+        if (audioCtx.state === 'interrupted') {
+            if (isWebAudioMode && currentSource) {
+                pauseWebAudio();
+            } else if (!isWebAudioMode && html5ActivePlayer && !html5ActivePlayer.paused) {
+                html5ActivePlayer.pause();
+            }
+        } else if (audioCtx.state === 'running') {
+            if (!isWebAudioMode && html5ActivePlayer && !html5ActivePlayer.paused) {
+                html5ActivePlayer.pause();
+                const p = html5ActivePlayer.play();
+                if (p !== undefined) p.catch(() => {});
+            }
         }
     };
 
-    el.addEventListener('play', () => {
-        isPlayAttemptActive = true;
-        clearTimeout(stallTimeout);
-        
-        // Check once after 1 second, then again at 3.5 seconds
-        // This catches "killed" engines faster
-        setTimeout(checkDeadlock, 1000); 
-        stallTimeout = setTimeout(checkDeadlock, 3500);
-    });
+    buildWebAudioGraph();
 
-    el.addEventListener('playing', () => {
-        console.log("[audio debug] play event fired");
-        isPlayAttemptActive = false;
-        clearTimeout(stallTimeout);
-    });
+    if (!isWebAudioMode) {
+        playerA.src = SILENCE_B64;
+        playerB.src = SILENCE_B64;
 
-    // If the playhead actually moves, we are definitely safe
-    el.addEventListener('timeupdate', () => {
-        if (el.currentTime > 0.1) {
-            isPlayAttemptActive = false;
-            clearTimeout(stallTimeout);
+        const pA = playerA.play();
+        if (pA !== undefined) pA.catch(() => {});
+
+        const pB = playerB.play();
+        if (pB !== undefined) pB.catch(() => {});
+
+        playerA.pause();
+        playerB.pause();
+    } else {
+        playerA.src = SILENCE_B64;
+        playerA.loop = true;
+        const pA = playerA.play();
+        if (pA !== undefined) pA.catch(() => {});
+        playerA.pause();
+
+        if (audioCtx.state === 'suspended') {
+            audioCtx.resume().catch(() => {});
         }
-    });
+    }
 
-    el.addEventListener('pause', () => {
-        isPlayAttemptActive = false;
-        clearTimeout(stallTimeout);
-    });
+    hasDoneSilentPrime = true;
+    isEngineInitialized = true;
 };
 
-export const setVolumeBoost = (val) => {
-    const num = parseFloat(val);
-    pendingBoost = num;
-    if (gainNode && audioCtx) {
-        gainNode.gain.setTargetAtTime(num, audioCtx.currentTime, 0.02);
+export const registerAudioElements = (elA, elB) => {
+    playerA = elA;
+    playerB = elB;
+    html5ActivePlayer = playerA;
+    html5StandbyPlayer = playerB;
+
+    if (!isWebAudioMode) {
+        const setupListeners = (el) => {
+            el.addEventListener('loadedmetadata', () => {
+                if (el === html5ActivePlayer) {
+                    playerDuration.set(el.duration);
+                    updateMediaPositionState(el.currentTime, el.duration);
+                }
+            });
+
+            el.addEventListener('timeupdate', () => {
+                if (el === html5ActivePlayer && el.duration > 0) {
+                    playerCurrentTime.set(el.currentTime);
+                    if (el.duration - el.currentTime <= 0.15 && !el._earlyEndFired) {
+                        el._earlyEndFired = true;
+                        window.dispatchEvent(new CustomEvent('track-ended'));
+                    }
+                }
+            });
+
+            el.addEventListener('play', () => {
+                el._earlyEndFired = false;
+                clearTimeout(stallTimeout);
+                stallTimeout = setTimeout(() => checkDeadlock(el), 3500);
+                if (el === html5ActivePlayer) isPlaying.set(true);
+            });
+
+            el.addEventListener('waiting', () => {
+                if (el === html5ActivePlayer) isBuffering.set(true);
+            });
+
+            el.addEventListener('playing', () => {
+                if (el === html5ActivePlayer) {
+                    isBuffering.set(false);
+                    isPlaying.set(true);
+                }
+                clearTimeout(stallTimeout);
+            });
+
+            el.addEventListener('pause', () => {
+                if (el === html5ActivePlayer) isPlaying.set(false);
+                clearTimeout(stallTimeout);
+            });
+        };
+
+        setupListeners(playerA);
+        setupListeners(playerB);
     }
 };
 
+const checkDeadlock = (el) => {
+    const isContextStuck = audioCtx && audioCtx.state !== 'running';
+    const isPlayheadStuck = !el.paused && el.currentTime === 0;
+
+    if (isContextStuck || isPlayheadStuck) {
+        window.dispatchEvent(new CustomEvent('ios-hardware-deadlock'));
+        clearTimeout(stallTimeout);
+    }
+};
+
+export const preloadNextUrl = async (url) => {
+    if (isWebAudioMode) {
+        if (url === currentTrackUrl) return;
+        await fetchAndDecode(url);
+    } else {
+        const targetPlayer = html5StandbyPlayer;
+        if (targetPlayer && !targetPlayer.src.includes(url)) {
+            targetPlayer.src = url;
+            targetPlayer.preload = "auto";
+
+            const targetGain = targetPlayer === playerA ? gainA : gainB;
+            if (targetGain && audioCtx) {
+                targetGain.gain.cancelScheduledValues(audioCtx.currentTime);
+                targetGain.gain.value = 0;
+            }
+
+            targetPlayer.load();
+
+            const p = targetPlayer.play();
+            if (p !== undefined) {
+                p.then(() => {
+                    setTimeout(() => {
+                        targetPlayer.pause();
+                        targetPlayer.currentTime = 0;
+                    }, 50);
+                }).catch(() => {});
+            }
+        }
+    }
+};
+
+export const loadAndPlayUrl = async (url) => {
+    if (!isEngineInitialized) unlockAudioContext();
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+
+    if (isWebAudioMode) {
+        if (playerA && playerA.paused) {
+            playerA.src = SILENCE_B64;
+            playerA.loop = true;
+            const p = playerA.play();
+            if (p) p.catch(()=>{});
+        }
+
+        const isNaturalRollover = currentBuffer && ((currentBuffer.duration - get(playerCurrentTime)) <= 0.3);
+
+        if (isNaturalRollover) {
+            currentSource = null;
+        } else {
+            stopWebAudio();
+        }
+
+        isBuffering.set(true);
+        isPlaying.set(false);
+
+        currentBuffer = await fetchAndDecode(url);
+        currentTrackUrl = url;
+
+        if (!currentBuffer) {
+            isBuffering.set(false);
+            if (!get(isPlaying) && playerA) playerA.pause();
+            return;
+        }
+
+        playerDuration.set(currentBuffer.duration);
+        pauseOffset = 0;
+
+        playWebAudio();
+        isBuffering.set(false);
+    } else {
+        const oldPlayer = html5ActivePlayer;
+        html5ActivePlayer = html5StandbyPlayer;
+        html5StandbyPlayer = oldPlayer;
+
+        const activeTargetGain = html5ActivePlayer === playerA ? gainA : gainB;
+        const oldTargetGain = html5StandbyPlayer === playerA ? gainA : gainB;
+
+        if (audioCtx) {
+            if (oldTargetGain && !html5StandbyPlayer.paused) {
+                oldTargetGain.gain.cancelScheduledValues(audioCtx.currentTime);
+                oldTargetGain.gain.setValueAtTime(oldTargetGain.gain.value, audioCtx.currentTime);
+                oldTargetGain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.15);
+
+                setTimeout(() => {
+                    html5StandbyPlayer.pause();
+                }, 200);
+            } else {
+                html5StandbyPlayer.pause();
+            }
+
+            if (activeTargetGain) {
+                activeTargetGain.gain.cancelScheduledValues(audioCtx.currentTime);
+                activeTargetGain.gain.setValueAtTime(0, audioCtx.currentTime);
+                activeTargetGain.gain.linearRampToValueAtTime(1, audioCtx.currentTime + 0.05);
+            }
+        } else {
+            html5StandbyPlayer.pause();
+        }
+
+        if (!html5ActivePlayer.src.includes(url)) {
+            html5ActivePlayer.src = url;
+            html5ActivePlayer.load();
+        }
+
+        html5ActivePlayer.currentTime = 0;
+
+        try {
+            const playPromise = html5ActivePlayer.play();
+            if (playPromise !== undefined) {
+                playPromise.catch(() => {});
+            }
+            isPlaying.set(true);
+        } catch (e) {
+            isPlaying.set(false);
+        }
+    }
+};
+
+export const togglePlayGlobal = () => {
+    if (!isEngineInitialized) unlockAudioContext();
+
+    if (isWebAudioMode) {
+        if (get(isPlaying)) {
+            pauseWebAudio();
+        } else {
+            playWebAudio();
+        }
+    } else {
+        if (!html5ActivePlayer) return;
+
+        if (html5ActivePlayer.paused) {
+            if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+
+            const activeTargetGain = html5ActivePlayer === playerA ? gainA : gainB;
+            if (activeTargetGain && audioCtx) {
+                activeTargetGain.gain.cancelScheduledValues(audioCtx.currentTime);
+                activeTargetGain.gain.value = 1;
+            }
+
+            const playPromise = html5ActivePlayer.play();
+            if (playPromise !== undefined) {
+                playPromise.catch(() => {});
+            }
+
+            isPlaying.set(true);
+        } else {
+            html5ActivePlayer.pause();
+            isPlaying.set(false);
+        }
+    }
+};
+
+export const setVolumeBoost = (val) => {
+    pendingBoost = parseFloat(val);
+    if (gainNode && audioCtx) gainNode.gain.value = pendingBoost;
+};
+
 export const setEqBand = (index, val) => {
-    const num = parseFloat(val);
-    pendingEq[index] = num;
+    pendingEq[index] = parseFloat(val);
     if (eqFilters[index] && audioCtx) {
         if (audioCtx.state === 'suspended') audioCtx.resume().catch(()=>{});
-        eqFilters[index].gain.setTargetAtTime(num, audioCtx.currentTime, 0.02);
+        eqFilters[index].gain.value = pendingEq[index];
     }
 };
 
 export const updateMediaSession = (track, album, handlers) => {
     if (!track || !('mediaSession' in navigator)) return;
-    
+
     navigator.mediaSession.metadata = new MediaMetadata({
         title: track.title,
         artist: album?.artistName,
         album: album?.title,
         artwork: [{ src: album?.coverPath ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&size=thumb` : '', sizes: '512x512', type: 'image/jpeg' }]
     });
-    
-    // THE FIX FOR THE LOOPING BUFFER IN THE BACKGROUND
+
     navigator.mediaSession.setActionHandler('pause', async () => {
         handlers.pause();
-        if (audioCtx && audioCtx.state === 'running') {
-            await audioCtx.suspend().catch(()=>{}); 
-        }
-        if (silentAnchorEl) silentAnchorEl.pause();
     });
 
     navigator.mediaSession.setActionHandler('play', async () => {
-        await unlockAudioContext();
+        if (audioCtx?.state === 'suspended') await audioCtx.resume();
         handlers.play();
     });
 
     if (handlers.seek) {
         navigator.mediaSession.setActionHandler('seekto', (details) => {
             handlers.seek(details.seekTime);
-            if (globalAudioEl && !isNaN(globalAudioEl.duration)) {
-                updateMediaPositionState(details.seekTime, globalAudioEl.duration);
+            if (isWebAudioMode) {
+                updateMediaPositionState(details.seekTime, currentBuffer ? currentBuffer.duration : 0);
+            } else if (html5ActivePlayer && !isNaN(html5ActivePlayer.duration)) {
+                updateMediaPositionState(details.seekTime, html5ActivePlayer.duration);
             }
         });
     }
-    
+
     navigator.mediaSession.setActionHandler('previoustrack', handlers.prev);
     navigator.mediaSession.setActionHandler('nexttrack', handlers.next);
-
-    try {
-        navigator.mediaSession.setActionHandler('seekforward', null);
-        navigator.mediaSession.setActionHandler('seekbackward', null);
-    } catch (e) {}
 };
 
 export const updateMediaPositionState = (currentTime, duration) => {
     if ('mediaSession' in navigator && !isNaN(duration) && duration > 0) {
         try {
-            navigator.mediaSession.setPositionState({
-                duration: duration,
-                playbackRate: 1.0,
-                position: currentTime
-            });
+            navigator.mediaSession.setPositionState({ duration, playbackRate: 1.0, position: currentTime });
         } catch (e) {}
+    }
+};
+
+let lastNextTime = 0;
+
+export const playNextGlobal = async (api) => {
+    const now = Date.now();
+    if (now - lastNextTime < 500) return;
+    lastNextTime = now;
+
+    const playlist = get(currentPlaylist);
+    const index = get(currentIndex);
+    const shuffle = get(isShuffle);
+    const repeat = get(isRepeat);
+    const history = get(shuffleHistory);
+
+    if (playlist.length === 0) return;
+
+    if (!repeat && index === playlist.length - 1) {
+        const seedTrackId = playlist[index].id;
+        const excludeIds = playlist.map(t => t.id);
+
+        const newTracks = await api.getRadioMix(seedTrackId, excludeIds);
+
+        if (newTracks.length > 0) {
+            currentPlaylist.update(list => [...list, ...newTracks]);
+        } else {
+            if (isWebAudioMode) pauseWebAudio();
+            else if (html5ActivePlayer) html5ActivePlayer.pause();
+            return;
+        }
+    }
+
+    if (shuffle) {
+        const updatedHistory = [...history, index];
+        shuffleHistory.set(updatedHistory);
+
+        const recentLimit = Math.floor(playlist.length / 2);
+        const recentlyPlayed = updatedHistory.slice(-recentLimit);
+
+        let unplayed = Array.from({length: playlist.length}, (_, i) => i)
+            .filter(i => !recentlyPlayed.includes(i) && i !== index);
+
+        if (unplayed.length === 0) {
+            shuffleHistory.set([]);
+            unplayed = Array.from({length: playlist.length}, (_, i) => i).filter(i => i !== index);
+        }
+
+        currentIndex.set(unplayed[Math.floor(Math.random() * unplayed.length)]);
+    } else {
+        currentIndex.set((index + 1) % playlist.length);
+    }
+};
+
+export const playPrevGlobal = () => {
+    const playlist = get(currentPlaylist);
+    const index = get(currentIndex);
+    const shuffle = get(isShuffle);
+    const history = get(shuffleHistory);
+
+    if (playlist.length === 0) return;
+
+    const currentPos = isWebAudioMode ? pauseOffset : (html5ActivePlayer ? html5ActivePlayer.currentTime : 0);
+
+    if (currentPos > 3) {
+        if (isWebAudioMode) seekWebAudio(0);
+        else if (html5ActivePlayer) html5ActivePlayer.currentTime = 0;
+    } else if (shuffle && history.length > 0) {
+        const prevIndex = history.pop();
+        shuffleHistory.set(history);
+        currentIndex.set(prevIndex);
+    } else {
+        currentIndex.set((index - 1 + playlist.length) % playlist.length);
     }
 };
 </file>
@@ -4107,20 +4533,8 @@ export const updateMediaPositionState = (currentTime, duration) => {
 
 <file path="src/lib/FullPlayer.svelte">
 <script>
-    /**
-     * @file FullPlayer.svelte
-     * @version 2.4.1
-     * @description Professional Music Player with optimized Y-axis drawer physics.
-     * * FIXED IN THIS VERSION:
-     * 1. iOS Background Stack: Bound `isOpen` to toggle the `modal-open` class on document.body for mobile devices.
-     * 2. Parallax Drag Physics: Mapped the Svelte drag engine to dynamically reverse the `#app-layout` scale/brightness when dragging down.
-     * 3. Seekbar UI: Fixed frameLoop ignoring UI updates during manual finger seek by manually updating the DOM inside updateSeek.
-     * 4. Accent Colors: Fixed global CSS overrides hiding the master EQ accent colors and track backgrounds using fallback and !important priorities, and fixed string coercion in Master EQ binding.
-     * 5. Preset Chips: Locked active state brightness filter to prevent native iOS tap decay.
-     */
-
     import { createEventDispatcher, onMount, onDestroy, afterUpdate } from 'svelte';
-    import { fly, fade } from 'svelte/transition';
+    import { fly, fade, slide } from 'svelte/transition';
     import { 
         currentPlaylist, 
         currentIndex, 
@@ -4131,23 +4545,18 @@ export const updateMediaPositionState = (currentTime, duration) => {
         playerCurrentTime, 
         playerDuration, 
         isMaxGlassActive, 
-        appSessionVersion
+        appSessionVersion,
+        isBuffering
     } from '../store.js';
     import { formatTime } from './utils.js';
-    import { setEqBand } from './audio.js';
+    import { setEqBand, togglePlayGlobal, playNextGlobal, playPrevGlobal, activePlayer } from './audio.js';
     import { api } from './api.js';
-    import { quintOut, expoIn, expoOut } from 'svelte/easing';
+    import { quintOut, expoIn, expoOut, linear } from 'svelte/easing';
     import { spring } from 'svelte/motion';
 
-    // -------------------------------------------------------------------------
-    // Component Properties
-    // -------------------------------------------------------------------------
     export let isOpen = false;
     const dispatch = createEventDispatcher();
 
-    // -------------------------------------------------------------------------
-    // Local State Variables
-    // -------------------------------------------------------------------------
     let innerWidth = 1000;
     let progressRef;
     let currentTimeRef;
@@ -4162,6 +4571,17 @@ export const updateMediaPositionState = (currentTime, duration) => {
     let isSeekingBar = false;
     let progressContainerEl;
     let isClosing = false;
+    let isClosingByDrag = false;
+    let coverClick = false;
+    let playToggle = false;
+
+    function handleCoverClick() {
+        coverClick = !coverClick;
+    }
+
+    function handlePlayToggle() {
+        playToggle = !playToggle;
+    }
 
     const DEFAULT_PLACEHOLDER = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxIDEiPjxyZWN0IHdpZHRoPSIxIiBoZWlnaHQ9IjEiIGZpbGw9IiMzMzMiLz48L3N2Zz4=';
     const handleImageError = (ev) => {
@@ -4170,67 +4590,67 @@ export const updateMediaPositionState = (currentTime, duration) => {
 
     $: isMobile = innerWidth <= 768;
 
-    // -------------------------------------------------------------------------
-    // Drag-to-Dismiss Physics Logic
-    // -------------------------------------------------------------------------
     let dragY = 0;
     let isDragging = false;
     let startY = 0;
 
-    /**
-     * Resets the drag position whenever the player is toggled.
-     * This ensures clean state on every mount.
-     */
-
     $: if (isOpen) {
-        isClosing = false; // Reset only when fully opening
+        isClosing = false; 
+        isClosingByDrag = false;
+        dragY = 0; 
+        startY = 0;
+        isDragging = false;
     }
 
-    $: if (!isOpen) {
+    $: if (!isOpen && !isClosingByDrag) {
         dragY = 0;
         isDragging = false;
-        isClosing = true; // Force the glass kill during the entire Svelte outro
+        isClosing = true; 
     }
 
-    /**
-     * onTouchStart
-     * Captures initial Y coordinate. Prevents drag if sub-menus are active.
-     */
     const onTouchStart = (e) => {
-        if (isLyricsFullScreen || showQueue) return;
+        if (isLyricsFullScreen || showQueue || isClosingByDrag) return;
         isDragging = true;
         startY = e.touches[0].clientY;
     };
 
-    /**
-     * onTouchMove
-     * Updates the dragY delta. 
-     */
     const onTouchMove = (e) => {
         if (!isDragging) return;
         const currentY = e.touches[0].clientY;
         const deltaY = currentY - startY;
         
-        // We only allow downward movement (deltaY > 0)
         if (deltaY > 0) {
             dragY = deltaY;
+        } else {
+            dragY = deltaY * 0.25;
         }
     };
 
-    /**
-     * onTouchEnd
-     * Decides whether to close the player based on velocity/distance.
-     */
     const onTouchEnd = () => {
         if (!isDragging) return;
         isDragging = false;
 
-        // 120px is the "Point of No Return" for the drawer closure
-        if (dragY > 80) {
+        if (dragY > 60) {
             isClosing = true;
-            handleClose();
+            isClosingByDrag = true;
+            
+            const startYPos = dragY;
+            const targetY = window.innerHeight;
+            const duration = 250;
+            const startTime = Date.now(); 
+            
+            const fall = () => { 
+                const t = Math.min((Date.now() - startTime) / duration, 1);
+                dragY = startYPos + (targetY - startYPos) * t; 
+                
+                if (t < 1) {
+                    requestAnimationFrame(fall);
+                } else {
+                    handleClose();
+                }
+            };
+            requestAnimationFrame(fall);
         } else {
-            // Snap back to 0 if not dragged far enough
             dragY = 0; 
         }
         startY = 0;
@@ -4239,39 +4659,28 @@ export const updateMediaPositionState = (currentTime, duration) => {
     const handleClose = () => {
         isClosing = true;
         dispatch('close');
-        // Resetting here as well for redundant state protection
-        dragY = 0; 
+        if (!isClosingByDrag) dragY = 0; 
     };
 
-    // -------------------------------------------------------------------------
-    // iOS Stack Background Physics Integration
-    // -------------------------------------------------------------------------
     $: if (typeof document !== 'undefined') {
         if (isOpen && isMobile) {
-            // Trigger the App-level CSS transition
             document.body.classList.add('modal-open');
         } else {
-            // Safely clear class when closed or resized to desktop
             document.body.classList.remove('modal-open');
         }
     }
 
-    // -------------------------------------------------------------------------
-    // Audio Performance Loop (60FPS)
-    // -------------------------------------------------------------------------
-    const getAudioEl = () => document.querySelector('audio');
-
     let wasPlayerElPresent = false;
 
+    // Use strictly the stores driven by audio.js
     const frameLoop = () => {
-        const audio = getAudioEl();
-        if (audio && !isSeekingBar) {
-            const current = audio.currentTime || 0;
-            const duration = audio.duration || 1;
+        if (!isSeekingBar) {
+            const current = $playerCurrentTime || 0;
+            const duration = $playerDuration || 1;
             const pct = current / duration;
 
-            if (progressRef) {
-                progressRef.style.transform = `scaleX(${pct})`;
+            if (progressRef && !isNaN(pct)) {
+                progressRef.style.transform = `translateZ(0) scaleX(${pct})`;
             }
             if (currentTimeRef) {
                 const formatted = formatTime(current);
@@ -4281,11 +4690,10 @@ export const updateMediaPositionState = (currentTime, duration) => {
             }
         }
 
-        // Tie Background Scaling to the exact Y bounds of the player component itself
         if (typeof document !== 'undefined') {
             const appLayout = document.getElementById('app-layout');
             if (appLayout) {
-                if (playerEl && isMobile) {
+                if (playerEl && isMobile && dragY >= 0) {
                     wasPlayerElPresent = true;
                     const rect = playerEl.getBoundingClientRect();
                     const currentY = Math.max(0, rect.top);
@@ -4300,7 +4708,6 @@ export const updateMediaPositionState = (currentTime, duration) => {
                     appLayout.style.setProperty('filter', `brightness(${brightness})`, 'important');
                     appLayout.style.setProperty('border-radius', `${32 * (1 - dragProgress)}px`, 'important');
                 } else if (wasPlayerElPresent || (!isMobile && appLayout.style.transform)) {
-                    // Smoothly release inline styles when component unmounts or resizes
                     wasPlayerElPresent = false;
                     appLayout.style.removeProperty('transition');
                     appLayout.style.removeProperty('transform');
@@ -4309,17 +4716,31 @@ export const updateMediaPositionState = (currentTime, duration) => {
                 }
             }
         }
-
         rafId = requestAnimationFrame(frameLoop);
     };
 
+    let activeDownloads = {};
+
     onMount(() => {
         rafId = requestAnimationFrame(frameLoop);
+
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.addEventListener('message', (event) => {
+                const data = event.data;
+                if (data.type === 'DOWNLOAD_PROGRESS') {
+                    activeDownloads[data.trackId] = data.progress;
+                    activeDownloads = { ...activeDownloads }; 
+                }
+                if (data.type === 'CACHE_UPDATED' && data.trackId) {
+                    activeDownloads[data.trackId] = 100;
+                    activeDownloads = { ...activeDownloads };
+                }
+            });
+        }
     });
 
     onDestroy(() => {
         if (rafId) cancelAnimationFrame(rafId);
-        // Failsafe cleanup
         if (typeof document !== 'undefined') {
             document.body.classList.remove('modal-open');
             const appLayout = document.getElementById('app-layout');
@@ -4332,15 +4753,9 @@ export const updateMediaPositionState = (currentTime, duration) => {
         }
     });
 
-    // -------------------------------------------------------------------------
-    // Equalizer & Audio Engine Interaction
-    // -------------------------------------------------------------------------
-    
-    // Smooth spring physics for band transitions
     let eqMaster = spring(0, { stiffness: 0.15, damping: 0.8 });
     let eqBands = spring([0, 0, 0, 0, 0, 0], { stiffness: 0.1, damping: 0.8 });
 
-    // Link Svelte Spring to the Audio Engine
     $: $eqBands.forEach((val, i) => setEqBand(i, val));
 
     const syncMasterEq = (event) => {
@@ -4373,12 +4788,8 @@ export const updateMediaPositionState = (currentTime, duration) => {
         'Electronic': [5, 3, -1, 2, 4, 5],
         'Vocal Pop': [-1, -1, 3, 4, 2, 0]
     };
-
     let currentPreset = 'Flat';
 
-    // -------------------------------------------------------------------------
-    // Lyrics Processing & Auto-Scroll
-    // -------------------------------------------------------------------------
     let lyrics = [{ t: 0, text: "♪ (Music) ♪" }];
 
     $: if (track && track.id && isOpen) {
@@ -4392,16 +4803,15 @@ export const updateMediaPositionState = (currentTime, duration) => {
         }
     }
 
-    $: activeLyricIdx = Math.max(0, lyrics.findIndex((l, i) =>
-        $playerCurrentTime >= l.t && (i === lyrics.length - 1 || $playerCurrentTime < lyrics[i+1].t)
-    ));
+    $: activeLyricIdx = lyrics ? lyrics.findLastIndex(l => $playerCurrentTime >= l.t) : -1;
 
     $: hasSyncLyrics = lyrics.length > 0 &&
                        lyrics[0].text !== "◆ LYRICS SYNC NOT AVAILABLE ◆" &&
                        lyrics[0].text !== "♪ (Instrumental / No text) ♪" &&
                        lyrics[0].text !== "♪ (Text not available) ♪" &&
                        lyrics[0].text !== "♪ (Instrumental) ♪" &&
-                       lyrics[0].text !== "♪ (Music) ♪";
+                       lyrics[0].text !== "♪ (Music) ♪" &&
+                       lyrics[0].text !== "♪";
 
     const handleUserScroll = () => {
         isUserScrolling = true;
@@ -4409,9 +4819,6 @@ export const updateMediaPositionState = (currentTime, duration) => {
         scrollTimeout = setTimeout(() => { isUserScrolling = false; lastScrolledIdx = -1; }, 3000);
     };
 
-    /**
-     * Keeps the active lyric centered in the viewport
-     */
     $: if (lyricsScrollEl && activeLyricIdx >= 0 && !isUserScrolling && activeLyricIdx !== lastScrolledIdx) {
         lastScrolledIdx = activeLyricIdx;
         const activeLine = lyricsScrollEl.querySelectorAll('.lyric-line')[activeLyricIdx];
@@ -4423,63 +4830,74 @@ export const updateMediaPositionState = (currentTime, duration) => {
         }
     }
 
-    // -------------------------------------------------------------------------
-    // Media Playback Controls
-    // -------------------------------------------------------------------------
-    const togglePlay = () => { 
-        const audio = getAudioEl(); 
-        if (audio) { audio.paused ? audio.play() : audio.pause(); } 
-    };
+    const togglePlay = () => togglePlayGlobal();
+    const playNext = () => playNextGlobal(api);
+    const playPrev = () => playPrevGlobal();
 
-    const playNext = () => { 
-        currentIndex.update(n => (n + 1) % $currentPlaylist.length);
-    };
-
-    const playPrev = () => { 
-        const audio = getAudioEl(); 
-        if (!audio) return;
-        if (audio.currentTime > 3) {
-            audio.currentTime = 0;
-        } else {
-            currentIndex.update(n => (n - 1 + $currentPlaylist.length) % $currentPlaylist.length);
-        }
+    const triggerScrollToTop = () => {
+        const executeScroll = () => {
+            const mainView = document.getElementById('main-view');
+            if (mainView) mainView.scrollTo({ top: 0, behavior: 'smooth' });
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        };
+        requestAnimationFrame(executeScroll);
+        setTimeout(executeScroll, 100);
+        setTimeout(executeScroll, 400); 
     };
 
     const goArtist = () => {
         if (album && album.artistId) {
             handleClose();
             window.location.hash = `#artist/${album.artistId}`;
+            triggerScrollToTop();
+        }
+    };
+    
+    const goAlbum = () => {
+        if (track && track.albumId) {
+            handleClose();
+            window.location.hash = `#album/${track.albumId}`;
+            triggerScrollToTop();
         }
     };
 
-    // -------------------------------------------------------------------------
-    // Seekbar Logic
-    // -------------------------------------------------------------------------
-    const onSeekStart = (e) => { isSeekingBar = true; updateSeek(e); };
-    const onSeekMove = (e) => { if (!isSeekingBar) return; e.preventDefault(); updateSeek(e); };
-    const onSeekEnd = () => { isSeekingBar = false; };
+    let pendingSeekTime = null;
+
+    const onSeekStart = (e) => { 
+        isSeekingBar = true; 
+        updateSeek(e); 
+    };
+
+    const onSeekMove = (e) => { 
+        if (!isSeekingBar) return; 
+        e.preventDefault(); 
+        updateSeek(e); 
+    };
+
+    const onSeekEnd = () => { 
+        isSeekingBar = false; 
+        if (pendingSeekTime !== null) {
+            activePlayer.currentTime = pendingSeekTime;
+            pendingSeekTime = null;
+        }
+    };
 
     const updateSeek = (e) => {
         if (!$playerDuration || !progressContainerEl) return;
         const rect = progressContainerEl.getBoundingClientRect();
         const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-        const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-        const seekTime = pct * $playerDuration;
-        const audioEl = getAudioEl();
-        if (audioEl) audioEl.currentTime = seekTime;
         
-        // Ensure manual finger drag updates DOM visually since frameLoop ignores updates during isSeekingBar
-        if (progressRef) {
-            progressRef.style.transform = `scaleX(${pct})`;
+        const pct = Math.max(0, Math.min(0.990, (clientX - rect.left) / rect.width));
+        pendingSeekTime = pct * $playerDuration;
+        
+        if (progressRef && !isNaN(pct)) {
+            progressRef.style.transform = `translateZ(0) scaleX(${pct})`;
         }
         if (currentTimeRef) {
-            currentTimeRef.textContent = formatTime(seekTime);
+            currentTimeRef.textContent = formatTime(pendingSeekTime);
         }
     };
 
-    // -------------------------------------------------------------------------
-    // Utilities & Helpers
-    // -------------------------------------------------------------------------
     function getDynamicFontSize(text, isActive) {
         if (!isActive) return '10px';
         const containerWidth = 380; 
@@ -4511,23 +4929,18 @@ export const updateMediaPositionState = (currentTime, duration) => {
         };
     };
 
-    // -------------------------------------------------------------------------
-    // Mouse Bloom Tracking (Presets)
-    // -------------------------------------------------------------------------
     const handlePresetMouseMove = (e) => {
         const rect = e.currentTarget.getBoundingClientRect();
         e.currentTarget.style.setProperty('--m-x', `${e.clientX - rect.left}px`);
         e.currentTarget.style.setProperty('--m-y', `${e.clientY - rect.top}px`);
     };
 
-    // -------------------------------------------------------------------------
-    // Core Store Subscriptions (Reactive)
-    // -------------------------------------------------------------------------
     $: track = $currentPlaylist[$currentIndex];
     $: album = track ? $albumsMap.get(track.albumId) : null;
     $: coverUrl = (album && album.coverPath) 
         ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&v=${$appSessionVersion}` 
-        : DEFAULT_PLACEHOLDER;</script>
+        : DEFAULT_PLACEHOLDER;
+</script>
 
 <svelte:window
     bind:innerWidth={innerWidth}
@@ -4543,7 +4956,7 @@ export const updateMediaPositionState = (currentTime, duration) => {
         class="player-transition-wrapper" 
         style="position: fixed; inset: 0; z-index: 9990; pointer-events: none;"
         in:fly={{ y: '100%', duration: 550, easing: quintOut, opacity: 1 }}
-        out:fly={{ y: '100%', duration: 350, easing: expoIn, opacity: 1 }}
+        out:fly={{ y: '100%', duration: isClosingByDrag ? 15 : 350, easing: isClosingByDrag ? linear : expoIn, opacity: 1 }}
     >
         <div
             id="full-player"
@@ -4561,53 +4974,65 @@ export const updateMediaPositionState = (currentTime, duration) => {
                 on:touchmove|preventDefault|nonpassive={onTouchMove} 
                 on:touchend={onTouchEnd}
             >
-                <div class="fp-drag-handle">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                <div class="fp-drag-handle" on:click={handleClose} role="button" tabindex="0">
+                    <div class="ios-handle" class:dragged={isDragging && dragY > 10}>
+                        <div class="ios-handle-left"></div>
+                        <div class="ios-handle-right"></div>
+                    </div>
                 </div>
+                
                 <div class="fp-header">
                     <span class="fp-header-title">NOW PLAYING</span>
-                    <button class="close-btn" aria-label="Close Player" on:click={handleClose}>
-                        <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
-                    </button>
                 </div>
             </div>
 
             <div class="fp-scroll-content">
                 
-                <div class="fp-cover-container">
+                <div class="fp-cover-container" class:shrink={hasSyncLyrics && !coverClick} on:click={handleCoverClick} role="button" tabindex="0">
                     {#key coverUrl}
-                        <img class= "sober-cover" src={coverUrl}  alt="Album Cover" in:fade={{duration: 250}}
-                        on:error={handleImageError}
-                        />
+                        <img class="sober-cover" src={coverUrl} alt="Album Cover" in:fade={{duration: 250}} on:error={handleImageError} />
                     {/key}
                 </div>
 
                 {#if hasSyncLyrics}
-                    <div class="lyrics-preview-window" on:click={() => isLyricsFullScreen = true} role="button" tabindex="0">
-                        <div class="lyrics-preview-strip" style="transform: translate3d(0, calc({-activeLyricIdx} * 24px), 0);">
-                            {#each lyrics as line, i}
-                                <div 
-                                    class="lp-mini-line" 
-                                    class:active={i === activeLyricIdx}
-                                    style="font-size: {getDynamicFontSize(line.text, i === activeLyricIdx)}"
-                                >
-                                    {line.text}
+                    <div transition:slide={{duration: 400}}>
+                        <div class="lyrics-spawn-container">
+                            <div 
+                                class="lyrics-preview-window" 
+                                on:click={() => isLyricsFullScreen = true} 
+                                role="button" 
+                                tabindex="0"
+                            >
+                                <div class="lyrics-preview-strip" style="transform: translate3d(0, calc({-activeLyricIdx} * 24px), 0);">
+                                    {#each lyrics as line, i}
+                                        <div 
+                                            class="lp-mini-line" 
+                                            class:active={i === activeLyricIdx}
+                                            style="font-size: {getDynamicFontSize(line.text, i === activeLyricIdx)}"
+                                        >
+                                            {line.text}
+                                        </div>
+                                    {/each}
                                 </div>
-                            {/each}
+                            </div>
                         </div>
                     </div>
-                {:else}
-                    <div class="spacer-vertical"><br></div>
                 {/if}
 
                 <div class="fp-info">
                     <div class="fp-text-container">
-                        <div class="fp-title marquee">{track ? track.title : '---'}</div>
+                        <div 
+                            class="fp-title marquee"
+                            role="button" 
+                            tabindex="0" 
+                            on:click={goAlbum} 
+                            on:keydown={(e) => e.key === 'Enter' && goAlbum()}
+                        >
+                            {track ? track.title : '---'}</div>
                         <div 
                             class="fp-artist" 
                             role="button" 
                             tabindex="0" 
-                            aria-label="Artist Link" 
                             on:click={goArtist} 
                             on:keydown={(e) => e.key === 'Enter' && goArtist()}
                         >
@@ -4631,7 +5056,7 @@ export const updateMediaPositionState = (currentTime, duration) => {
                         on:mousedown={onSeekStart} 
                         on:touchstart|nonpassive={onSeekStart}
                     >
-                        <div class="fp-progress-track">
+                        <div class="fp-progress-track" class:is-buffering={$isBuffering}>
                             <div class="fp-progress-bar" bind:this={progressRef}></div>
                         </div>
                     </div>
@@ -4707,7 +5132,7 @@ export const updateMediaPositionState = (currentTime, duration) => {
 
                     <div class="lyrics-scroll-box" bind:this={lyricsScrollEl} on:wheel={handleUserScroll} on:touchmove={handleUserScroll}>
                         {#each lyrics as line, i}
-                            <div class="lyric-line" class:active={i === activeLyricIdx} on:click={() => { if (getAudioEl()) getAudioEl().currentTime = line.t; }}>
+                            <div class="lyric-line" class:active={i === activeLyricIdx} on:click={() => { activePlayer.currentTime = line.t; }}>
                                 {line.text}
                             </div>
                         {/each}
@@ -4716,32 +5141,57 @@ export const updateMediaPositionState = (currentTime, duration) => {
             </div>
 
             {#if showQueue}
-                <div class="queue-modal" in:fly={{y: '100%', duration: 400, easing: expoOut}} out:fly={{y: '100%', duration: 300, easing: expoIn}}>
-                    <div class="queue-header">
-                        <h3 class="queue-title">Playing Next</h3>
-                        <button class="btn-icon" on:click={() => showQueue = false}>
-                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-                        </button>
-                    </div>
-                    <div class="queue-list">
-                        {#each $currentPlaylist as t, i}
-                            <div class="queue-item" class:active={i === $currentIndex} role="button" tabindex="0" on:click={() => { currentIndex.set(i); showQueue = false; }}>
+            <div class="queue-modal" in:fly={{y: '100%', duration: 400, easing: expoOut}} out:fly={{y: '100%', duration: 300, easing: expoIn}}>
+                <div class="queue-header">
+                    <h3 class="queue-title">Playing Next</h3>
+                    <button class="btn-icon" on:click={() => showQueue = false}>
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                    </button>
+                </div>
+                
+                <div class="queue-list">
+                    {#each $currentPlaylist as t, i}
+                        <div class="queue-item" class:active={i === $currentIndex} role="button" tabindex="0" on:click={() => { currentIndex.set(i); /*showQueue = false;*/ }}>
+                            <div class="queue-index-col">
                                 {#if i === $currentIndex}
                                     <svg width="16" height="16" viewBox="0 0 24 24" fill="white" stroke="white" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
                                 {:else}
                                     <span class="queue-index">{i + 1}</span>
                                 {/if}
-                                <div class="queue-text">
-                                    <span class="queue-item-title" style={i === $currentIndex ? 'color: white;' : ''}>{t.title}</span>
-                                    <span class="queue-item-artist">{$albumsMap.get(t.albumId)?.artistName || 'Unknown Artist'}</span>
-                                </div>
                             </div>
-                        {/each}
-                    </div>
+
+                            <div class="queue-text">
+                                <span class="queue-item-title" style={i === $currentIndex ? 'color: white;' : ''}>{t.title}</span>
+                                <span class="queue-item-artist">{$albumsMap.get(t.albumId)?.artistName || 'Unknown Artist'}</span>
+                                
+                                {#if activeDownloads[t.id] !== undefined}
+                                   <div class="queue-dl-status-row" transition:fade={{duration: 200}}>
+                                        <div class="queue-dl-track-container">
+                                            <div class="queue-dl-bar" style="transform: scaleX({activeDownloads[t.id] / 100})"></div>
+                                        </div>
+
+                                        <div class="queue-dl-label-wrapper" 
+                                            in:fly={{ y: 4, duration: 500, delay: 500, easing: expoOut }}>
+                                            <span class="queue-dl-label">
+                                                {#if activeDownloads[t.id] < 100}
+                                                    DOWNLOADING {Math.round(activeDownloads[t.id])}%
+                                                {:else}
+                                                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="4"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                                    AVAILABLE OFFLINE
+                                                {/if}
+                                            </span>
+                                        </div>
+                                    </div>
+                                {/if}
+                            </div>
+                        </div>
+                    {/each}
                 </div>
-            {/if}
+            </div>
+        {/if}
+
         </div>
-    </div>
+        </div>
 
     {#if isLyricsFullScreen}
         <div class="lyrics-modal-popup" use:portal={true} in:fly={{y: '100%', duration: 400, easing: expoOut}} out:fly={{y: '100%', duration: 200, easing: expoIn}}>
@@ -4753,7 +5203,7 @@ export const updateMediaPositionState = (currentTime, duration) => {
             </div>
             <div class="lyrics-scroll-box popup-version" bind:this={lyricsScrollEl} on:wheel={handleUserScroll} on:touchmove={handleUserScroll}>
                 {#each lyrics as line, i}
-                    <div class="lyric-line" class:active={i === activeLyricIdx} on:click={() => { if (getAudioEl()) getAudioEl().currentTime = line.t; }}>
+                    <div class="lyric-line" class:active={i === activeLyricIdx} on:click={() => { activePlayer.currentTime = line.t; }}>
                         {line.text}
                     </div>
                 {/each}
@@ -4763,33 +5213,30 @@ export const updateMediaPositionState = (currentTime, duration) => {
 {/if}
 
 <style>
-    /* -------------------------------------------------------------------------
-    * Layout & Container Physics
-    * ------------------------------------------------------------------------- */
     #full-player {
+        --fp-offset: 18px;
+        --base-header-height: 64px;
+        --base-footer-height: 80px;
+
+        --fp-height-top: calc(var(--base-header-height) + var(--fp-offset));
+        --fp-height-bottom: calc(var(--base-footer-height) - var(--fp-height-top));
+
         position: fixed !important;
-        /* Desktop Positioning: Account for status bars (64px top / 80px bottom) */
-        top: 64px !important; 
-        bottom: 80px !important;
+        top: var(--fp-height-top) !important; 
+        bottom: var(--fp-height-bottom) !important;
         right: 0 !important; 
-        left: auto !important; /* Fixing the left offset */
+        left: auto !important;
         width: 420px !important; 
         max-width: 100vw !important;
-        
-        /* Robust height calculation */
         height: calc(100dvh - 144px) !important;
-        
         display: flex !important; 
         flex-direction: column !important;
         color: white !important;
         overflow: hidden !important; 
         isolation: isolate !important;
-
-        /* Force hardware composite layer for smooth transforms on iOS */
         will-change: transform;
         -webkit-backface-visibility: hidden;
         backface-visibility: hidden;
-        
         background: linear-gradient(to bottom, rgba(255,255,255,0.08) 0%, transparent 15%),
                     linear-gradient(to bottom, rgba(0,0,0,0.45), rgba(0,0,0,0.9)),
                     var(--accent-color) !important;
@@ -4797,17 +5244,12 @@ export const updateMediaPositionState = (currentTime, duration) => {
         -webkit-backdrop-filter: blur(50px) saturate(210%) brightness(1.1) !important;
     }
 
-    /* Instantly kill transitions during drag to allow 1:1 hardware finger tracking */
-    #full-player.is-dragging {
-        transition: none !important;
-    }
+    #full-player.is-dragging { transition: none !important; }
 
-    /* Smooth snap-back transition if released without closing */
     #full-player:not(.is-dragging) {
-        transition: 
-            transform 0.4s cubic-bezier(0.3, 0, 0.1, 1),
-            backdrop-filter 0.4s ease,
-            -webkit-backdrop-filter 0.4s ease;
+        transition: transform 0.4s cubic-bezier(0.3, 0, 0.1, 1),
+                    backdrop-filter 0.4s ease,
+                    -webkit-backdrop-filter 0.4s ease;
     }
 
     #full-player.is-closing {
@@ -4818,33 +5260,19 @@ export const updateMediaPositionState = (currentTime, duration) => {
         transition: none !important;
     }
 
-    /* Instantly drop the heavy GPU filters when dragging or closing */
-    #full-player.is-closing,
-    #full-player.is-dragging {
-        backdrop-filter: none !important;
-        -webkit-backdrop-filter: none !important;
-        
-        /* Fallback to a solid opaque gradient so it doesn't look transparent */
-        transition: none !important;
-    }
-
     #full-player.max-glass { 
-        height: calc(100dvh - 210px) !important; 
-        top: 76px !important; 
-        right: 12px !important; 
+        height: calc(100dvh - 220px) !important; 
+        top: 80px; 
+        right: 16px !important; 
         border-radius: 32px !important; 
         border: 1px solid rgba(255, 255, 255, 0.2) !important; 
         box-shadow: 0 25px 50px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.1) !important;
     }
 
-    /* -------------------------------------------------------------------------
-    * Interaction Zones
-    * ------------------------------------------------------------------------- */
     .drag-zone { 
-        /* CRITICAL: touch-action none prevents iOS rubber-banding while dragging drawer */
         touch-action: none !important; 
         flex-shrink: 0; 
-        padding: 32px 24px 0 24px; 
+        padding: 16px 24px 0 24px; 
         cursor: grab;
     }
     .drag-zone:active { cursor: grabbing; }
@@ -4859,17 +5287,39 @@ export const updateMediaPositionState = (currentTime, duration) => {
     .fp-scroll-content::-webkit-scrollbar { display: none; }
 
     .fp-drag-handle { 
-        display: none; /* Desktop arrow handle */
+        display: flex; 
         width: 100%;
         justify-content: center;
         align-items: center;
-        color: rgba(255, 255, 255, 0.3);
-        margin-bottom: 8px;
+        margin-bottom: 4px;
+        padding: 8px 0;
+        outline: none;
     }
+    .ios-handle {
+        display: flex;
+        width: 40px;
+        height: 24px;
+        justify-content: center;
+        align-items: center;
+        cursor: pointer;
+    }
+    .ios-handle-left, .ios-handle-right {
+        width: 20px;
+        height: 5px;
+        background: rgba(255, 255, 255, 0.3);
+        transition: transform 0.2s ease, background 0.2s ease;
+    }
+    .ios-handle-left {
+        border-radius: 3px 0 0 3px;
+        transform-origin: center right;
+    }
+    .ios-handle-right {
+        border-radius: 0 3px 3px 0;
+        transform-origin: center left;
+    }
+    .ios-handle.dragged .ios-handle-left { transform: rotate(15deg); }
+    .ios-handle.dragged .ios-handle-right { transform: rotate(-15deg); }
 
-    /* -------------------------------------------------------------------------
-    * Sub-views (Queue & Lyrics Popups)
-    * ------------------------------------------------------------------------- */
     .queue-modal {
         position: absolute; inset: 0; z-index: 100000;
         background: rgba(15, 15, 15, 0.95);
@@ -4891,6 +5341,86 @@ export const updateMediaPositionState = (currentTime, duration) => {
     .queue-item-title { font-weight: 600; font-size: 15px; color: white; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px; }
     .queue-item-artist { font-size: 13px; color: rgba(255,255,255,0.5); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
+    .queue-dl-status-row {
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center; /* Centering the content */
+        width: 100%;
+        margin-top: 8px;
+        height: 16px;
+    }
+
+    /* The Label Wrapper: Handles the fading background mask */
+    .queue-dl-label-wrapper {
+        position: relative;
+        z-index: 2;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        padding: 0 24px; 
+        
+        /* Your improved wide gradient */
+        background: linear-gradient(
+            90deg, 
+            transparent 0%, 
+            #0f0f0f 10%, 
+            #0f0f0f 90%, 
+            transparent 100%
+        );
+
+        /* Prevents any flickering before the 1s animation starts */
+        will-change: transform, opacity;
+    }
+
+    .queue-dl-label {
+        font-size: 8px;
+        font-weight: 900;
+        letter-spacing: 0.1em;
+        color: rgba(255, 255, 255, 0.9); /* Neutral text color */
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        text-transform: uppercase;
+        white-space: nowrap;
+    }
+
+    /* The Progress Track (Larger height, neutral color) */
+    .queue-dl-track-container {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 50%;
+        transform: translateY(-50%);
+        height: 3px; /* Larger height as requested */
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 4px;
+        overflow: hidden;
+        z-index: 1;
+    }
+
+    /* The Filling Bar (Neutral White/Gray) */
+    .queue-dl-bar {
+        height: 100%;
+        width: 100%;
+        background: rgba(255, 255, 255, 0.5); /* No accent color */
+        transform-origin: left;
+        transition: transform 0.4s cubic-bezier(0.32, 0.72, 0, 1);
+        will-change: transform;
+    }
+
+    /* Ensure queue items have enough vertical space */
+    .queue-item {
+        padding: 16px 12px;
+    }
+
+    /* Hover effect similar to your .fp-progress-track */
+    .queue-dl-status-row:hover .queue-dl-track-container {
+        height: 4px;
+        background: rgba(255, 255, 255, 0.2);
+        transition: height 0.3s ease;
+    }
+
     .lyrics-modal-popup {
         position: fixed; inset: 0;
         background: rgba(15, 15, 15, 0.95);
@@ -4905,15 +5435,35 @@ export const updateMediaPositionState = (currentTime, duration) => {
     .popup-version .lyric-line { font-size: 24px; margin-bottom: 24px; transform-origin: center; }
     .popup-version .lyric-line.active { font-size: 36px; }
 
-    /* -------------------------------------------------------------------------
-    * UI Components (Cover, Lyrics Strip, Controls)
-    * ------------------------------------------------------------------------- */
-    .lyrics-preview-window {
-        height: 72px; overflow: hidden; position: relative;
-        margin-bottom: 16px; cursor: pointer;
-        -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 35%, black 65%, transparent 100%);
-        mask-image: linear-gradient(to bottom, transparent 0%, black 35%, black 65%, transparent 100%);
+    @keyframes iosPremiumSpawn {
+    0% {
+        opacity: 0;
+        transform: translate3d(0, 16px, 0) scale(0.96);
     }
+    100% {
+        opacity: 1;
+        transform: translate3d(0, 0, 0) scale(1);
+    }
+}
+
+    .lyrics-spawn-container {
+    padding-bottom: 16px; 
+    animation: iosPremiumSpawn 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+    will-change: transform, opacity;
+}
+
+.lyrics-preview-window {
+    height: 72px; 
+    overflow: hidden; 
+    position: relative;
+    cursor: pointer;
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0%, rgba(0,0,0,1) 35%, rgba(0,0,0,1) 65%, transparent 100%);
+    mask-image: linear-gradient(to bottom, transparent 0%, rgba(0,0,0,1) 35%, rgba(0,0,0,1) 65%, transparent 100%);
+    -webkit-mask-size: 100% 100%;
+    -webkit-mask-repeat: no-repeat;
+    -webkit-transform: translateZ(0);
+    transform: translateZ(0);
+}
 
     .lyrics-preview-strip {
         width: 100%; transition: transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1); padding-top: 24px;
@@ -4947,9 +5497,6 @@ export const updateMediaPositionState = (currentTime, duration) => {
         font-variant-numeric: tabular-nums; transform: translateZ(0); will-change: contents;
     }
 
-    /* -------------------------------------------------------------------------
-    * Preset Chips with Mouse Bloom 
-    * ------------------------------------------------------------------------- */
     .preset-scroll {
         display: flex; gap: 8px; overflow-x: auto; border-bottom: 1px solid rgba(255,255,255,0.05);
         padding: 8px 14px !important; margin: -8px -4px 12px -4px !important; align-items: center;
@@ -4962,81 +5509,99 @@ export const updateMediaPositionState = (currentTime, duration) => {
         font-weight: 700; cursor: pointer; 
         position: relative;
         overflow: hidden;
-        -webkit-tap-highlight-color: transparent; /* Prevent iOS native gray highlight flash */
-        transition: 
-            background 0.3s ease, 
-            box-shadow 0.3s ease, 
-            filter 0.3s ease,
-            transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1),
-            color 0.3s ease,
-            border-color 0.3s ease;
+        -webkit-tap-highlight-color: transparent; 
+        transition: background 0.3s ease, box-shadow 0.3s ease, filter 0.3s ease,
+                    transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), color 0.3s ease, border-color 0.3s ease;
     }
 
-    /* Mouse Bloom Effect for Preset Chips */
     .preset-chip::after {
-        content: "";
-        position: absolute;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        background: radial-gradient(
-            circle at var(--m-x) var(--m-y), 
-            rgba(255, 255, 255, 0.25), 
-            transparent 70%
-        );
-        opacity: 0;
-        transition: opacity 0.4s ease;
-        pointer-events: none;
-        z-index: 0;
+        content: ""; position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+        background: radial-gradient(circle at var(--m-x) var(--m-y), rgba(255, 255, 255, 0.25), transparent 70%);
+        opacity: 0; transition: opacity 0.4s ease; pointer-events: none; z-index: 0;
     }
 
-    .preset-chip:hover::after {
-        opacity: 1;
-    }
-
+    .preset-chip:hover::after { opacity: 1; }
     .preset-chip:hover {
-        background: rgba(255, 255, 255, 0.1); 
-        border-color: rgba(255, 255, 255, 0.2);
-        box-shadow: 0 0 30px rgba(255, 255, 255, 0.1), inset 0 0 10px rgba(255, 255, 255, 0.1);
-        filter: brightness(1.2);
+        background: rgba(255, 255, 255, 0.1); border-color: rgba(255, 255, 255, 0.2);
+        box-shadow: 0 0 30px rgba(255, 255, 255, 0.1), inset 0 0 10px rgba(255, 255, 255, 0.1); filter: brightness(1.2);
     }
-
-    .preset-chip:active {
-        transform: scale(0.94) !important;
-        filter: brightness(0.9);
-        transition: transform 0.1s ease;
-    }
-
+    .preset-chip:active { transform: scale(0.94) !important; filter: brightness(0.9); transition: transform 0.1s ease; }
     .preset-chip.active { 
-        background: white !important; color: black !important; 
-        border-color: white !important; box-shadow: 0 0 15px rgba(255,255,255,0.4) !important; transform: scale(1.05) !important; 
-        filter: brightness(1) !important; /* Lock brightness to prevent hover interference on tap */
+        background: white !important; color: black !important; border-color: white !important; 
+        box-shadow: 0 0 15px rgba(255,255,255,0.4) !important; transform: scale(1.05) !important; filter: brightness(1) !important; 
     }
-    
-    .preset-chip.active::after {
-        display: none; /* Hide bloom when actively selected to keep solid white */
-    }
+    .preset-chip.active::after { display: none; }
 
-    .fp-sliders, .full-lyrics-card {
-        background: rgba(255, 255, 255, 0.04) !important; border: 1px solid rgba(255, 255, 255, 0.15) !important;
-        border-radius: 28px !important; backdrop-filter: blur(40px) saturate(200%) brightness(1.1) !important;
-        -webkit-backdrop-filter: blur(40px) saturate(200%) brightness(1.1) !important;
-        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4), inset 0 1px 1px rgba(255, 255, 255, 0.2) !important;
-        transition: all 0.5s cubic-bezier(0.16, 1, 0.3, 1) !important;
-    }
-
-    .fp-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; min-height: 28px; }
-    .fp-header-title { font-size: 12px; font-weight: 600; letter-spacing: 1px; color: rgba(255,255,255,0.9); }
+    .fp-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; margin-top: -10px; min-height: 20px; }
+    .fp-header-title { font-size: 12px; font-weight: 600; letter-spacing: 1px; color: rgba(255,255,255,0.9); padding-bottom: 10px;}
     .close-btn { background: none; border: none; color: rgba(255,255,255,0.9); cursor: pointer; padding: 8px; border-radius: 50%; transition: background 0.2s; }
     .close-btn:hover { background: rgba(255,255,255,0.1); }
 
-    .fp-cover-container { display: flex; align-items: center; justify-content: center; margin-bottom: 16px; }
-    .sober-cover { width: 100%; max-width: 350px; aspect-ratio: 1/1; object-fit: cover; border-radius: 12px; box-shadow: 0 15px 40px rgba(0,0,0,0.5); pointer-events: none; }
+    .fp-cover-container { 
+    display: flex; 
+    align-items: center; 
+    justify-content: center; 
+    width: 100%; 
+    max-width: 350px; 
+    
+    margin: 0 auto 24px auto; 
+    
+    transition: max-width 0.4s cubic-bezier(0.25, 1, 0.5, 1),
+                margin-bottom 0.4s cubic-bezier(0.25, 1, 0.5, 1); 
+    
+    will-change: max-width, margin-bottom;
+    -webkit-transform: translate3d(0,0,0);
+    transform: translate3d(0,0,0);
+}
 
-    .fp-info { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; padding: 0; }
+.fp-cover-container.shrink {
+    max-width: 262px; 
+    
+    margin-bottom: 16px; 
+}
+
+    .sober-cover { 
+        width: 100%; 
+        height: auto; 
+        aspect-ratio: 1/1; 
+        object-fit: cover; 
+        border-radius: 12px; 
+        box-shadow: 0 15px 40px rgba(0,0,0,0.5); 
+        pointer-events: none; 
+        -webkit-backface-visibility: hidden;
+        backface-visibility: hidden;
+        -webkit-transform: translate3d(0,0,0);
+        transform: translate3d(0,0,0);
+    }
+
+    .fp-info, 
+    .fp-progress-section, 
+    .fp-controls,
+    .fp-sliders {
+        transition: transform 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+        will-change: transform;
+        -webkit-backface-visibility: hidden;
+        backface-visibility: hidden;
+    }
+
+    .fp-info { 
+    display: flex; 
+    justify-content: space-between; 
+    align-items: center; 
+    margin-bottom: 16px; 
+    padding: 0;
+}
+
+    .fp-info.enlarge,
+    .fp-info.enlarge ~ .fp-progress-section,
+    .fp-info.enlarge ~ .fp-controls,
+    .fp-info.enlarge ~ .fp-sliders { 
+        -webkit-transform: translate3d(0, 30px, 0);
+        transform: translate3d(0, 30px, 0);
+    }
+
     .fp-text-container { min-width: 0; flex: 1; display: flex; flex-direction: column; text-align: left; }
-    .fp-title { font-size: 20px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: white; margin-bottom: 4px; }
+    .fp-title { font-size: 20px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: white; margin-bottom: 4px; cursor: pointer}
     .fp-artist { font-size: 14px; color: rgba(255,255,255,0.7); cursor: pointer; transition: color 0.2s; }
     .fp-artist:hover { color: white; text-decoration: underline; }
 
@@ -5048,41 +5613,25 @@ export const updateMediaPositionState = (currentTime, duration) => {
     .btn-icon:hover { color: white; }
     .btn-icon.active { color: white; }
 
-    /* --- FP Button Ported CSS --- */
     .fp-btn-main { 
-        width: 48px; 
-        height: 48px; 
-        border-radius: 50%; 
-        border: none; 
-        background: white; 
-        color: black; 
-        display: flex; 
-        align-items: center; 
-        justify-content: center; 
-        cursor: pointer; 
-        position: relative; 
-        z-index: 1; 
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3), 
-                    0 0 5px 2px rgba(255, 255, 255, 0.6), 
-                    0 0 25px rgba(255, 255, 255, 0.2) !important; 
-        transition: transform 0.2s cubic-bezier(0.32, 0.72, 0, 1), 
-                    box-shadow 0.3s ease !important; 
+        width: 48px; height: 48px; border-radius: 50%; border: none; background: white; color: black; 
+        display: flex; align-items: center; justify-content: center; cursor: pointer; position: relative; z-index: 1; 
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3), 0 0 5px 2px rgba(255, 255, 255, 0.6), 0 0 25px rgba(255, 255, 255, 0.2) !important; 
+        transition: transform 0.2s cubic-bezier(0.32, 0.72, 0, 1), box-shadow 0.3s ease !important; 
     }
-
     .fp-btn-main:hover { 
         transform: scale(1.08) !important;
-        box-shadow: 0 0 20px rgba(255, 255, 255, 0.4), 
-                    0 0 10px rgba(255, 255, 255, 0.2), 
-                    0 0 4px rgba(255, 255, 255, 0.1) !important; 
+        box-shadow: 0 0 20px rgba(255, 255, 255, 0.4), 0 0 10px rgba(255, 255, 255, 0.2), 0 0 4px rgba(255, 255, 255, 0.1) !important; 
     }
+    .fp-btn-main:active { transform: scale(0.96) !important; filter: brightness(0.9); }
 
-    .fp-btn-main:active { 
-        transform: scale(0.96) !important; 
-        filter: brightness(0.9); 
+    .fp-sliders { 
+        padding: 16px; border-radius: 8px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); margin-bottom: 24px;
+        background: rgba(255, 255, 255, 0.04) !important; border: 1px solid rgba(255, 255, 255, 0.15) !important;
+        border-radius: 28px !important; backdrop-filter: blur(40px) saturate(200%) brightness(1.1) !important;
+        -webkit-backdrop-filter: blur(40px) saturate(200%) brightness(1.1) !important;
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4), inset 0 1px 1px rgba(255, 255, 255, 0.2) !important;
     }
-
-    .fp-sliders { padding: 16px; border-radius: 8px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); margin-bottom: 24px;}
-
     .fp-slider-row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
     .label-accent { color: var(--accent-color, #ffffff) !important; width: 32px; font-size: 11px; text-align: right; }
     .label-freq { width: 32px; font-size: 11px; text-align: right; color: rgba(255,255,255,0.7); }
@@ -5104,7 +5653,13 @@ export const updateMediaPositionState = (currentTime, duration) => {
         width: 14px; height: 14px; border-radius: 50%; background: white; cursor: pointer; border: none; box-shadow: 0 0 8px rgba(0,0,0,0.8); 
     }
 
-    .full-lyrics-card { padding: 24px; border-radius: 8px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); display: flex; flex-direction: column; flex-shrink: 0; height: 350px; transition: all 0.3s cubic-bezier(0.2, 0.8, 0.2, 1); }
+    .full-lyrics-card { 
+        padding: 24px; border-radius: 8px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); display: flex; flex-direction: column; flex-shrink: 0; height: 350px; transition: all 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+        background: rgba(255, 255, 255, 0.04) !important; border: 1px solid rgba(255, 255, 255, 0.15) !important;
+        border-radius: 28px !important; backdrop-filter: blur(40px) saturate(200%) brightness(1.1) !important;
+        -webkit-backdrop-filter: blur(40px) saturate(200%) brightness(1.1) !important;
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4), inset 0 1px 1px rgba(255, 255, 255, 0.2) !important; 
+    }
     .lyrics-header-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
     .lyrics-header-row h3 { margin: 0; font-size: 14px; color: var(--accent-color, #ffffff) !important; text-transform: uppercase; letter-spacing: 1px; font-weight: 800; }
     .lyric-line { font-size: 16px; font-weight: 600; color: rgba(255,255,255,0.3); margin-bottom: 16px; transition: all 0.4s cubic-bezier(0.2, 0.8, 0.2, 1); transform-origin: left center; cursor: pointer; }
@@ -5114,12 +5669,9 @@ export const updateMediaPositionState = (currentTime, duration) => {
     .lyrics-scroll-box { flex: 1; overflow-y: auto; padding-right: 8px; display: flex; flex-direction: column; scroll-behavior: smooth; position: relative; scrollbar-width: none; -ms-overflow-style: none;}
     .lyrics-scroll-box::-webkit-scrollbar { display: none; }
 
-    /* -------------------------------------------------------------------------
-    * Final Polish & Mobile Tweaks
-    * ------------------------------------------------------------------------- */
     @media (max-width: 768px) {
         #full-player { 
-            top: 0 !important; 
+            top: 60px !important; 
             bottom: 0 !important; 
             left: 0 !important; 
             right: 0 !important; 
@@ -5131,11 +5683,30 @@ export const updateMediaPositionState = (currentTime, duration) => {
             border-left: none !important; 
             border-radius: 0 !important;
             z-index: 999999 !important; 
-            padding-bottom: max(32px, env(safe-area-inset-bottom)) !important; 
+            padding-bottom: max(16px, env(safe-area-inset-bottom)) !important; 
         }
-        .fp-drag-handle { display: flex; width: 100%; justify-content: center; align-items: center; color: rgba(255,255,255,0.4); margin-top: -12px; margin-bottom: 8px; }
-        .drag-zone { padding-top: max(32px, env(safe-area-inset-top)); }
+        .drag-zone { padding-top: max(16px, env(safe-area-inset-top)); }
         .close-btn { display: none; }
+    }
+
+    @keyframes buffer-wave {
+        0% { transform: translateX(-100%); }
+        100% { transform: translateX(100%); }
+    }
+
+    .is-buffering {
+        position: relative;
+        overflow: hidden !important; 
+    }
+
+    .is-buffering::after {
+        content: "";
+        position: absolute;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.4), transparent);
+        animation: buffer-wave 1.2s infinite linear;
+        z-index: 5;
+        pointer-events: none;
     }
 </style>
 </file>
@@ -5276,10 +5847,23 @@ export const updateMediaPositionState = (currentTime, duration) => {
 <file path="src/lib/Player.svelte">
 <script>
   import { onMount, createEventDispatcher } from 'svelte';
-  import { currentPlaylist, currentIndex, isPlaying, isShuffle, isRepeat, shuffleHistory, albumsMap, playerCurrentTime, playerDuration, accentColor, isMaxGlassActive, isDesktopSwapActive, appSessionVersion } from '../store.js';
-  import { initAudioEngine, audioCtx, updateMediaSession, registerAudioElement, setVolumeBoost, unlockAudioContext, updateMediaPositionState, isEngineInitialized, resumePromise } from './audio.js';  import { api } from './api.js';
-  import { formatTime } from './utils.js';
+  import { 
+    currentPlaylist, currentIndex, isPlaying, isShuffle, isRepeat, 
+    shuffleHistory, albumsMap, playerCurrentTime, playerDuration, 
+    accentColor, isMaxGlassActive, isDesktopSwapActive, appSessionVersion,
+    isBuffering
+  } from '../store.js';
   
+  // Updated imports pointing to the new WebAudio gapless engine
+  import { 
+    audioCtx, updateMediaSession, setVolumeBoost, 
+    unlockAudioContext, updateMediaPositionState, isEngineInitialized, 
+    togglePlayGlobal, playNextGlobal, playPrevGlobal, 
+    loadAndPlayBuffer, preloadNextTrack, playEngine, pauseEngine, seekEngine
+  } from './audio.js';
+  
+  import { api } from './api.js';
+  import { formatTime } from './utils.js';
 
   const dispatch = createEventDispatcher();
 
@@ -5288,12 +5872,10 @@ export const updateMediaPositionState = (currentTime, duration) => {
       ev.target.src = DEFAULT_PLACEHOLDER;
   };
 
-  let audioEl;
   let volume = 100;
   let progressBarNode;
   let animationFrameId;
 
-  // Mouse tracking for bloom effect
   let mouseX = 0;
   let mouseY = 0;
 
@@ -5313,16 +5895,19 @@ export const updateMediaPositionState = (currentTime, duration) => {
   $: fileExt = track ? track.filePath.split('.').pop().toUpperCase() : 'UNK';
   $: bitrate = track ? track.bitrate : 0;
 
-  $: if (audioEl) audioEl.volume = volume / 100;
+  // Use the Web Audio volume boost instead of HTMLMediaElement volume
+  $: {
+    setVolumeBoost(volume / 100);
+  }
 
-  $: if (track && album && audioEl) {
+  $: if (track && album) { 
     updateMediaSession(track, album, {
-      play: () => audioEl.play(),
-      pause: () => audioEl.pause(),
+      play: () => playEngine(),
+      pause: () => pauseEngine(),
       next: playNext,
       prev: playPrev,
-      seek: (time) => { audioEl.currentTime = time; },
-      seekRelative: (offset) => { audioEl.currentTime = Math.max(0, Math.min(audioEl.duration, audioEl.currentTime + offset)); }
+      seek: (time) => seekEngine(time),
+      seekRelative: (offset) => seekEngine($playerCurrentTime + offset)
     });
   }
 
@@ -5343,9 +5928,7 @@ export const updateMediaPositionState = (currentTime, duration) => {
 
   let startY = 0;
   let isSwiping = false;
-  let isFullPlayerOpen = false;
 
-  // PROCEDURE: Detect Swipe Up on Mini Player
   const handleTouchStart = (e) => {
     startY = e.touches[0].clientY;
     isSwiping = true;
@@ -5356,16 +5939,13 @@ export const updateMediaPositionState = (currentTime, duration) => {
     const currentY = e.touches[0].clientY;
     const deltaY = currentY - startY;
 
-    // If swiping UP (negative) more than 60px
-    if (deltaY < -60) {
+    if (deltaY < -80) {
       isSwiping = false;
-      isFullPlayerOpen = true; // Opens the component moved outside
+      dispatch('toggleFull'); 
     }
   };
 
-  const handleTouchEnd = () => {
-    isSwiping = false;
-  };
+  const handleTouchEnd = () => { isSwiping = false; };
 
   let currentObjUrl = null;
   const DEFAULT_COLOR = 'rgb(181, 52, 209)';
@@ -5392,11 +5972,8 @@ export const updateMediaPositionState = (currentTime, duration) => {
       currentObjUrl = objUrl; 
 
       const img = new Image();
-      
       img.onload = () => {
-        
         if (currentObjUrl !== objUrl) return; 
-
         try {
           const cvs = document.createElement('canvas');
           cvs.width = 1; cvs.height = 1;
@@ -5405,14 +5982,12 @@ export const updateMediaPositionState = (currentTime, duration) => {
           ctx.drawImage(img, 0, 0, 1, 1);
           const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
           
-          
           const boost = Math.max(r, g, b) < 40 ? 50 : 0;
           applyColor(`rgb(${r + boost}, ${g + boost}, ${b + boost})`);
         } catch (e) {
           applyColor(DEFAULT_COLOR);
         }
       };
-
       img.onerror = () => applyColor(DEFAULT_COLOR);
       img.src = objUrl;
 
@@ -5421,7 +5996,6 @@ export const updateMediaPositionState = (currentTime, duration) => {
     }
   };
 
-  
   const applyColor = (color) => {
     accentColor.set(color);
     document.documentElement.style.setProperty('--accent-color', color);
@@ -5436,11 +6010,11 @@ export const updateMediaPositionState = (currentTime, duration) => {
       case ' ': e.preventDefault(); togglePlay(); break;
       case 'l':
         if (e.shiftKey) playNext();
-        else if (audioEl) audioEl.currentTime = Math.min(audioEl.duration, audioEl.currentTime + 5);
+        else seekEngine(Math.min($playerDuration, $playerCurrentTime + 5));
         break;
       case 'h':
         if (e.shiftKey) playPrev();
-        else if (audioEl) audioEl.currentTime = Math.max(0, audioEl.currentTime - 5);
+        else seekEngine(Math.max(0, $playerCurrentTime - 5));
         break;
       case 'k': e.preventDefault(); volume = Math.min(100, volume + 5); break;
       case 'j': e.preventDefault(); volume = Math.max(0, volume - 5); break;
@@ -5448,19 +6022,22 @@ export const updateMediaPositionState = (currentTime, duration) => {
   };
 
   const updateProgressBarLoop = () => {
-    if (audioEl && progressBarNode) {
-      const current = audioEl.currentTime;
-      const total = audioEl.duration || 1; // Prevent division by zero
-      const pct = (current / total) * 100;
-      // Bypass Svelte reactivity and update the DOM directly
-      progressBarNode.style.width = `${pct}%`;
+    if (progressBarNode) {
+      progressBarNode.style.width = `${progressPct}%`;
     }
     animationFrameId = requestAnimationFrame(updateProgressBarLoop);
   };
 
-  onMount(() => {
-    registerAudioElement(audioEl);
+  let lastSave = 0;
+  $: {
+      const ct = $playerCurrentTime;
+      if (ct - lastSave > 3 || ct < lastSave) {
+          safeSetStorage('psyzx_time', ct.toString());
+          lastSave = ct;
+      }
+  }
 
+  onMount(() => {
     animationFrameId = requestAnimationFrame(updateProgressBarLoop);
 
     const savedPl = safeGetStorage('psyzx_playlist');
@@ -5470,14 +6047,10 @@ export const updateMediaPositionState = (currentTime, duration) => {
       try {
         currentPlaylist.set(JSON.parse(savedPl));
         currentIndex.set(parseInt(savedIdx) || 0);
-        setTimeout(() => { if (audioEl) audioEl.currentTime = parseFloat(savedTime) || 0; }, 300);
+        setTimeout(() => { seekEngine(parseFloat(savedTime) || 0); }, 300);
       } catch(e) {}
     }
-
-    return () => {
-      // Cleanup loop on destroy
-      cancelAnimationFrame(animationFrameId);
-    };
+    return () => cancelAnimationFrame(animationFrameId);
   });
 
   $: if ($currentPlaylist.length > 0) {
@@ -5485,59 +6058,11 @@ export const updateMediaPositionState = (currentTime, duration) => {
     safeSetStorage('psyzx_index', $currentIndex.toString());
   }
 
-  let lastSave = 0;
-  const handleTimeUpdate = () => {
-    const currentTime = audioEl.currentTime;
-    const duration = audioEl.duration;
-    
-    // Tell iOS exactly where the scrubber should be
-    playerCurrentTime.set(audioEl.currentTime);
-    
-    if (audioEl.currentTime - lastSave > 3 || audioEl.currentTime < lastSave) {
-        safeSetStorage('psyzx_time', audioEl.currentTime.toString());
-        lastSave = audioEl.currentTime;
-    }
-  };
-
   let lastUrl = '';
-  $: if (streamUrl && audioEl && streamUrl !== lastUrl) {
-    console.log(`[Audio Debug] URL changed to: ${streamUrl}`);
+  $: if (streamUrl && streamUrl !== lastUrl) {
     lastUrl = streamUrl;
+    loadAndPlayBuffer(streamUrl, track.id);
 
-    const executeSafePlay = async () => {
-        try {
-            // 1. Wait for iOS hardware to finish transitioning BEFORE changing the src.
-            // We use a 300ms race timeout just in case Safari's promise engine hangs.
-            if (resumePromise) {
-                await Promise.race([
-                    resumePromise,
-                    new Promise(resolve => setTimeout(resolve, 300))
-                ]);
-            }
-
-            // 2. NOW change the src safely. The context is stable.
-            audioEl.crossOrigin = "anonymous";
-            audioEl.src = streamUrl;
-            console.log("[Audio Debug] src assigned safely after hardware transition.");
-
-            // 3. Play
-            await audioEl.play();
-            console.log("[Audio Debug] Playback started successfully.");
-
-        } catch (e) {
-            // AbortError is normal HTML5 behavior when tracks are skipped rapidly.
-            if (e.name !== 'AbortError') {
-                console.error("[Audio Debug] Playback blocked by iOS:", e);
-            } else {
-                console.log("[Audio Debug] Previous stream aborted smoothly (Track skipped).");
-            }
-        }
-    };
-
-    // Fire the async sequence
-    executeSafePlay();
-
-    // --- Increment Play Count & Force UI Reactivity ---
     if (track) {
       api.recordPlay(track.id);
       albumsMap.update(map => {
@@ -5545,132 +6070,39 @@ export const updateMediaPositionState = (currentTime, duration) => {
         if (targetAlbum) {
           targetAlbum.playCount = (targetAlbum.playCount || 0) + 1;
           const targetTrack = targetAlbum.tracks.find(t => t.id === track.id);
-          if (targetTrack) {
-            targetTrack.playCount = (targetTrack.playCount || 0) + 1;
-          }
+          if (targetTrack) targetTrack.playCount = (targetTrack.playCount || 0) + 1;
         }
         return new Map(map); 
       });
     }
   }
   
-  const togglePlay = () => {
-    if (!track) return;
-
-    // 1. Wake context immediately ON THE CLICK (Synchronous)
-    unlockAudioContext(); 
-    if (!isEngineInitialized) initAudioEngine();
-
-    if (audioEl.paused) {
-      // 3. Play immediately, catch errors silently
-      audioEl.play().catch(err => {
-        console.error("PWA Playback blocked:", err);
-      });
-    } else {
-      audioEl.pause();
-    }
-  };
-
-  const playNext = async () => {
-    unlockAudioContext();
-    if (!isEngineInitialized) initAudioEngine();
-
-    if ($currentPlaylist.length === 0) return;
-
-    // --- INFINITE QUEUE LOGIC ---
-    if (!$isRepeat && $currentIndex === $currentPlaylist.length - 1) {
-        const seedTrackId = $currentPlaylist[$currentIndex].id;
-        const newTracks = await api.getRadioMix(seedTrackId);
-        
-        if (newTracks.length > 0) {
-            currentPlaylist.update(list => [...list, ...newTracks]);
-            if (typeof window !== 'undefined') console.log("📻 Infinite Radio: Added tracks");
-        } else {
-            audioEl.pause();
-            return;
-        }
-    }
-    // ----------------------------
-
-    // Standard Play Next Logic
-    if ($isShuffle) {
-      let unplayed = Array.from({length: $currentPlaylist.length}, (_, i) => i).filter(i => !$shuffleHistory.includes(i) && i !== $currentIndex);
-      if (unplayed.length === 0) {
-        shuffleHistory.set([]);
-        unplayed = Array.from({length: $currentPlaylist.length}, (_, i) => i).filter(i => i !== $currentIndex);
-      }
-      currentIndex.set(unplayed[Math.floor(Math.random() * unplayed.length)]);
-    } else {
-      currentIndex.set(($currentIndex + 1) % $currentPlaylist.length);
-    }
-  };
-
-  const playPrev = async () => {
-    unlockAudioContext();
-    if (!isEngineInitialized) initAudioEngine();
-
-    if ($currentPlaylist.length === 0) return;
-
-    if ($isShuffle && $shuffleHistory.length > 0) {
-      const prevIndex = $shuffleHistory.pop();
-      shuffleHistory.set($shuffleHistory);
-      currentIndex.set(prevIndex);
-    } else {
-      currentIndex.set(($currentIndex - 1 + $currentPlaylist.length) % $currentPlaylist.length);
-    }
-  };
+  const togglePlay = () => togglePlayGlobal();
+  const playNext = () => playNextGlobal(api);
+  const playPrev = () => playPrevGlobal();
 
   const handleSeek = (e) => {
     if (!$playerDuration) return;
     const rect = e.currentTarget.getBoundingClientRect();
-    audioEl.currentTime = ((e.clientX - rect.left) / rect.width) * $playerDuration;
+    seekEngine(((e.clientX - rect.left) / rect.width) * $playerDuration);
   };
+
+  $: nextTrackIndex = $isRepeat && $currentIndex === $currentPlaylist.length - 1 ? 0 : $currentIndex + 1;
+  $: nextTrack = $currentPlaylist[nextTrackIndex];
+  
+  $: if (nextTrack && isEngineInitialized) {
+      const nextUrl = `/api/Tracks/stream/${nextTrack.id}`;
+      setTimeout(() => preloadNextTrack(nextUrl, nextTrack.id), 1000);
+  }
 </script>
 
-<svelte:window on:keydown={handleKeydown} />
-
-<audio
-  bind:this={audioEl}
-  crossorigin="anonymous"
-  playsinline
-  preload="auto"
-  on:timeupdate={handleTimeUpdate}
-  on:loadedmetadata={() => {
-    console.log("[Audio Debug] loadedmetadata fired. Duration:", audioEl.duration);
-    playerDuration.set(audioEl.duration);
-    updateMediaPositionState(audioEl.currentTime, audioEl.duration); 
+<svelte:window 
+  on:keydown={handleKeydown} 
+  on:track-ended={() => {
+      if ($isRepeat) { seekEngine(0); playEngine(); } 
+      else { playNext(); }
   }}
-  on:canplay={() => {
-    console.log("[Audio Debug] canplay fired. ReadyState:", audioEl.readyState);
-  }}
-  on:seeked={() => {
-    updateMediaPositionState(audioEl.currentTime, audioEl.duration); 
-  }}
-  on:play={() => {
-    console.log("[Audio Debug] Play event fired.");
-    isPlaying.set(true);
-    if (audioCtx && audioCtx.state === 'suspended') {
-        console.log("[Audio Debug] Context suspended during play event, attempting resume.");
-        audioCtx.resume();
-    }
-    const savedBoost = safeGetStorage('psyzx_boost') || '1.0';
-    if (parseFloat(savedBoost) > 1.0) setVolumeBoost(savedBoost);
-    
-    if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
-      navigator.mediaSession.playbackState = 'playing';
-      updateMediaPositionState(audioEl.currentTime, audioEl.duration); 
-    }
-  }}
-  on:pause={() => {
-    console.log("[Audio Debug] Pause event fired.");
-    isPlaying.set(false);
-    if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
-      navigator.mediaSession.playbackState = 'paused';
-      updateMediaPositionState(audioEl.currentTime, audioEl.duration); 
-    }
-  }}
-  on:ended={() => $isRepeat ? audioEl.play() : playNext()}
-></audio>
+/>
 
 <footer
   id="player"
@@ -5685,8 +6117,8 @@ export const updateMediaPositionState = (currentTime, duration) => {
 >
   <div id="progress-wrapper">
     <span id="time-current" class="hide-on-mobile">{formatTime($playerCurrentTime)}</span>
-    <div id="progress-container" role="slider" aria-valuenow={progressPct} tabindex="0" on:click={handleSeek}>
-      <div id="progress-bar" style="width: {progressPct}%; background: var(--accent-color);"></div>
+    <div id="progress-container" role="slider" aria-valuenow={progressPct} tabindex="0" on:click={handleSeek} class:is-buffering={$isBuffering}>
+      <div id="progress-bar" bind:this={progressBarNode} style="width: {progressPct}%; background: var(--accent-color);"></div>
     </div>
     <span id="time-total" class="hide-on-mobile">{formatTime($playerDuration)}</span>
   </div>
@@ -5702,9 +6134,7 @@ export const updateMediaPositionState = (currentTime, duration) => {
       on:mousemove={handleMouseMove}
       style="--m-x: {mouseX}px; --m-y: {mouseY}px;"
     >
-      <img id="np-cover" src={coverUrl} alt="Cover"
-      on:error={handleImageError}
-      />
+      <img id="np-cover" src={coverUrl} alt="Cover" on:error={handleImageError} />
       <div id="now-playing">
         <div class="np-title-container marquee">
           <span>{track ? track.title : '---'}</span>
@@ -5739,34 +6169,35 @@ export const updateMediaPositionState = (currentTime, duration) => {
     </div>
 
     <div id="nerdy-info" class="hide-on-mobile">
-    <div 
-        class="vol-control" 
-        on:mousemove={handleMouseMove} 
-        style="--m-x: {mouseX}px; --m-y: {mouseY}px;"
-    >
-        <svg class="vol-icon" viewBox="0 0 16 16" fill="currentColor">
-            <path d="M9.741.85a.75.75 0 0 1 .375.65v13a.75.75 0 0 1-1.125.65l-6.925-4a3.64 3.64 0 0 1-1.33-4.967 3.64 3.64 0 0 1 1.33-1.332l6.925-4a.75.75 0 0 1 .75 0zm-6.924 5.3a2.14 2.14 0 0 0 0 3.7l5.8 3.35V2.8zm8.683 4.29V5.56a2.75 2.75 0 0 1 0 4.88"></path>
-            <path d="M11.5 13.614a5.752 5.752 0 0 0 0-11.228v1.55a4.252 4.252 0 0 1 0 8.127z"></path>
-        </svg>
-        <div class="glass-slider-wrapper bloom-effect">
-            <input 
-                class="volume-slider" 
-                type="range" 
-                min="0" max="100" 
-                bind:value={volume} 
-                style="--val: {volume}%"
-            >
-        </div>
+      <div 
+          class="vol-control" 
+          on:mousemove={handleMouseMove} 
+          style="--m-x: {mouseX}px; --m-y: {mouseY}px;"
+      >
+          <svg class="vol-icon" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M9.741.85a.75.75 0 0 1 .375.65v13a.75.75 0 0 1-1.125.65l-6.925-4a3.64 3.64 0 0 1-1.33-4.967 3.64 3.64 0 0 1 1.33-1.332l6.925-4a.75.75 0 0 1 .75 0zm-6.924 5.3a2.14 2.14 0 0 0 0 3.7l5.8 3.35V2.8zm8.683 4.29V5.56a2.75 2.75 0 0 1 0 4.88"></path>
+              <path d="M11.5 13.614a5.752 5.752 0 0 0 0-11.228v1.55a4.252 4.252 0 0 1 0 8.127z"></path>
+          </svg>
+          <div class="glass-slider-wrapper bloom-effect">
+              <input 
+                  class="volume-slider" 
+                  type="range" 
+                  min="0" max="100" 
+                  bind:value={volume} 
+                  style="--val: {volume}%"
+              >
+          </div>
+      </div>
+      {#if bitrate > 0}
+          <div class="kbps-badge">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="var(--accent-color)"><rect x="3" y="8" width="4" height="8"/><rect x="10" y="4" width="4" height="16"/><rect x="17" y="10" width="4" height="4"/></svg>
+              <span>{bitrate} kbps</span><span class="ext">{fileExt}</span>
+          </div>
+      {:else}
+          <span style="font-size: 11px; font-family: monospace; color: #555;">NO SIGNAL</span>
+      {/if}
     </div>
-    {#if bitrate > 0}
-        <div class="kbps-badge">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="var(--accent-color)"><rect x="3" y="8" width="4" height="8"/><rect x="10" y="4" width="4" height="16"/><rect x="17" y="10" width="4" height="4"/></svg>
-            <span>{bitrate} kbps</span><span class="ext">{fileExt}</span>
-        </div>
-    {:else}
-        <span style="font-size: 11px; font-family: monospace; color: #555;">NO SIGNAL</span>
-    {/if}
-</div>
+  </div>
 </footer>
 
 <style>
@@ -6140,15 +6571,10 @@ export const updateMediaPositionState = (currentTime, duration) => {
         margin-right: 12px; 
         margin-bottom: 10px;
         margin-left: 0 !important; /* Resets desktop margin */
-        
-        /* --- FIX 1: Kill the desktop X/Y offset ---
-           This shifts the bubble left to its natural edge 
-           and drops it down 5px so it perfectly aligns with the button! */
         transform: none !important;
         -webkit-transform: none !important;
     }
     
-    /* --- FIX 2: Prevent jumping when tapping the bubble on mobile --- */
     .np-info-hover:not(.disabled):active {
         transform: scale(0.94) !important;
         -webkit-transform: scale(0.94) !important;
@@ -6203,6 +6629,26 @@ export const updateMediaPositionState = (currentTime, duration) => {
       height: auto !important;
       min-height: 80px !important;
     }
+  }
+
+  @keyframes buffer-wave {
+      0% { transform: translateX(-100%); }
+      100% { transform: translateX(100%); }
+  }
+
+  .is-buffering {
+      position: relative;
+      overflow: hidden !important; 
+  }
+
+  .is-buffering::after {
+      content: "";
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.4), transparent);
+      animation: buffer-wave 1.2s infinite linear;
+      z-index: 5;
+      pointer-events: none;
   }
 </style>
 </file>
@@ -6514,6 +6960,359 @@ export const getCorporateFooter = () => `
         <p>v3.0 - Svelte Engine</p>
     </div>
 `;
+</file>
+
+<file path="src/lib/webaudio.js">
+import { get } from 'svelte/store';
+import { currentPlaylist, currentIndex, isShuffle, isRepeat, shuffleHistory, isPlaying, isBuffering, playerCurrentTime, playerDuration } from '../store.js';
+
+export let audioCtx;
+export let gainNode;
+let eqFilters = [];
+let mixerNode = null;
+let heartbeatOsc = null;
+
+let currentBuffer = null;
+let nextBuffer = null;
+let currentSource = null;
+let nextSource = null;
+
+let trackStartTime = 0;
+let pauseOffset = 0;
+let currentTrackId = null;
+let nextTrackId = null;
+
+let animationFrameId = null;
+
+let pendingBoost = 1.0;
+let pendingEq = [0, 0, 0, 0, 0, 0];
+const EQ_FREQS = [60, 250, 1000, 4000, 8000, 14000];
+
+export let isEngineInitialized = false;
+export let isWebAudioGaplessEnabled = typeof window !== 'undefined' ? localStorage.getItem('psyzx_webaudio_gapless') === 'true' : false;
+
+export const setWebAudioGaplessMode = (enabled) => {
+    isWebAudioGaplessEnabled = enabled;
+    if (typeof window !== 'undefined') {
+        localStorage.setItem('psyzx_webaudio_gapless', enabled.toString());
+    }
+};
+
+const buildWebAudioGraph = () => {
+    if (!audioCtx) return;
+
+    if (!mixerNode) {
+        mixerNode = audioCtx.createGain();
+        mixerNode.gain.value = 1.0;
+    }
+
+    if (!heartbeatOsc) {
+        const hGain = audioCtx.createGain();
+        hGain.gain.value = 0.0000001;
+        heartbeatOsc = audioCtx.createOscillator();
+        heartbeatOsc.type = 'sine';
+        heartbeatOsc.frequency.value = 440;
+        heartbeatOsc.connect(hGain);
+        hGain.connect(mixerNode);
+        heartbeatOsc.start();
+    }
+
+    eqFilters = EQ_FREQS.map((freq, i) => {
+        const filter = audioCtx.createBiquadFilter();
+        filter.type = 'peaking';
+        filter.frequency.value = freq;
+        filter.Q.value = 1.4;
+        filter.gain.value = pendingEq[i];
+        return filter;
+    });
+
+    gainNode = audioCtx.createGain();
+    gainNode.gain.value = pendingBoost;
+
+    mixerNode.connect(eqFilters[0]);
+    for (let i = 0; i < eqFilters.length - 1; i++) {
+        eqFilters[i].connect(eqFilters[i+1]);
+    }
+    eqFilters[eqFilters.length - 1].connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+};
+
+export const unlockAudioContext = () => {
+    if (isEngineInitialized) return;
+
+    const AudioCtx = window.AudioContext || window['webkitAudioContext'];
+    if (!audioCtx) audioCtx = new AudioCtx();
+
+    audioCtx.onstatechange = () => {
+        if (audioCtx.state === 'interrupted' && currentSource) {
+            pauseEngine();
+        }
+    };
+
+    buildWebAudioGraph();
+    
+    if (audioCtx.state === 'suspended') {
+        audioCtx.resume().catch(() => {});
+    }
+
+    isEngineInitialized = true;
+};
+
+const fetchAndDecode = async (url) => {
+    try {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error();
+        const arrayBuffer = await response.arrayBuffer();
+        return await audioCtx.decodeAudioData(arrayBuffer);
+    } catch (e) {
+        return null;
+    }
+};
+
+const startSyntheticClock = () => {
+    if (animationFrameId) cancelAnimationFrame(animationFrameId);
+    
+    const loop = () => {
+        if (get(isPlaying) && currentBuffer) {
+            const currentRealTime = audioCtx.currentTime - trackStartTime + pauseOffset;
+            playerCurrentTime.set(currentRealTime);
+
+            if (currentRealTime >= currentBuffer.duration - 0.05) {
+                handleTrackEnd();
+                return;
+            }
+        }
+        animationFrameId = requestAnimationFrame(loop);
+    };
+    loop();
+};
+
+export const preloadNextTrack = async (url, trackId) => {
+    if (!isWebAudioGaplessEnabled || url === currentTrackId) return;
+    
+    const buffer = await fetchAndDecode(url);
+    if (buffer) {
+        nextBuffer = buffer;
+        nextTrackId = trackId;
+    }
+};
+
+export const loadAndPlayBuffer = async (url, trackId) => {
+    if (!isEngineInitialized) unlockAudioContext();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+
+    stopEngine();
+    isBuffering.set(true);
+    isPlaying.set(false);
+
+    if (nextBuffer && trackId === nextTrackId) {
+        currentBuffer = nextBuffer;
+        currentTrackId = nextTrackId;
+        nextBuffer = null;
+        nextTrackId = null;
+    } else {
+        currentBuffer = await fetchAndDecode(url);
+        currentTrackId = trackId;
+    }
+
+    if (!currentBuffer) {
+        isBuffering.set(false);
+        return;
+    }
+
+    playerDuration.set(currentBuffer.duration);
+    pauseOffset = 0;
+    
+    playEngine();
+    isBuffering.set(false);
+};
+
+export const playEngine = () => {
+    if (!currentBuffer || !audioCtx) return;
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+
+    if (currentSource) {
+        try { currentSource.stop(); } catch(e) {}
+        currentSource.disconnect();
+    }
+
+    currentSource = audioCtx.createBufferSource();
+    currentSource.buffer = currentBuffer;
+    currentSource.connect(mixerNode);
+
+    trackStartTime = audioCtx.currentTime;
+    currentSource.start(0, pauseOffset);
+    
+    isPlaying.set(true);
+    startSyntheticClock();
+};
+
+export const pauseEngine = () => {
+    if (!currentSource || !audioCtx) return;
+
+    try { currentSource.stop(); } catch(e) {}
+    pauseOffset += (audioCtx.currentTime - trackStartTime);
+    
+    isPlaying.set(false);
+    if (animationFrameId) cancelAnimationFrame(animationFrameId);
+};
+
+export const togglePlayGlobal = () => {
+    if (!isEngineInitialized) unlockAudioContext();
+    
+    if (get(isPlaying)) {
+        pauseEngine();
+    } else {
+        playEngine();
+    }
+};
+
+export const stopEngine = () => {
+    if (currentSource) {
+        try { currentSource.stop(); } catch(e) {}
+        currentSource.disconnect();
+        currentSource = null;
+    }
+    pauseOffset = 0;
+    if (animationFrameId) cancelAnimationFrame(animationFrameId);
+};
+
+export const seekEngine = (time) => {
+    if (!currentBuffer || !audioCtx) return;
+    
+    const wasPlaying = get(isPlaying);
+    
+    if (currentSource) {
+        try { currentSource.stop(); } catch(e) {}
+        currentSource.disconnect();
+    }
+    
+    pauseOffset = Math.max(0, Math.min(time, currentBuffer.duration));
+    playerCurrentTime.set(pauseOffset);
+
+    if (wasPlaying) {
+        playEngine();
+    }
+};
+
+const handleTrackEnd = () => {
+    stopEngine();
+    window.dispatchEvent(new CustomEvent('track-ended'));
+};
+
+export const setVolumeBoost = (val) => {
+    pendingBoost = parseFloat(val);
+    if (gainNode && audioCtx) gainNode.gain.value = pendingBoost;
+};
+
+export const setEqBand = (index, val) => {
+    pendingEq[index] = parseFloat(val);
+    if (eqFilters[index] && audioCtx) {
+        if (audioCtx.state === 'suspended') audioCtx.resume().catch(()=>{});
+        eqFilters[index].gain.value = pendingEq[index];
+    }
+};
+
+export const updateMediaSession = (track, album, handlers) => {
+    if (!track || !('mediaSession' in navigator)) return;
+    
+    navigator.mediaSession.metadata = new MediaMetadata({
+        title: track.title,
+        artist: album?.artistName,
+        album: album?.title,
+        artwork: [{ src: album?.coverPath ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&size=thumb` : '', sizes: '512x512', type: 'image/jpeg' }]
+    });
+    
+    navigator.mediaSession.setActionHandler('pause', handlers.pause);
+    navigator.mediaSession.setActionHandler('play', handlers.play);
+    
+    if (handlers.seek) {
+        navigator.mediaSession.setActionHandler('seekto', (details) => {
+            handlers.seek(details.seekTime);
+            updateMediaPositionState(details.seekTime, currentBuffer ? currentBuffer.duration : 0);
+        });
+    }
+    
+    navigator.mediaSession.setActionHandler('previoustrack', handlers.prev);
+    navigator.mediaSession.setActionHandler('nexttrack', handlers.next);
+};
+
+export const updateMediaPositionState = (currentTime, duration) => {
+    if ('mediaSession' in navigator && !isNaN(duration) && duration > 0) {
+        try {
+            navigator.mediaSession.setPositionState({ duration, playbackRate: 1.0, position: currentTime });
+        } catch (e) {}
+    }
+};
+
+let lastNextTime = 0;
+
+export const playNextGlobal = async (api) => {
+    const now = Date.now();
+    if (now - lastNextTime < 500) return;
+    lastNextTime = now;
+
+    const playlist = get(currentPlaylist);
+    const index = get(currentIndex);
+    const shuffle = get(isShuffle);
+    const repeat = get(isRepeat);
+    const history = get(shuffleHistory);
+
+    if (playlist.length === 0) return;
+
+    if (!repeat && index === playlist.length - 1) {
+        const seedTrackId = playlist[index].id;
+        const excludeIds = playlist.map(t => t.id);
+        
+        const newTracks = await api.getRadioMix(seedTrackId, excludeIds);
+        
+        if (newTracks.length > 0) {
+            currentPlaylist.update(list => [...list, ...newTracks]);
+        } else {
+            pauseEngine();
+            return;
+        }
+    }
+
+    if (shuffle) {
+        const updatedHistory = [...history, index];
+        shuffleHistory.set(updatedHistory);
+
+        const recentLimit = Math.floor(playlist.length / 2);
+        const recentlyPlayed = updatedHistory.slice(-recentLimit);
+
+        let unplayed = Array.from({length: playlist.length}, (_, i) => i)
+            .filter(i => !recentlyPlayed.includes(i) && i !== index);
+        
+        if (unplayed.length === 0) {
+            shuffleHistory.set([]); 
+            unplayed = Array.from({length: playlist.length}, (_, i) => i).filter(i => i !== index);
+        }
+        
+        currentIndex.set(unplayed[Math.floor(Math.random() * unplayed.length)]);
+    } else {
+        currentIndex.set((index + 1) % playlist.length);
+    }
+};
+
+export const playPrevGlobal = () => {
+    const playlist = get(currentPlaylist);
+    const index = get(currentIndex);
+    const shuffle = get(isShuffle);
+    const history = get(shuffleHistory);
+
+    if (playlist.length === 0) return;
+
+    if (pauseOffset > 3) {
+        seekEngine(0);
+    } else if (shuffle && history.length > 0) {
+        const prevIndex = history.pop();
+        shuffleHistory.set(history);
+        currentIndex.set(prevIndex);
+    } else {
+        currentIndex.set((index - 1 + playlist.length) % playlist.length);
+    }
+};
 </file>
 
 <file path="src/app.css">
@@ -7245,7 +8044,7 @@ html, body {
     <FullPlayer isOpen={isFullPlayerOpen} on:close={() => isFullPlayerOpen = false} />
 {/if}
 
-{#if showDeadlockWarning}
+<!-- {#if showDeadlockWarning}
     <div 
         class="system-modal-backdrop" 
         transition:fade={{duration: 200}} 
@@ -7281,7 +8080,7 @@ html, body {
             </button>
         </div>
     </div>
-{/if}
+{/if} -->
 
 <style>
     :global(body), :global(html) {
@@ -7689,6 +8488,8 @@ export const accentColor = writable('rgb(181, 52, 209)');
 export const totalCacheSize = writable('0 MB');
 export const cachedTrackIds = writable(new Set());
 
+export const isBuffering = writable(false);
+
 export const refreshOfflineCache = async () => {
     if (typeof window === 'undefined' || !('caches' in window)) return;
     
@@ -7829,7 +8630,7 @@ dist-ssr
     <script src="https://cdn.jsdelivr.net/npm/eruda"></script>
 <script>
   eruda.init();
-  console.log("Eruda initialized. iOS Console is now visible.");
+  console.log("Eruda initialized. Console is now visible.");
 </script>
 </body>
 </html>

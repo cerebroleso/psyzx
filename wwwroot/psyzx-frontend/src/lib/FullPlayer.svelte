@@ -136,14 +136,13 @@
         }
     }
 
-    const getAudioEl = () => activePlayer || document.querySelector('audio');
     let wasPlayerElPresent = false;
 
+    // Use strictly the stores driven by audio.js
     const frameLoop = () => {
-        const audio = getAudioEl();
-        if (audio && !isSeekingBar) {
-            const current = audio.currentTime || 0;
-            const duration = audio.duration || 1;
+        if (!isSeekingBar) {
+            const current = $playerCurrentTime || 0;
+            const duration = $playerDuration || 1;
             const pct = current / duration;
 
             if (progressRef && !isNaN(pct)) {
@@ -194,35 +193,16 @@
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.addEventListener('message', (event) => {
                 const data = event.data;
-
                 if (data.type === 'DOWNLOAD_PROGRESS') {
                     activeDownloads[data.trackId] = data.progress;
                     activeDownloads = { ...activeDownloads }; 
                 }
-
-                if (data.type === 'CACHE_UPDATED') {
-                    // Instead of clearing the object, mark this track as 100%
-                    // and keep it there indefinitely for this session.
-                    if (data.trackId) {
-                        activeDownloads[data.trackId] = 100;
-                        activeDownloads = { ...activeDownloads };
-                    }
+                if (data.type === 'CACHE_UPDATED' && data.trackId) {
+                    activeDownloads[data.trackId] = 100;
+                    activeDownloads = { ...activeDownloads };
                 }
             });
         }
-
-        navigator.serviceWorker.addEventListener('message', (event) => {
-            const data = event.data;
-            if (data.type === 'DOWNLOAD_PROGRESS') {
-                activeDownloads[data.trackId] = data.progress;
-                activeDownloads = { ...activeDownloads }; 
-            }
-            if (data.type === 'CACHE_UPDATED' && data.trackId) {
-                // Set to 100 and remove the timeout that was clearing it
-                activeDownloads[data.trackId] = 100;
-                activeDownloads = { ...activeDownloads };
-            }
-        });
     });
 
     onDestroy(() => {
@@ -316,27 +296,26 @@
         }
     }
 
-    const togglePlay = () => {
-        togglePlayGlobal();
-    };
+    const togglePlay = () => togglePlayGlobal();
+    const playNext = () => playNextGlobal(api);
+    const playPrev = () => playPrevGlobal();
 
-    const playNext = () => {
-        playNextGlobal(api);
-    };
-
-    const playPrev = () => {
-        playPrevGlobal();
+    const triggerScrollToTop = () => {
+        const executeScroll = () => {
+            const mainView = document.getElementById('main-view');
+            if (mainView) mainView.scrollTo({ top: 0, behavior: 'smooth' });
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        };
+        requestAnimationFrame(executeScroll);
+        setTimeout(executeScroll, 100);
+        setTimeout(executeScroll, 400); 
     };
 
     const goArtist = () => {
         if (album && album.artistId) {
             handleClose();
             window.location.hash = `#artist/${album.artistId}`;
-            setTimeout(() => {
-                const mainView = document.getElementById('main-view');
-                if (mainView) mainView.scrollTo({ top: 0, behavior: 'smooth' });
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-            }, 150);
+            triggerScrollToTop();
         }
     };
     
@@ -344,24 +323,14 @@
         if (track && track.albumId) {
             handleClose();
             window.location.hash = `#album/${track.albumId}`;
-            setTimeout(() => {
-                const mainView = document.getElementById('main-view');
-                if (mainView) mainView.scrollTo({ top: 0, behavior: 'smooth' });
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-            }, 150);        
+            triggerScrollToTop();
         }
     };
 
-    let originalVolume = 1;
     let pendingSeekTime = null;
 
     const onSeekStart = (e) => { 
         isSeekingBar = true; 
-        const audioEl = getAudioEl();
-        if (audioEl) {
-            originalVolume = audioEl.volume;
-            audioEl.volume = originalVolume * 0.2;
-        }
         updateSeek(e); 
     };
 
@@ -373,13 +342,9 @@
 
     const onSeekEnd = () => { 
         isSeekingBar = false; 
-        const audioEl = getAudioEl();
-        if (audioEl) {
-            audioEl.volume = originalVolume;
-            if (pendingSeekTime !== null) {
-                audioEl.currentTime = pendingSeekTime;
-                pendingSeekTime = null;
-            }
+        if (pendingSeekTime !== null) {
+            activePlayer.currentTime = pendingSeekTime;
+            pendingSeekTime = null;
         }
     };
 
@@ -633,7 +598,7 @@
 
                     <div class="lyrics-scroll-box" bind:this={lyricsScrollEl} on:wheel={handleUserScroll} on:touchmove={handleUserScroll}>
                         {#each lyrics as line, i}
-                            <div class="lyric-line" class:active={i === activeLyricIdx} on:click={() => { if (getAudioEl()) getAudioEl().currentTime = line.t; }}>
+                            <div class="lyric-line" class:active={i === activeLyricIdx} on:click={() => { activePlayer.currentTime = line.t; }}>
                                 {line.text}
                             </div>
                         {/each}
@@ -698,13 +663,13 @@
         <div class="lyrics-modal-popup" use:portal={true} in:fly={{y: '100%', duration: 400, easing: expoOut}} out:fly={{y: '100%', duration: 200, easing: expoIn}}>
             <div class="lyrics-modal-header">
                 <h3 class="modal-title">Lyrics</h3>
-                <button class="btn-icon" /*on:click={() => isLyricsFullScreen = false}*/>
+                <button class="btn-icon" on:click={() => isLyricsFullScreen = false}>
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
                 </button>
             </div>
             <div class="lyrics-scroll-box popup-version" bind:this={lyricsScrollEl} on:wheel={handleUserScroll} on:touchmove={handleUserScroll}>
                 {#each lyrics as line, i}
-                    <div class="lyric-line" class:active={i === activeLyricIdx} on:click={() => { if (getAudioEl()) getAudioEl().currentTime = line.t; }}>
+                    <div class="lyric-line" class:active={i === activeLyricIdx} on:click={() => { activePlayer.currentTime = line.t; }}>
                         {line.text}
                     </div>
                 {/each}
