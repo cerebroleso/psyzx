@@ -1,10 +1,19 @@
 <script>
   import { onMount, createEventDispatcher } from 'svelte';
-  import { currentPlaylist, currentIndex, isPlaying, isShuffle, isRepeat, shuffleHistory, albumsMap, playerCurrentTime, playerDuration, accentColor, isMaxGlassActive, isDesktopSwapActive, appSessionVersion } from '../store.js';
-  import { initAudioEngine, audioCtx, updateMediaSession, registerAudioElement, setVolumeBoost, unlockAudioContext, updateMediaPositionState, isEngineInitialized, resumePromise, togglePlayGlobal, playNextGlobal, playPrevGlobal } from './audio.js';  
+  import { 
+    currentPlaylist, currentIndex, isPlaying, isShuffle, isRepeat, 
+    shuffleHistory, albumsMap, playerCurrentTime, playerDuration, 
+    accentColor, isMaxGlassActive, isDesktopSwapActive, appSessionVersion,
+    isBuffering
+  } from '../store.js';
+  import { 
+    audioCtx, updateMediaSession, registerAudioElements, setVolumeBoost, 
+    unlockAudioContext, updateMediaPositionState, isEngineInitialized, 
+    resumePromise, togglePlayGlobal, playNextGlobal, playPrevGlobal, 
+    loadAndPlayUrl, activePlayer, preloadNextUrl
+  } from './audio.js';
   import { api } from './api.js';
   import { formatTime } from './utils.js';
-  
 
   const dispatch = createEventDispatcher();
 
@@ -13,12 +22,12 @@
       ev.target.src = DEFAULT_PLACEHOLDER;
   };
 
-  export let audioEl;
+  let audioElA;
+  let audioElB;
   let volume = 100;
   let progressBarNode;
   let animationFrameId;
 
-  // Mouse tracking for bloom effect
   let mouseX = 0;
   let mouseY = 0;
 
@@ -38,16 +47,19 @@
   $: fileExt = track ? track.filePath.split('.').pop().toUpperCase() : 'UNK';
   $: bitrate = track ? track.bitrate : 0;
 
-  $: if (audioEl) audioEl.volume = volume / 100;
+  $: {
+    if (audioElA) audioElA.volume = volume / 100;
+    if (audioElB) audioElB.volume = volume / 100;
+  }
 
-  $: if (track && album && audioEl) {
+  $: if (track && album && activePlayer) {
     updateMediaSession(track, album, {
-      play: () => audioEl.play(),
-      pause: () => audioEl.pause(),
+      play: () => activePlayer.play(),
+      pause: () => activePlayer.pause(),
       next: playNext,
       prev: playPrev,
-      seek: (time) => { audioEl.currentTime = time; },
-      seekRelative: (offset) => { audioEl.currentTime = Math.max(0, Math.min(audioEl.duration, audioEl.currentTime + offset)); }
+      seek: (time) => { activePlayer.currentTime = time; },
+      seekRelative: (offset) => { activePlayer.currentTime = Math.max(0, Math.min(activePlayer.duration, activePlayer.currentTime + offset)); }
     });
   }
 
@@ -66,11 +78,8 @@
   const safeSetStorage = (k, v) => { try { localStorage.setItem(k, v); } catch(e) {} };
   const safeGetStorage = (k) => { try { return localStorage.getItem(k); } catch(e) { return null; } };
 
-  // --- CLEANED UP SWIPE LOGIC ---
   let startY = 0;
   let isSwiping = false;
-  // If you are using a Svelte store from store.js, keep it as an import. 
-  // If it's a local variable for a component, use this boolean:
   let isFullPlayerOpen = false; 
 
   const handleTouchStart = (e) => {
@@ -83,14 +92,9 @@
     const currentY = e.touches[0].clientY;
     const deltaY = currentY - startY;
 
-    // If swiped UP (negative)
     if (deltaY < -80) {
       isSwiping = false;
-      
-      // If dispatching an event to a parent component:
       dispatch('toggleFull'); 
-      
-      // OR if managing state locally:
       isFullPlayerOpen = true; 
     }
   };
@@ -126,7 +130,6 @@
       const img = new Image();
       
       img.onload = () => {
-        
         if (currentObjUrl !== objUrl) return; 
 
         try {
@@ -136,7 +139,6 @@
           
           ctx.drawImage(img, 0, 0, 1, 1);
           const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
-          
           
           const boost = Math.max(r, g, b) < 40 ? 50 : 0;
           applyColor(`rgb(${r + boost}, ${g + boost}, ${b + boost})`);
@@ -153,7 +155,6 @@
     }
   };
 
-  
   const applyColor = (color) => {
     accentColor.set(color);
     document.documentElement.style.setProperty('--accent-color', color);
@@ -168,11 +169,11 @@
       case ' ': e.preventDefault(); togglePlay(); break;
       case 'l':
         if (e.shiftKey) playNext();
-        else if (audioEl) audioEl.currentTime = Math.min(audioEl.duration, audioEl.currentTime + 5);
+        else if (activePlayer) activePlayer.currentTime = Math.min(activePlayer.duration, activePlayer.currentTime + 5);
         break;
       case 'h':
         if (e.shiftKey) playPrev();
-        else if (audioEl) audioEl.currentTime = Math.max(0, audioEl.currentTime - 5);
+        else if (activePlayer) activePlayer.currentTime = Math.max(0, activePlayer.currentTime - 5);
         break;
       case 'k': e.preventDefault(); volume = Math.min(100, volume + 5); break;
       case 'j': e.preventDefault(); volume = Math.max(0, volume - 5); break;
@@ -180,18 +181,17 @@
   };
 
   const updateProgressBarLoop = () => {
-    if (audioEl && progressBarNode) {
-      const current = audioEl.currentTime;
-      const total = audioEl.duration || 1; // Prevent division by zero
+    if (activePlayer && progressBarNode) {
+      const current = activePlayer.currentTime;
+      const total = activePlayer.duration || 1;
       const pct = (current / total) * 100;
-      // Bypass Svelte reactivity and update the DOM directly
       progressBarNode.style.width = `${pct}%`;
     }
     animationFrameId = requestAnimationFrame(updateProgressBarLoop);
   };
 
   onMount(() => {
-    registerAudioElement(audioEl);
+    registerAudioElements(audioElA, audioElB);
 
     animationFrameId = requestAnimationFrame(updateProgressBarLoop);
 
@@ -202,12 +202,11 @@
       try {
         currentPlaylist.set(JSON.parse(savedPl));
         currentIndex.set(parseInt(savedIdx) || 0);
-        setTimeout(() => { if (audioEl) audioEl.currentTime = parseFloat(savedTime) || 0; }, 300);
+        setTimeout(() => { if (activePlayer) activePlayer.currentTime = parseFloat(savedTime) || 0; }, 300);
       } catch(e) {}
     }
 
     return () => {
-      // Cleanup loop on destroy
       cancelAnimationFrame(animationFrameId);
     };
   });
@@ -218,58 +217,56 @@
   }
 
   let lastSave = 0;
-  const handleTimeUpdate = () => {
-    const currentTime = audioEl.currentTime;
-    const duration = audioEl.duration;
+  const handleTimeUpdate = (node) => {
+    if (node !== activePlayer) return;
+    playerCurrentTime.set(node.currentTime);
     
-    // Tell iOS exactly where the scrubber should be
-    playerCurrentTime.set(audioEl.currentTime);
-    
-    if (audioEl.currentTime - lastSave > 3 || audioEl.currentTime < lastSave) {
-        safeSetStorage('psyzx_time', audioEl.currentTime.toString());
-        lastSave = audioEl.currentTime;
+    if (node.currentTime - lastSave > 3 || node.currentTime < lastSave) {
+        safeSetStorage('psyzx_time', node.currentTime.toString());
+        lastSave = node.currentTime;
     }
   };
 
+  const handleLoadedMetadata = (node) => {
+    if (node !== activePlayer) return;
+    playerDuration.set(node.duration);
+    updateMediaPositionState(node.currentTime, node.duration); 
+  };
+
+  const handlePlay = (node) => {
+    if (node !== activePlayer) return;
+    isPlaying.set(true);
+    if (audioCtx && audioCtx.state === 'suspended') {
+        audioCtx.resume();
+    }
+    const savedBoost = safeGetStorage('psyzx_boost') || '1.0';
+    if (parseFloat(savedBoost) > 1.0) setVolumeBoost(savedBoost);
+    
+    if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+      navigator.mediaSession.playbackState = 'playing';
+      updateMediaPositionState(node.currentTime, node.duration); 
+    }
+  };
+
+  const handlePause = (node) => {
+    if (node !== activePlayer) return;
+    isPlaying.set(false);
+    if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+      navigator.mediaSession.playbackState = 'paused';
+      updateMediaPositionState(node.currentTime, node.duration); 
+    }
+  };
+
+  const handleEnded = (node) => {
+    if (node !== activePlayer) return;
+    $isRepeat ? node.play() : playNext();
+  };
+
   let lastUrl = '';
-  $: if (streamUrl && audioEl && streamUrl !== lastUrl) {
-    console.log(`[Audio Debug] URL changed to: ${streamUrl}`);
+  $: if (streamUrl && streamUrl !== lastUrl) {
     lastUrl = streamUrl;
+    loadAndPlayUrl(streamUrl);
 
-    const executeSafePlay = async () => {
-        try {
-            // 1. Wait for iOS hardware to finish transitioning BEFORE changing the src.
-            // We use a 300ms race timeout just in case Safari's promise engine hangs.
-            if (resumePromise) {
-                await Promise.race([
-                    resumePromise,
-                    new Promise(resolve => setTimeout(resolve, 300))
-                ]);
-            }
-
-            // 2. NOW change the src safely. The context is stable.
-            audioEl.crossOrigin = "anonymous";
-            audioEl.src = streamUrl;
-            console.log("[Audio Debug] src assigned safely after hardware transition.");
-
-            // 3. Play
-            await audioEl.play();
-            console.log("[Audio Debug] Playback started successfully.");
-
-        } catch (e) {
-            // AbortError is normal HTML5 behavior when tracks are skipped rapidly.
-            if (e.name !== 'AbortError') {
-                console.error("[Audio Debug] Playback blocked by iOS:", e);
-            } else {
-                console.log("[Audio Debug] Previous stream aborted smoothly (Track skipped).");
-            }
-        }
-    };
-
-    // Fire the async sequence
-    executeSafePlay();
-
-    // --- Increment Play Count & Force UI Reactivity ---
     if (track) {
       api.recordPlay(track.id);
       albumsMap.update(map => {
@@ -291,55 +288,49 @@
   const playPrev = () => playPrevGlobal();
 
   const handleSeek = (e) => {
-    if (!$playerDuration) return;
+    if (!$playerDuration || !activePlayer) return;
     const rect = e.currentTarget.getBoundingClientRect();
-    audioEl.currentTime = ((e.clientX - rect.left) / rect.width) * $playerDuration;
+    activePlayer.currentTime = ((e.clientX - rect.left) / rect.width) * $playerDuration;
   };
+
+  $: nextTrackIndex = $isRepeat && $currentIndex === $currentPlaylist.length - 1 
+      ? 0 
+      : $currentIndex + 1;
+  $: nextTrack = $currentPlaylist[nextTrackIndex];
+  
+  $: if (nextTrack && isEngineInitialized) {
+      const nextUrl = `/api/Tracks/stream/${nextTrack.id}`;
+      // Give the active track 1 second to safely start before stealing network bandwidth
+      setTimeout(() => preloadNextUrl(nextUrl), 1000);
+  }
 </script>
 
 <svelte:window on:keydown={handleKeydown} />
 
 <audio
-  bind:this={audioEl}
+  bind:this={audioElA}
   crossorigin="anonymous"
   playsinline
   preload="auto"
-  on:timeupdate={handleTimeUpdate}
-  on:loadedmetadata={() => {
-    console.log("[Audio Debug] loadedmetadata fired. Duration:", audioEl.duration);
-    playerDuration.set(audioEl.duration);
-    updateMediaPositionState(audioEl.currentTime, audioEl.duration); 
-  }}
-  on:canplay={() => {
-    console.log("[Audio Debug] canplay fired. ReadyState:", audioEl.readyState);
-  }}
-  on:seeked={() => {
-    updateMediaPositionState(audioEl.currentTime, audioEl.duration); 
-  }}
-  on:play={() => {
-    console.log("[Audio Debug] Play event fired.");
-    isPlaying.set(true);
-    if (audioCtx && audioCtx.state === 'suspended') {
-        console.log("[Audio Debug] Context suspended during play event, attempting resume.");
-        audioCtx.resume();
-    }
-    const savedBoost = safeGetStorage('psyzx_boost') || '1.0';
-    if (parseFloat(savedBoost) > 1.0) setVolumeBoost(savedBoost);
-    
-    if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
-      navigator.mediaSession.playbackState = 'playing';
-      updateMediaPositionState(audioEl.currentTime, audioEl.duration); 
-    }
-  }}
-  on:pause={() => {
-    console.log("[Audio Debug] Pause event fired.");
-    isPlaying.set(false);
-    if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
-      navigator.mediaSession.playbackState = 'paused';
-      updateMediaPositionState(audioEl.currentTime, audioEl.duration); 
-    }
-  }}
-  on:ended={() => $isRepeat ? audioEl.play() : playNext()}
+  on:timeupdate={() => handleTimeUpdate(audioElA)}
+  on:loadedmetadata={() => handleLoadedMetadata(audioElA)}
+  on:seeked={() => updateMediaPositionState(audioElA.currentTime, audioElA.duration)}
+  on:play={() => handlePlay(audioElA)}
+  on:pause={() => handlePause(audioElA)}
+  on:ended={() => handleEnded(audioElA)}
+></audio>
+
+<audio
+  bind:this={audioElB}
+  crossorigin="anonymous"
+  playsinline
+  preload="auto"
+  on:timeupdate={() => handleTimeUpdate(audioElB)}
+  on:loadedmetadata={() => handleLoadedMetadata(audioElB)}
+  on:seeked={() => updateMediaPositionState(audioElB.currentTime, audioElB.duration)}
+  on:play={() => handlePlay(audioElB)}
+  on:pause={() => handlePause(audioElB)}
+  on:ended={() => handleEnded(audioElB)}
 ></audio>
 
 <footer
@@ -355,8 +346,8 @@
 >
   <div id="progress-wrapper">
     <span id="time-current" class="hide-on-mobile">{formatTime($playerCurrentTime)}</span>
-    <div id="progress-container" role="slider" aria-valuenow={progressPct} tabindex="0" on:click={handleSeek}>
-      <div id="progress-bar" style="width: {progressPct}%; background: var(--accent-color);"></div>
+    <div id="progress-container" role="slider" aria-valuenow={progressPct} tabindex="0" on:click={handleSeek} class:is-buffering={$isBuffering}>
+      <div id="progress-bar" bind:this={progressBarNode} style="width: {progressPct}%; background: var(--accent-color);"></div>
     </div>
     <span id="time-total" class="hide-on-mobile">{formatTime($playerDuration)}</span>
   </div>
@@ -372,9 +363,7 @@
       on:mousemove={handleMouseMove}
       style="--m-x: {mouseX}px; --m-y: {mouseY}px;"
     >
-      <img id="np-cover" src={coverUrl} alt="Cover"
-      on:error={handleImageError}
-      />
+      <img id="np-cover" src={coverUrl} alt="Cover" on:error={handleImageError} />
       <div id="now-playing">
         <div class="np-title-container marquee">
           <span>{track ? track.title : '---'}</span>
@@ -409,34 +398,35 @@
     </div>
 
     <div id="nerdy-info" class="hide-on-mobile">
-    <div 
-        class="vol-control" 
-        on:mousemove={handleMouseMove} 
-        style="--m-x: {mouseX}px; --m-y: {mouseY}px;"
-    >
-        <svg class="vol-icon" viewBox="0 0 16 16" fill="currentColor">
-            <path d="M9.741.85a.75.75 0 0 1 .375.65v13a.75.75 0 0 1-1.125.65l-6.925-4a3.64 3.64 0 0 1-1.33-4.967 3.64 3.64 0 0 1 1.33-1.332l6.925-4a.75.75 0 0 1 .75 0zm-6.924 5.3a2.14 2.14 0 0 0 0 3.7l5.8 3.35V2.8zm8.683 4.29V5.56a2.75 2.75 0 0 1 0 4.88"></path>
-            <path d="M11.5 13.614a5.752 5.752 0 0 0 0-11.228v1.55a4.252 4.252 0 0 1 0 8.127z"></path>
-        </svg>
-        <div class="glass-slider-wrapper bloom-effect">
-            <input 
-                class="volume-slider" 
-                type="range" 
-                min="0" max="100" 
-                bind:value={volume} 
-                style="--val: {volume}%"
-            >
-        </div>
+      <div 
+          class="vol-control" 
+          on:mousemove={handleMouseMove} 
+          style="--m-x: {mouseX}px; --m-y: {mouseY}px;"
+      >
+          <svg class="vol-icon" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M9.741.85a.75.75 0 0 1 .375.65v13a.75.75 0 0 1-1.125.65l-6.925-4a3.64 3.64 0 0 1-1.33-4.967 3.64 3.64 0 0 1 1.33-1.332l6.925-4a.75.75 0 0 1 .75 0zm-6.924 5.3a2.14 2.14 0 0 0 0 3.7l5.8 3.35V2.8zm8.683 4.29V5.56a2.75 2.75 0 0 1 0 4.88"></path>
+              <path d="M11.5 13.614a5.752 5.752 0 0 0 0-11.228v1.55a4.252 4.252 0 0 1 0 8.127z"></path>
+          </svg>
+          <div class="glass-slider-wrapper bloom-effect">
+              <input 
+                  class="volume-slider" 
+                  type="range" 
+                  min="0" max="100" 
+                  bind:value={volume} 
+                  style="--val: {volume}%"
+              >
+          </div>
+      </div>
+      {#if bitrate > 0}
+          <div class="kbps-badge">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="var(--accent-color)"><rect x="3" y="8" width="4" height="8"/><rect x="10" y="4" width="4" height="16"/><rect x="17" y="10" width="4" height="4"/></svg>
+              <span>{bitrate} kbps</span><span class="ext">{fileExt}</span>
+          </div>
+      {:else}
+          <span style="font-size: 11px; font-family: monospace; color: #555;">NO SIGNAL</span>
+      {/if}
     </div>
-    {#if bitrate > 0}
-        <div class="kbps-badge">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="var(--accent-color)"><rect x="3" y="8" width="4" height="8"/><rect x="10" y="4" width="4" height="16"/><rect x="17" y="10" width="4" height="4"/></svg>
-            <span>{bitrate} kbps</span><span class="ext">{fileExt}</span>
-        </div>
-    {:else}
-        <span style="font-size: 11px; font-family: monospace; color: #555;">NO SIGNAL</span>
-    {/if}
-</div>
+  </div>
 </footer>
 
 <style>
@@ -873,5 +863,26 @@
       height: auto !important;
       min-height: 80px !important;
     }
+  }
+
+  /* --- BUFFERING WAVE ANIMATION --- */
+  @keyframes buffer-wave {
+      0% { transform: translateX(-100%); }
+      100% { transform: translateX(100%); }
+  }
+
+  .is-buffering {
+      position: relative;
+      overflow: hidden !important; /* Clips the wave to the track */
+  }
+
+  .is-buffering::after {
+      content: "";
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.4), transparent);
+      animation: buffer-wave 1.2s infinite linear;
+      z-index: 5;
+      pointer-events: none;
   }
 </style>

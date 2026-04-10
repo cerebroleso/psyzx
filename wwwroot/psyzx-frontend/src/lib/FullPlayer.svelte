@@ -1,10 +1,4 @@
 <script>
-    /**
-     * @file FullPlayer.svelte
-     * @version 2.5.0
-     * @description Professional Music Player with optimized Y-axis drawer physics.
-     */
-
     import { createEventDispatcher, onMount, onDestroy, afterUpdate } from 'svelte';
     import { fly, fade, slide } from 'svelte/transition';
     import { 
@@ -17,23 +11,18 @@
         playerCurrentTime, 
         playerDuration, 
         isMaxGlassActive, 
-        appSessionVersion
+        appSessionVersion,
+        isBuffering
     } from '../store.js';
     import { formatTime } from './utils.js';
-    import { setEqBand, togglePlayGlobal, playNextGlobal, playPrevGlobal } from './audio.js';
+    import { setEqBand, togglePlayGlobal, playNextGlobal, playPrevGlobal, activePlayer } from './audio.js';
     import { api } from './api.js';
     import { quintOut, expoIn, expoOut, linear } from 'svelte/easing';
     import { spring } from 'svelte/motion';
-    import {  } from './audio.js';
-    // Component Properties
-    // -------------------------------------------------------------------------
 
     export let isOpen = false;
     const dispatch = createEventDispatcher();
 
-    // -------------------------------------------------------------------------
-    // Local State Variables
-    // -------------------------------------------------------------------------
     let innerWidth = 1000;
     let progressRef;
     let currentTimeRef;
@@ -50,7 +39,7 @@
     let isClosing = false;
     let isClosingByDrag = false;
     let coverClick = false;
-    let playToggle = false
+    let playToggle = false;
 
     function handleCoverClick() {
         coverClick = !coverClick;
@@ -67,9 +56,6 @@
 
     $: isMobile = innerWidth <= 768;
 
-    // -------------------------------------------------------------------------
-    // Drag-to-Dismiss Physics Logic
-    // -------------------------------------------------------------------------
     let dragY = 0;
     let isDragging = false;
     let startY = 0;
@@ -77,7 +63,6 @@
     $: if (isOpen) {
         isClosing = false; 
         isClosingByDrag = false;
-
         dragY = 0; 
         startY = 0;
         isDragging = false;
@@ -90,7 +75,6 @@
     }
 
     const onTouchStart = (e) => {
-        // FIX: Added `isClosingByDrag` lock to prevent touch reentry
         if (isLyricsFullScreen || showQueue || isClosingByDrag) return;
         isDragging = true;
         startY = e.touches[0].clientY;
@@ -112,19 +96,15 @@
         if (!isDragging) return;
         isDragging = false;
 
-        // Drawer point of no return
         if (dragY > 60) {
             isClosing = true;
             isClosingByDrag = true;
             
             const startYPos = dragY;
             const targetY = window.innerHeight;
-            const duration = 250; // ms
-            
-            // FIX: Use universal Date.now() instead of performance.now()
+            const duration = 250;
             const startTime = Date.now(); 
             
-            // FIX: Remove 'now' argument to avoid rAF epoch desyncs
             const fall = () => { 
                 const t = Math.min((Date.now() - startTime) / duration, 1);
                 dragY = startYPos + (targetY - startYPos) * t; 
@@ -148,9 +128,6 @@
         if (!isClosingByDrag) dragY = 0; 
     };
 
-    // -------------------------------------------------------------------------
-    // iOS Stack Background Physics Integration
-    // -------------------------------------------------------------------------
     $: if (typeof document !== 'undefined') {
         if (isOpen && isMobile) {
             document.body.classList.add('modal-open');
@@ -159,10 +136,7 @@
         }
     }
 
-    // -------------------------------------------------------------------------
-    // Audio Performance Loop (60FPS)
-    // -------------------------------------------------------------------------
-    const getAudioEl = () => document.querySelector('audio');
+    const getAudioEl = () => activePlayer || document.querySelector('audio');
     let wasPlayerElPresent = false;
 
     const frameLoop = () => {
@@ -172,8 +146,8 @@
             const duration = audio.duration || 1;
             const pct = current / duration;
 
-            if (progressRef) {
-                progressRef.style.transform = `scaleX(${pct})`;
+            if (progressRef && !isNaN(pct)) {
+                progressRef.style.transform = `translateZ(0) scaleX(${pct})`;
             }
             if (currentTimeRef) {
                 const formatted = formatTime(current);
@@ -212,8 +186,43 @@
         rafId = requestAnimationFrame(frameLoop);
     };
 
+    let activeDownloads = {};
+
     onMount(() => {
         rafId = requestAnimationFrame(frameLoop);
+
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.addEventListener('message', (event) => {
+                const data = event.data;
+
+                if (data.type === 'DOWNLOAD_PROGRESS') {
+                    activeDownloads[data.trackId] = data.progress;
+                    activeDownloads = { ...activeDownloads }; 
+                }
+
+                if (data.type === 'CACHE_UPDATED') {
+                    // Instead of clearing the object, mark this track as 100%
+                    // and keep it there indefinitely for this session.
+                    if (data.trackId) {
+                        activeDownloads[data.trackId] = 100;
+                        activeDownloads = { ...activeDownloads };
+                    }
+                }
+            });
+        }
+
+        navigator.serviceWorker.addEventListener('message', (event) => {
+            const data = event.data;
+            if (data.type === 'DOWNLOAD_PROGRESS') {
+                activeDownloads[data.trackId] = data.progress;
+                activeDownloads = { ...activeDownloads }; 
+            }
+            if (data.type === 'CACHE_UPDATED' && data.trackId) {
+                // Set to 100 and remove the timeout that was clearing it
+                activeDownloads[data.trackId] = 100;
+                activeDownloads = { ...activeDownloads };
+            }
+        });
     });
 
     onDestroy(() => {
@@ -230,9 +239,6 @@
         }
     });
 
-    // -------------------------------------------------------------------------
-    // Equalizer & Audio Engine Interaction
-    // -------------------------------------------------------------------------
     let eqMaster = spring(0, { stiffness: 0.15, damping: 0.8 });
     let eqBands = spring([0, 0, 0, 0, 0, 0], { stiffness: 0.1, damping: 0.8 });
 
@@ -270,9 +276,6 @@
     };
     let currentPreset = 'Flat';
 
-    // -------------------------------------------------------------------------
-    // Lyrics Processing & Auto-Scroll
-    // -------------------------------------------------------------------------
     let lyrics = [{ t: 0, text: "♪ (Music) ♪" }];
 
     $: if (track && track.id && isOpen) {
@@ -286,7 +289,6 @@
         }
     }
 
-    // If the time hasn't reached the first lyric yet, stay at -1. Otherwise, find the correct line.
     $: activeLyricIdx = lyrics ? lyrics.findLastIndex(l => $playerCurrentTime >= l.t) : -1;
 
     $: hasSyncLyrics = lyrics.length > 0 &&
@@ -294,7 +296,8 @@
                        lyrics[0].text !== "♪ (Instrumental / No text) ♪" &&
                        lyrics[0].text !== "♪ (Text not available) ♪" &&
                        lyrics[0].text !== "♪ (Instrumental) ♪" &&
-                       lyrics[0].text !== "♪ (Music) ♪";
+                       lyrics[0].text !== "♪ (Music) ♪" &&
+                       lyrics[0].text !== "♪";
 
     const handleUserScroll = () => {
         isUserScrolling = true;
@@ -313,66 +316,51 @@
         }
     }
 
-    // -------------------------------------------------------------------------
-    // Media Playback Controls
-    // -------------------------------------------------------------------------
-    // Change from shorthand to a block with {}
     const togglePlay = () => {
         togglePlayGlobal();
     };
 
     const playNext = () => {
         playNextGlobal(api);
-        //coverClick = false;
     };
 
     const playPrev = () => {
         playPrevGlobal();
-        //coverClick = false;
     };
 
     const goArtist = () => {
         if (album && album.artistId) {
             handleClose();
             window.location.hash = `#artist/${album.artistId}`;
+            setTimeout(() => {
+                const mainView = document.getElementById('main-view');
+                if (mainView) mainView.scrollTo({ top: 0, behavior: 'smooth' });
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+            }, 150);
+        }
+    };
+    
+    const goAlbum = () => {
+        if (track && track.albumId) {
+            handleClose();
+            window.location.hash = `#album/${track.albumId}`;
+            setTimeout(() => {
+                const mainView = document.getElementById('main-view');
+                if (mainView) mainView.scrollTo({ top: 0, behavior: 'smooth' });
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+            }, 150);        
         }
     };
 
-    // -------------------------------------------------------------------------
-    // Seekbar Logic & Vinyl Scratch Synth
-    // -------------------------------------------------------------------------
-    let scratchAudioCtx;
-    let lastScrubTime = 0;
     let originalVolume = 1;
-
-    const playScratchGrains = () => {
-        try {
-            if (!scratchAudioCtx) scratchAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            if (scratchAudioCtx.state === 'suspended') scratchAudioCtx.resume();
-            
-            const osc = scratchAudioCtx.createOscillator();
-            const gain = scratchAudioCtx.createGain();
-            osc.type = 'sawtooth';
-            // Random rapid modulation to mimic fast-forwarding tape/vinyl
-            osc.frequency.setValueAtTime(300 + Math.random() * 200, scratchAudioCtx.currentTime);
-            osc.frequency.exponentialRampToValueAtTime(50, scratchAudioCtx.currentTime + 0.1);
-            
-            gain.gain.setValueAtTime(0.015, scratchAudioCtx.currentTime); 
-            gain.gain.linearRampToValueAtTime(0, scratchAudioCtx.currentTime + 0.1);
-            
-            osc.connect(gain);
-            gain.connect(scratchAudioCtx.destination);
-            osc.start();
-            osc.stop(scratchAudioCtx.currentTime + 0.1);
-        } catch (e) { /* Ignore context restrictions */ }
-    };
+    let pendingSeekTime = null;
 
     const onSeekStart = (e) => { 
         isSeekingBar = true; 
         const audioEl = getAudioEl();
         if (audioEl) {
             originalVolume = audioEl.volume;
-            audioEl.volume = originalVolume * 0.2; // Drop volume heavily during seek
+            audioEl.volume = originalVolume * 0.2;
         }
         updateSeek(e); 
     };
@@ -381,19 +369,17 @@
         if (!isSeekingBar) return; 
         e.preventDefault(); 
         updateSeek(e); 
-        
-        const now = Date.now();
-        if (now - lastScrubTime > 80) { // Throttle the fast-forward scratch sound
-            playScratchGrains();
-            lastScrubTime = now;
-        }
     };
 
     const onSeekEnd = () => { 
         isSeekingBar = false; 
         const audioEl = getAudioEl();
         if (audioEl) {
-            audioEl.volume = originalVolume; // Restore volume after seek
+            audioEl.volume = originalVolume;
+            if (pendingSeekTime !== null) {
+                audioEl.currentTime = pendingSeekTime;
+                pendingSeekTime = null;
+            }
         }
     };
 
@@ -402,25 +388,17 @@
         const rect = progressContainerEl.getBoundingClientRect();
         const clientX = e.touches ? e.touches[0].clientX : e.clientX;
         
-        // --- FIX 2: Hard-Cap the Scrub Limit ---
-        // Max is 0.99 so scrubbing to the end never triggers the 'ended' event recursively.
         const pct = Math.max(0, Math.min(0.990, (clientX - rect.left) / rect.width));
+        pendingSeekTime = pct * $playerDuration;
         
-        const seekTime = pct * $playerDuration;
-        const audioEl = getAudioEl();
-        if (audioEl) audioEl.currentTime = seekTime;
-        
-        if (progressRef) {
-            progressRef.style.transform = `scaleX(${pct})`;
+        if (progressRef && !isNaN(pct)) {
+            progressRef.style.transform = `translateZ(0) scaleX(${pct})`;
         }
         if (currentTimeRef) {
-            currentTimeRef.textContent = formatTime(seekTime);
+            currentTimeRef.textContent = formatTime(pendingSeekTime);
         }
     };
 
-    // -------------------------------------------------------------------------
-    // Utilities & Helpers
-    // -------------------------------------------------------------------------
     function getDynamicFontSize(text, isActive) {
         if (!isActive) return '10px';
         const containerWidth = 380; 
@@ -512,57 +490,64 @@
             <div class="fp-scroll-content">
                 
                 <div class="fp-cover-container" class:shrink={hasSyncLyrics && !coverClick} on:click={handleCoverClick} role="button" tabindex="0">
-    {#key coverUrl}
-        <img class="sober-cover" src={coverUrl} alt="Album Cover" in:fade={{duration: 250}} on:error={handleImageError} />
-    {/key}
-</div>
-
-{#if hasSyncLyrics}
-    <div transition:slide={{duration: 400}}>
-        <div class="lyrics-spawn-container">
-            <div 
-                class="lyrics-preview-window" 
-                on:click={() => isLyricsFullScreen = true} 
-                role="button" 
-                tabindex="0"
-            >
-                <div class="lyrics-preview-strip" style="transform: translate3d(0, calc({-activeLyricIdx} * 24px), 0);">
-                    {#each lyrics as line, i}
-                        <div 
-                            class="lp-mini-line" 
-                            class:active={i === activeLyricIdx}
-                            style="font-size: {getDynamicFontSize(line.text, i === activeLyricIdx)}"
-                        >
-                            {line.text}
-                        </div>
-                    {/each}
+                    {#key coverUrl}
+                        <img class="sober-cover" src={coverUrl} alt="Album Cover" in:fade={{duration: 250}} on:error={handleImageError} />
+                    {/key}
                 </div>
-            </div>
-        </div>
-    </div>
-{/if}
 
-<div class="fp-info">
-    <div class="fp-text-container">
-        <div class="fp-title marquee">{track ? track.title : '---'}</div>
-        <div 
-            class="fp-artist" 
-            role="button" 
-            tabindex="0" 
-            on:click={goArtist} 
-            on:keydown={(e) => e.key === 'Enter' && goArtist()}
-        >
-            {album ? album.artistName : '---'}
-        </div>
-    </div>
-    <button class="btn-icon" aria-label="Queue" on:click={() => showQueue = true}>
-        <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="6" y="5" width="12" height="6" rx="3" />
-            <line x1="6" y1="15" x2="18" y2="15"></line>
-            <line x1="6" y1="19" x2="18" y2="19"></line>
-        </svg>
-    </button>
-</div>
+                {#if hasSyncLyrics}
+                    <div transition:slide={{duration: 400}}>
+                        <div class="lyrics-spawn-container">
+                            <div 
+                                class="lyrics-preview-window" 
+                                on:click={() => isLyricsFullScreen = true} 
+                                role="button" 
+                                tabindex="0"
+                            >
+                                <div class="lyrics-preview-strip" style="transform: translate3d(0, calc({-activeLyricIdx} * 24px), 0);">
+                                    {#each lyrics as line, i}
+                                        <div 
+                                            class="lp-mini-line" 
+                                            class:active={i === activeLyricIdx}
+                                            style="font-size: {getDynamicFontSize(line.text, i === activeLyricIdx)}"
+                                        >
+                                            {line.text}
+                                        </div>
+                                    {/each}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                {/if}
+
+                <div class="fp-info">
+                    <div class="fp-text-container">
+                        <div 
+                            class="fp-title marquee"
+                            role="button" 
+                            tabindex="0" 
+                            on:click={goAlbum} 
+                            on:keydown={(e) => e.key === 'Enter' && goAlbum()}
+                        >
+                            {track ? track.title : '---'}</div>
+                        <div 
+                            class="fp-artist" 
+                            role="button" 
+                            tabindex="0" 
+                            on:click={goArtist} 
+                            on:keydown={(e) => e.key === 'Enter' && goArtist()}
+                        >
+                            {album ? album.artistName : '---'}
+                        </div>
+                    </div>
+                    <button class="btn-icon" aria-label="Queue" on:click={() => showQueue = true}>
+                        <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="6" y="5" width="12" height="6" rx="3" />
+                            <line x1="6" y1="15" x2="18" y2="15"></line>
+                            <line x1="6" y1="19" x2="18" y2="19"></line>
+                        </svg>
+                    </button>
+                </div>
 
                 <div class="fp-progress-section">
                     <span class="time-label" bind:this={currentTimeRef}>0:00</span>
@@ -572,7 +557,7 @@
                         on:mousedown={onSeekStart} 
                         on:touchstart|nonpassive={onSeekStart}
                     >
-                        <div class="fp-progress-track">
+                        <div class="fp-progress-track" class:is-buffering={$isBuffering}>
                             <div class="fp-progress-bar" bind:this={progressRef}></div>
                         </div>
                     </div>
@@ -657,38 +642,63 @@
             </div>
 
             {#if showQueue}
-                <div class="queue-modal" in:fly={{y: '100%', duration: 400, easing: expoOut}} out:fly={{y: '100%', duration: 300, easing: expoIn}}>
-                    <div class="queue-header">
-                        <h3 class="queue-title">Playing Next</h3>
-                        <button class="btn-icon" on:click={() => showQueue = false}>
-                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-                        </button>
-                    </div>
-                    <div class="queue-list">
-                        {#each $currentPlaylist as t, i}
-                            <div class="queue-item" class:active={i === $currentIndex} role="button" tabindex="0" on:click={() => { currentIndex.set(i); showQueue = false; }}>
+            <div class="queue-modal" in:fly={{y: '100%', duration: 400, easing: expoOut}} out:fly={{y: '100%', duration: 300, easing: expoIn}}>
+                <div class="queue-header">
+                    <h3 class="queue-title">Playing Next</h3>
+                    <button class="btn-icon" on:click={() => showQueue = false}>
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                    </button>
+                </div>
+                
+                <div class="queue-list">
+                    {#each $currentPlaylist as t, i}
+                        <div class="queue-item" class:active={i === $currentIndex} role="button" tabindex="0" on:click={() => { currentIndex.set(i); /*showQueue = false;*/ }}>
+                            <div class="queue-index-col">
                                 {#if i === $currentIndex}
                                     <svg width="16" height="16" viewBox="0 0 24 24" fill="white" stroke="white" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
                                 {:else}
                                     <span class="queue-index">{i + 1}</span>
                                 {/if}
-                                <div class="queue-text">
-                                    <span class="queue-item-title" style={i === $currentIndex ? 'color: white;' : ''}>{t.title}</span>
-                                    <span class="queue-item-artist">{$albumsMap.get(t.albumId)?.artistName || 'Unknown Artist'}</span>
-                                </div>
                             </div>
-                        {/each}
-                    </div>
+
+                            <div class="queue-text">
+                                <span class="queue-item-title" style={i === $currentIndex ? 'color: white;' : ''}>{t.title}</span>
+                                <span class="queue-item-artist">{$albumsMap.get(t.albumId)?.artistName || 'Unknown Artist'}</span>
+                                
+                                {#if activeDownloads[t.id] !== undefined}
+                                   <div class="queue-dl-status-row" transition:fade={{duration: 200}}>
+                                        <div class="queue-dl-track-container">
+                                            <div class="queue-dl-bar" style="transform: scaleX({activeDownloads[t.id] / 100})"></div>
+                                        </div>
+
+                                        <div class="queue-dl-label-wrapper" 
+                                            in:fly={{ y: 4, duration: 500, delay: 500, easing: expoOut }}>
+                                            <span class="queue-dl-label">
+                                                {#if activeDownloads[t.id] < 100}
+                                                    DOWNLOADING {Math.round(activeDownloads[t.id])}%
+                                                {:else}
+                                                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="4"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                                    AVAILABLE OFFLINE
+                                                {/if}
+                                            </span>
+                                        </div>
+                                    </div>
+                                {/if}
+                            </div>
+                        </div>
+                    {/each}
                 </div>
-            {/if}
+            </div>
+        {/if}
+
         </div>
-    </div>
+        </div>
 
     {#if isLyricsFullScreen}
         <div class="lyrics-modal-popup" use:portal={true} in:fly={{y: '100%', duration: 400, easing: expoOut}} out:fly={{y: '100%', duration: 200, easing: expoIn}}>
             <div class="lyrics-modal-header">
                 <h3 class="modal-title">Lyrics</h3>
-                <button class="btn-icon" on:click={() => isLyricsFullScreen = false}>
+                <button class="btn-icon" /*on:click={() => isLyricsFullScreen = false}*/>
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
                 </button>
             </div>
@@ -709,7 +719,6 @@
         --base-header-height: 64px;
         --base-footer-height: 80px;
 
-        /* Perform calculations using the base values */
         --fp-height-top: calc(var(--base-header-height) + var(--fp-offset));
         --fp-height-bottom: calc(var(--base-footer-height) - var(--fp-height-top));
 
@@ -753,7 +762,7 @@
     }
 
     #full-player.max-glass { 
-        height: calc(100dvh - 210px) !important; 
+        height: calc(100dvh - 220px) !important; 
         top: 80px; 
         right: 16px !important; 
         border-radius: 32px !important; 
@@ -778,7 +787,6 @@
     }
     .fp-scroll-content::-webkit-scrollbar { display: none; }
 
-    /* Morphing iOS Handle CSS */
     .fp-drag-handle { 
         display: flex; 
         width: 100%;
@@ -834,6 +842,86 @@
     .queue-item-title { font-weight: 600; font-size: 15px; color: white; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px; }
     .queue-item-artist { font-size: 13px; color: rgba(255,255,255,0.5); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
+    .queue-dl-status-row {
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center; /* Centering the content */
+        width: 100%;
+        margin-top: 8px;
+        height: 16px;
+    }
+
+    /* The Label Wrapper: Handles the fading background mask */
+    .queue-dl-label-wrapper {
+        position: relative;
+        z-index: 2;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        padding: 0 24px; 
+        
+        /* Your improved wide gradient */
+        background: linear-gradient(
+            90deg, 
+            transparent 0%, 
+            #0f0f0f 10%, 
+            #0f0f0f 90%, 
+            transparent 100%
+        );
+
+        /* Prevents any flickering before the 1s animation starts */
+        will-change: transform, opacity;
+    }
+
+    .queue-dl-label {
+        font-size: 8px;
+        font-weight: 900;
+        letter-spacing: 0.1em;
+        color: rgba(255, 255, 255, 0.9); /* Neutral text color */
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        text-transform: uppercase;
+        white-space: nowrap;
+    }
+
+    /* The Progress Track (Larger height, neutral color) */
+    .queue-dl-track-container {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 50%;
+        transform: translateY(-50%);
+        height: 3px; /* Larger height as requested */
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 4px;
+        overflow: hidden;
+        z-index: 1;
+    }
+
+    /* The Filling Bar (Neutral White/Gray) */
+    .queue-dl-bar {
+        height: 100%;
+        width: 100%;
+        background: rgba(255, 255, 255, 0.5); /* No accent color */
+        transform-origin: left;
+        transition: transform 0.4s cubic-bezier(0.32, 0.72, 0, 1);
+        will-change: transform;
+    }
+
+    /* Ensure queue items have enough vertical space */
+    .queue-item {
+        padding: 16px 12px;
+    }
+
+    /* Hover effect similar to your .fp-progress-track */
+    .queue-dl-status-row:hover .queue-dl-track-container {
+        height: 4px;
+        background: rgba(255, 255, 255, 0.2);
+        transition: height 0.3s ease;
+    }
+
     .lyrics-modal-popup {
         position: fixed; inset: 0;
         background: rgba(15, 15, 15, 0.95);
@@ -860,7 +948,6 @@
 }
 
     .lyrics-spawn-container {
-    /* FIX: Use padding instead of margin to prevent Svelte slide margin-collapse snapping */
     padding-bottom: 16px; 
     animation: iosPremiumSpawn 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
     will-change: transform, opacity;
@@ -958,10 +1045,8 @@
     width: 100%; 
     max-width: 350px; 
     
-    /* 1. BIGGER GAP: 48px bottom margin when NO lyrics are present */
     margin: 0 auto 24px auto; 
     
-    /* 2. Transition both the size AND the margin smoothly together */
     transition: max-width 0.4s cubic-bezier(0.25, 1, 0.5, 1),
                 margin-bottom 0.4s cubic-bezier(0.25, 1, 0.5, 1); 
     
@@ -973,7 +1058,6 @@
 .fp-cover-container.shrink {
     max-width: 262px; 
     
-    /* 3. TIGHTER GAP: drops back to 16px when lyrics ARE present */
     margin-bottom: 16px; 
 }
 
@@ -991,7 +1075,6 @@
         transform: translate3d(0,0,0);
     }
 
-    /* Base transition for the moving elements */
     .fp-info, 
     .fp-progress-section, 
     .fp-controls,
@@ -1010,7 +1093,6 @@
     padding: 0;
 }
 
-    /* Target the info AND all its siblings below it to move down together */
     .fp-info.enlarge,
     .fp-info.enlarge ~ .fp-progress-section,
     .fp-info.enlarge ~ .fp-controls,
@@ -1020,7 +1102,7 @@
     }
 
     .fp-text-container { min-width: 0; flex: 1; display: flex; flex-direction: column; text-align: left; }
-    .fp-title { font-size: 20px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: white; margin-bottom: 4px; }
+    .fp-title { font-size: 20px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: white; margin-bottom: 4px; cursor: pointer}
     .fp-artist { font-size: 14px; color: rgba(255,255,255,0.7); cursor: pointer; transition: color 0.2s; }
     .fp-artist:hover { color: white; text-decoration: underline; }
 
@@ -1106,5 +1188,25 @@
         }
         .drag-zone { padding-top: max(16px, env(safe-area-inset-top)); }
         .close-btn { display: none; }
+    }
+
+    @keyframes buffer-wave {
+        0% { transform: translateX(-100%); }
+        100% { transform: translateX(100%); }
+    }
+
+    .is-buffering {
+        position: relative;
+        overflow: hidden !important; 
+    }
+
+    .is-buffering::after {
+        content: "";
+        position: absolute;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.4), transparent);
+        animation: buffer-wave 1.2s infinite linear;
+        z-index: 5;
+        pointer-events: none;
     }
 </style>

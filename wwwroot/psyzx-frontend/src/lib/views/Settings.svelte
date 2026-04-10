@@ -1,14 +1,15 @@
 <script>
     import { onMount } from 'svelte';
     import { fade } from 'svelte/transition';
-    // Added viewSize to imports
     import { isGlobalColorActive, isMaxGlassActive, isDesktopSwapActive, viewSize, isCacheDebugActive } from '../../store.js';
     import { setVolumeBoost } from '../audio.js';
 
     let currentBoost = '1.0';
+    let isGaplessEnabled = true;
 
     onMount(() => {
         currentBoost = localStorage.getItem('psyzx_boost') || '1.0';
+        isGaplessEnabled = localStorage.getItem('psyzx_gapless') !== 'false';
         if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
             navigator.serviceWorker.controller.postMessage({
                 type: 'SET_DEBUG_MODE',
@@ -28,7 +29,6 @@
     const toggleMaxGlass = () => isMaxGlassActive.set(!$isMaxGlassActive);
     const toggleDesktopSwap = () => isDesktopSwapActive.set(!$isDesktopSwapActive);
     
-    // Function to update the global view size
     const updateViewSize = (size) => {
         viewSize.set(size);
         localStorage.setItem('psyzx_view_size', size);
@@ -45,6 +45,11 @@
         }
     };
 
+    const toggleGapless = () => {
+        isGaplessEnabled = !isGaplessEnabled;
+        localStorage.setItem('psyzx_gapless', isGaplessEnabled.toString());
+    };
+
     const refreshApp = async () => {
         try {
             const keys = await caches.keys();
@@ -59,7 +64,7 @@
             
             window.location.reload();
         } catch (e) {
-            console.error("Refresh failed", e);
+            console.error(e);
             window.location.reload();
         }
     };
@@ -142,8 +147,18 @@
     </div>
 
     <div class="settings-section">
-        <h2>Software Pre-Amp</h2>
+        <h2>Audio Engine</h2>
         
+        <div class="setting-item" style="margin-bottom: 24px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 24px;">
+            <div class="setting-info">
+                <span class="setting-title">Gapless Playback</span>
+                <span class="setting-desc">Preloads and primes the next track for seamless audio transitions. Optimized for iOS.</span>
+            </div>
+            <button class="toggle-btn" class:active={isGaplessEnabled} on:click={toggleGapless} aria-label="Toggle Gapless Playback">
+                <div class="toggle-knob"></div>
+            </button>
+        </div>
+
         <div class="setting-item-col">
             <div class="setting-info w-full">
                 <div class="flex-between">
@@ -210,7 +225,6 @@
     .mb-16 { margin-bottom: 16px; }
     .highlight-val { font-weight: 900; font-family: monospace; color: var(--accent-color); font-size: 16px; }
     
-    /* Segmented Control Styles */
     .segmented-control {
         display: flex; background: rgba(255,255,255,0.15); padding: 2px; border-radius: 10px;
         border: 1px solid rgba(255,255,255,0.05);

@@ -1,268 +1,228 @@
 import { get } from 'svelte/store';
-import { currentPlaylist, currentIndex, isShuffle, isRepeat, shuffleHistory } from '../store.js';
+import { currentPlaylist, currentIndex, isShuffle, isRepeat, shuffleHistory, isPlaying, isBuffering } from '../store.js';
 
 export let audioCtx;
 export let gainNode;
 let eqFilters = [];
-export let globalAudioEl = null;
-let silentAnchorEl = null;
-let sourceNode = null;
-let heartbeatOsc = null;
 let mixerNode = null;
-export let isEngineInitialized = false;
-let isInitializing = false;
-let stallTimeout = null;
+let heartbeatOsc = null;
 
-// Export the promise so Svelte knows exactly when hardware is ready
+export let playerA = null;
+export let playerB = null;
+export let activePlayer = null;
+export let standbyPlayer = null;
+
+let gainA = null;
+let gainB = null;
+
+export let isEngineInitialized = false;
+let hasDoneSilentPrime = false;
+let stallTimeout = null;
 export let resumePromise = Promise.resolve();
+
+export let isGaplessEnabled = typeof window !== 'undefined' ? localStorage.getItem('psyzx_gapless') !== 'false' : true;
+
+export const setGaplessMode = (enabled) => {
+    isGaplessEnabled = enabled;
+    if (typeof window !== 'undefined') {
+        localStorage.setItem('psyzx_gapless', enabled.toString());
+    }
+};
 
 let pendingBoost = 1.0;
 let pendingEq = [0, 0, 0, 0, 0, 0];
-
 const EQ_FREQS = [60, 250, 1000, 4000, 8000, 14000];
-const SILENCE_B64 = "data:audio/wav;base64,UklGRiQAAABXQVZFRm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=";
 
-// FIX 1: Make iOS detection global so we can protect the background audio session anywhere
-const isIOS = typeof navigator !== 'undefined' && /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+const SILENCE_B64 = "data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4LjEyLjEwMAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAAASW5mbwAAAA8AAAAEAAABIAD+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+AAAAAExhdmM1OC4xMzQAAAAAAAAAAAAAAAAkAAAAAAAAAAABIADZt9snAAAAAAAAAAAAAAAAAAAA//MUZAAAAAGkAAAAAAAAA0gAAAAATEFNRTMuMTAwA8EAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA//MUZAMAAAGkAAAAAAAAA0gAAAAATEFNRTMuMTAwA8EAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
-const initSilentAnchor = () => {
-    if (silentAnchorEl) return;
-    silentAnchorEl = new Audio();
-    silentAnchorEl.src = SILENCE_B64;
-    silentAnchorEl.loop = true;
-    silentAnchorEl.setAttribute("playsinline", "true");
-    silentAnchorEl.volume = 0.01;
-};
+const isIOS = typeof navigator !== 'undefined' && /iPad|iPhone|iPod/.test(navigator.userAgent) && !window['MSStream'];
 
-// FIX 3: Re-use a single AudioContext for cues so we don't exhaust iOS hardware limits
-let cueCtx = null; 
+const buildWebAudioGraph = () => {
+    if (!audioCtx) return;
 
-export const playAudioCue = (action) => {
-    // Only play cues on mobile devices
-    if (window.innerWidth > 850) return;
-
-    try {
-        if (!cueCtx) {
-            const AudioCtx = window.AudioContext || window.webkitAudioContext;
-            cueCtx = new AudioCtx();
-        }
-        
-        if (cueCtx.state === 'suspended') cueCtx.resume();
-
-        const osc = cueCtx.createOscillator();
-        const gain = cueCtx.createGain();
-        
-        osc.connect(gain);
-        gain.connect(cueCtx.destination);
-        
-        // Soft, fast sine wave for a premium UI "tick"
-        osc.type = 'sine';
-        
-        if (action === 'resume') {
-            osc.frequency.setValueAtTime(300, cueCtx.currentTime);
-            osc.frequency.exponentialRampToValueAtTime(600, cueCtx.currentTime + 0.05);
-        } else {
-            osc.frequency.setValueAtTime(600, cueCtx.currentTime);
-            osc.frequency.exponentialRampToValueAtTime(300, cueCtx.currentTime + 0.05);
-        }
-        
-        gain.gain.setValueAtTime(0.05, cueCtx.currentTime); 
-        gain.gain.exponentialRampToValueAtTime(0.001, cueCtx.currentTime + 0.05);
-        
-        osc.start(cueCtx.currentTime);
-        osc.stop(cueCtx.currentTime + 0.05);
-    } catch(e) {
-        console.error("Audio cue failed:", e);
-    }
-};
-
-export const initAudioEngine = async () => {
-    if (typeof window === 'undefined' || !globalAudioEl || isEngineInitialized || isInitializing) return;
-    isInitializing = true; 
-
-    if (isIOS) {
-        console.log("iOS detected: Bypassing AudioContext to preserve background audio");
-        isInitializing = false;
-        return; 
+    if (!mixerNode) {
+        mixerNode = audioCtx.createGain();
+        mixerNode.gain.value = 1.0;
     }
 
     try {
-        const AudioCtx = window.AudioContext || window['webkitAudioContext'];
-        if (!audioCtx) audioCtx = new AudioCtx();
-
-        audioCtx.onstatechange = () => {
-            console.log(`[Audio Engine] Hardware state changed to: ${audioCtx.state}`);
-            
-            // If the system suspended us unexpectedly, aggressively try to recover
-            if (audioCtx.state === 'interrupted' || audioCtx.state === 'suspended') {
-                // Only try to recover if the HTML5 audio element actually wants to play
-                if (globalAudioEl && !globalAudioEl.paused) {
-                    audioCtx.resume().catch(e => console.error("Recovery failed:", e));
-                }
-            }
-        };
+        const sourceA = audioCtx.createMediaElementSource(playerA);
+        const sourceB = audioCtx.createMediaElementSource(playerB);
         
-        initSilentAnchor();
-
-        if (!mixerNode) {
-            mixerNode = audioCtx.createGain();
-            mixerNode.gain.value = 1.0;
-        }
-
-        if (!sourceNode) {
-            sourceNode = audioCtx.createMediaElementSource(globalAudioEl);
-            sourceNode.connect(mixerNode);
-        }
-
-        if (!heartbeatOsc) {
-            const hGain = audioCtx.createGain();
-            hGain.gain.value = 0.0000001; 
-            heartbeatOsc = audioCtx.createOscillator();
-            heartbeatOsc.type = 'sine';
-            heartbeatOsc.frequency.value = 440;
-            heartbeatOsc.connect(hGain);
-            hGain.connect(mixerNode);
-            heartbeatOsc.start();
-        }
-
-        eqFilters = EQ_FREQS.map((freq, i) => {
-            const filter = audioCtx.createBiquadFilter();
-            filter.type = 'peaking';
-            filter.frequency.value = freq;
-            filter.Q.value = 1.4;
-            filter.gain.value = pendingEq[i];
-            return filter;
-        });
-
-        gainNode = audioCtx.createGain();
-        gainNode.gain.value = pendingBoost;
-
-        mixerNode.connect(eqFilters[0]);
-        for (let i = 0; i < eqFilters.length - 1; i++) {
-            eqFilters[i].connect(eqFilters[i+1]);
-        }
-        eqFilters[eqFilters.length - 1].connect(gainNode);
-        gainNode.connect(audioCtx.destination);
-
-        document.addEventListener('visibilitychange', () => {
-            if (audioCtx && (audioCtx.state === 'suspended' || audioCtx.state === 'interrupted')) {
-                audioCtx.resume().catch(() => {});
-            }
-        });
-
-        isEngineInitialized = true;
+        gainA = audioCtx.createGain();
+        gainB = audioCtx.createGain();
+        
+        sourceA.connect(gainA);
+        sourceB.connect(gainB);
+        
+        gainA.connect(mixerNode);
+        gainB.connect(mixerNode);
     } catch (e) {
-        console.error(e);
-    } finally {
-        isInitializing = false;
     }
+
+    if (!heartbeatOsc) {
+        const hGain = audioCtx.createGain();
+        hGain.gain.value = 0.0000001;
+        heartbeatOsc = audioCtx.createOscillator();
+        heartbeatOsc.type = 'sine';
+        heartbeatOsc.frequency.value = 440;
+        heartbeatOsc.connect(hGain);
+        hGain.connect(mixerNode);
+        heartbeatOsc.start();
+    }
+
+    eqFilters = EQ_FREQS.map((freq, i) => {
+        const filter = audioCtx.createBiquadFilter();
+        filter.type = 'peaking';
+        filter.frequency.value = freq;
+        filter.Q.value = 1.4;
+        filter.gain.value = pendingEq[i];
+        return filter;
+    });
+
+    gainNode = audioCtx.createGain();
+    gainNode.gain.value = pendingBoost;
+
+    mixerNode.connect(eqFilters[0]);
+    for (let i = 0; i < eqFilters.length - 1; i++) {
+        eqFilters[i].connect(eqFilters[i+1]);
+    }
+    eqFilters[eqFilters.length - 1].connect(gainNode);
+    gainNode.connect(audioCtx.destination);
 };
 
-export const primeEngine = async () => {
-    if (!isEngineInitialized && !isIOS) await initAudioEngine();
-    if (audioCtx?.state === 'suspended') {
-        resumePromise = audioCtx.resume().catch(() => {});
-    }
-};
+export const unlockAudioContext = () => {
+    if (hasDoneSilentPrime) return;
 
-export const unlockAudioContext = () => { 
-    // FIX 1: Absolutely forbid creating an AudioContext here on iOS 
-    if (isIOS) return;
+    const AudioCtx = window.AudioContext || window['webkitAudioContext'];
+    if (!audioCtx) audioCtx = new AudioCtx();
 
-    if (!audioCtx) {
-        const AudioCtx = window.AudioContext || window['webkitAudioContext'];
-        audioCtx = new AudioCtx();
-    }
-
-    isPlayAttemptActive = true;
-
-    if (audioCtx.state === 'suspended' || audioCtx.state === 'interrupted') {
-        resumePromise = audioCtx.resume().catch(() => {
-            window.dispatchEvent(new CustomEvent('ios-hardware-deadlock'));
-        });
-    }
-
-    try {
-        if (silentAnchorEl && silentAnchorEl.paused) {
-            silentAnchorEl.play().catch(() => {});
-        }
-    } catch (e) {}
-
-    primeEngine();
-};
-
-let isPlayAttemptActive = false;
-
-export const registerAudioElement = (el) => {
-    globalAudioEl = el;
-
-    const checkDeadlock = () => {
-        const isContextStuck = audioCtx && audioCtx.state !== 'running';
-        const isPlayheadStuck = !el.paused && el.currentTime === 0;
-
-        if (isPlayAttemptActive && (isContextStuck || isPlayheadStuck)) {
-            console.error("💀 [Audio Debug] DEADLOCK DETECTED: Engine Killed or Hardware Frozen.");
-            window.dispatchEvent(new CustomEvent('ios-hardware-deadlock'));
-            
-            isPlayAttemptActive = false; 
-            clearTimeout(stallTimeout);
+    audioCtx.onstatechange = () => {
+        if ((audioCtx.state === 'interrupted' || audioCtx.state === 'suspended') && activePlayer && !activePlayer.paused) {
+            audioCtx.resume().catch(() => {});
+        } else if (audioCtx.state === 'running' && activePlayer && !activePlayer.paused) {
+            activePlayer.pause();
+            const p = activePlayer.play();
+            if (p !== undefined) p.catch(() => {});
         }
     };
 
-    el.addEventListener('play', () => {
-        isPlayAttemptActive = true;
-        clearTimeout(stallTimeout);
-        
-        // FIX: Pre-warm the cue context on the first user interaction 
-        // to prevent a CPU spike/buffer underrun when the user presses play.
-        if (!cueCtx && window.innerWidth <= 850) {
-            try {
-                const AudioCtx = window.AudioContext || window.webkitAudioContext;
-                cueCtx = new AudioCtx();
-            } catch(e) {}
-        }
+    buildWebAudioGraph();
 
-        if (!isEngineInitialized && !isIOS) {
-            unlockAudioContext();
-            initAudioEngine();
-        }
+    playerA.src = SILENCE_B64;
+    playerB.src = SILENCE_B64;
+    
+    const pA = playerA.play();
+    if (pA !== undefined) pA.catch(() => {});
+    
+    const pB = playerB.play();
+    if (pB !== undefined) pB.catch(() => {});
+    
+    playerA.pause();
+    playerB.pause();
 
-        setTimeout(checkDeadlock, 1000); 
-        stallTimeout = setTimeout(checkDeadlock, 3500);
-    });
-
-    el.addEventListener('playing', () => {
-        isPlayAttemptActive = false;
-        clearTimeout(stallTimeout);
-    });
-
-    el.addEventListener('timeupdate', () => {
-        if (el.currentTime > 0.1) {
-            isPlayAttemptActive = false;
-            clearTimeout(stallTimeout);
-        }
-    });
-
-    el.addEventListener('pause', () => {
-        isPlayAttemptActive = false;
-        clearTimeout(stallTimeout);
-    });
+    hasDoneSilentPrime = true;
+    isEngineInitialized = true;
+    
+    requestAnimationFrame(checkGaplessTime);
 };
 
-export const setVolumeBoost = (val) => {
-    const num = parseFloat(val);
-    pendingBoost = num;
-    if (gainNode && audioCtx) {
-        gainNode.gain.value = num;
+const checkGaplessTime = () => {
+    if (isGaplessEnabled && activePlayer && activePlayer.duration > 0 && !activePlayer.paused) {
+        if (activePlayer.duration - activePlayer.currentTime <= 0.2 && !activePlayer._earlyEndFired) {
+            activePlayer._earlyEndFired = true;
+            activePlayer.dispatchEvent(new Event('ended'));
+        }
+    }
+    requestAnimationFrame(checkGaplessTime);
+};
+
+export const registerAudioElements = (elA, elB) => {
+    playerA = elA;
+    playerB = elB;
+    activePlayer = playerA;
+    standbyPlayer = playerB;
+
+    const setupListeners = (el) => {
+        el.addEventListener('play', () => {
+            el._earlyEndFired = false;
+            clearTimeout(stallTimeout);
+            stallTimeout = setTimeout(() => checkDeadlock(el), 3500);
+        });
+
+        el.addEventListener('waiting', () => {
+            if (el === activePlayer) isBuffering.set(true);
+        });
+
+        el.addEventListener('playing', () => {
+            if (el === activePlayer) {
+                isBuffering.set(false);
+                isPlaying.set(true);
+            }
+            clearTimeout(stallTimeout);
+        });
+
+        el.addEventListener('pause', () => {
+            if (el === activePlayer) isPlaying.set(false);
+            clearTimeout(stallTimeout);
+        });
+    };
+
+    setupListeners(playerA);
+    setupListeners(playerB);
+};
+
+const checkDeadlock = (el) => {
+    const isContextStuck = audioCtx && audioCtx.state !== 'running';
+    const isPlayheadStuck = !el.paused && el.currentTime === 0;
+
+    if (isContextStuck || isPlayheadStuck) {
+        window.dispatchEvent(new CustomEvent('ios-hardware-deadlock'));
+        clearTimeout(stallTimeout);
     }
 };
 
+export const playAudioCue = (action, delaySeconds = 0) => {
+    if (window.innerWidth > 850 || !audioCtx) return;
+    try {
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.type = 'sine';
+        
+        const startTime = audioCtx.currentTime + delaySeconds;
+
+        if (action === 'resume') {
+            osc.frequency.setValueAtTime(300, startTime);
+            osc.frequency.exponentialRampToValueAtTime(600, startTime + 0.05);
+        } else {
+            osc.frequency.setValueAtTime(600, startTime);
+            osc.frequency.exponentialRampToValueAtTime(300, startTime + 0.05);
+        }
+        
+        gain.gain.setValueAtTime(0.05, startTime); 
+        gain.gain.exponentialRampToValueAtTime(0.001, startTime + 0.05);
+        
+        osc.start(startTime);
+        osc.stop(startTime + 0.05);
+    } catch(e) {
+    }
+};
+
+export const setVolumeBoost = (val) => {
+    pendingBoost = parseFloat(val);
+    if (gainNode && audioCtx) gainNode.gain.value = pendingBoost;
+};
+
 export const setEqBand = (index, val) => {
-    const num = parseFloat(val);
-    pendingEq[index] = num;
+    pendingEq[index] = parseFloat(val);
     if (eqFilters[index] && audioCtx) {
         if (audioCtx.state === 'suspended') audioCtx.resume().catch(()=>{});
-        eqFilters[index].gain.value = num;
+        eqFilters[index].gain.value = pendingEq[index];
     }
 };
 
@@ -278,86 +238,153 @@ export const updateMediaSession = (track, album, handlers) => {
     
     navigator.mediaSession.setActionHandler('pause', async () => {
         handlers.pause();
-        // FIX 2: Do NOT suspend audioCtx here. It causes the 8-bit glitch.
-        if (silentAnchorEl) silentAnchorEl.pause();
     });
 
     navigator.mediaSession.setActionHandler('play', async () => {
-        if (!isIOS) await unlockAudioContext();
+        if (audioCtx?.state === 'suspended') await audioCtx.resume();
         handlers.play();
     });
 
     if (handlers.seek) {
         navigator.mediaSession.setActionHandler('seekto', (details) => {
             handlers.seek(details.seekTime);
-            if (globalAudioEl && !isNaN(globalAudioEl.duration)) {
-                updateMediaPositionState(details.seekTime, globalAudioEl.duration);
+            if (activePlayer && !isNaN(activePlayer.duration)) {
+                updateMediaPositionState(details.seekTime, activePlayer.duration);
             }
         });
     }
     
     navigator.mediaSession.setActionHandler('previoustrack', handlers.prev);
     navigator.mediaSession.setActionHandler('nexttrack', handlers.next);
-
-    try {
-        navigator.mediaSession.setActionHandler('seekforward', null);
-        navigator.mediaSession.setActionHandler('seekbackward', null);
-    } catch (e) {}
 };
 
 export const updateMediaPositionState = (currentTime, duration) => {
     if ('mediaSession' in navigator && !isNaN(duration) && duration > 0) {
         try {
-            navigator.mediaSession.setPositionState({
-                duration: duration,
-                playbackRate: 1.0,
-                position: currentTime
-            });
+            navigator.mediaSession.setPositionState({ duration, playbackRate: 1.0, position: currentTime });
         } catch (e) {}
     }
 };
 
-// -------------------------------------------------------------------------
-// GLOBAL PLAYBACK CONTROLLERS
-// -------------------------------------------------------------------------
+export const preloadNextUrl = (url) => {
+    if (!isGaplessEnabled) return;
 
-// -------------------------------------------------------------------------
-// GLOBAL PLAYBACK CONTROLLERS
-// -------------------------------------------------------------------------
+    const targetPlayer = standbyPlayer; 
 
-export const togglePlayGlobal = () => { 
-    if (!globalAudioEl) return;
-    
-    if (!isIOS) {
-        unlockAudioContext();
-        if (!isEngineInitialized) initAudioEngine();
+    if (targetPlayer && !targetPlayer.src.includes(url)) {
+        targetPlayer.src = url;
+        targetPlayer.preload = "auto";
+        
+        const targetGain = targetPlayer === playerA ? gainA : gainB;
+        if (targetGain && audioCtx) {
+            targetGain.gain.cancelScheduledValues(audioCtx.currentTime);
+            targetGain.gain.value = 0; 
+        }
+
+        targetPlayer.load();
+
+        const p = targetPlayer.play();
+        if (p !== undefined) {
+            p.then(() => {
+                targetPlayer.pause();
+                targetPlayer.currentTime = 0;
+            }).catch(() => {});
+        }
+    }
+};
+
+export const loadAndPlayUrl = async (url) => {
+    if (!hasDoneSilentPrime) unlockAudioContext(); 
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+
+    const oldPlayer = activePlayer;
+    activePlayer = standbyPlayer;
+    standbyPlayer = oldPlayer; 
+
+    const activeTargetGain = activePlayer === playerA ? gainA : gainB;
+    const oldTargetGain = standbyPlayer === playerA ? gainA : gainB;
+
+    if (isGaplessEnabled && audioCtx) {
+        if (oldTargetGain && !standbyPlayer.paused) {
+            oldTargetGain.gain.cancelScheduledValues(audioCtx.currentTime);
+            oldTargetGain.gain.setValueAtTime(oldTargetGain.gain.value, audioCtx.currentTime);
+            oldTargetGain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.2);
+            
+            setTimeout(() => {
+                standbyPlayer.pause();
+            }, 250);
+        } else {
+            standbyPlayer.pause();
+        }
+
+        if (activeTargetGain) {
+            activeTargetGain.gain.cancelScheduledValues(audioCtx.currentTime);
+            activeTargetGain.gain.setValueAtTime(0, audioCtx.currentTime);
+            activeTargetGain.gain.linearRampToValueAtTime(1, audioCtx.currentTime + 0.05);
+        }
+    } else {
+        standbyPlayer.pause();
+        if (activeTargetGain && audioCtx) {
+            activeTargetGain.gain.cancelScheduledValues(audioCtx.currentTime);
+            activeTargetGain.gain.value = 1;
+        }
     }
 
-    if (globalAudioEl.paused) { 
+    if (!activePlayer.src.includes(url)) {
+        activePlayer.src = url;
+        activePlayer.load(); 
+        activePlayer.currentTime = 0;
+    } else if (activePlayer.currentTime > 0.5) {
+        activePlayer.currentTime = 0;
+    }
+    
+    try {
+        const playPromise = activePlayer.play();
+        if (playPromise !== undefined) {
+            playPromise.catch(() => {});
+        }
+        
+        isPlaying.set(true);
+        playAudioCue('resume', 0.08); 
+    } catch (e) {
+        isPlaying.set(false);
+    }
+};
+
+export const togglePlayGlobal = () => { 
+    if (!activePlayer) return;
+    
+    if (!hasDoneSilentPrime) unlockAudioContext(); 
+    
+    if (activePlayer.paused) { 
         if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
         
-        // 1. Start the music immediately
-        globalAudioEl.play().catch(e => console.error("Playback blocked:", e)); 
-        
-        // 2. FIX: Delay the Web Audio API cue by 80ms.
-        // This gives iOS CoreAudio time to lock the hardware to the HTML5 stream
-        // preventing the 1ms underrun/stutter collision.
-        setTimeout(() => {
-            playAudioCue('resume');
-        }, 80);
+        const activeTargetGain = activePlayer === playerA ? gainA : gainB;
+        if (activeTargetGain && audioCtx) {
+            activeTargetGain.gain.cancelScheduledValues(audioCtx.currentTime);
+            activeTargetGain.gain.value = 1;
+        }
 
+        const playPromise = activePlayer.play(); 
+        if (playPromise !== undefined) {
+            playPromise.catch(() => {});
+        }
+
+        isPlaying.set(true); 
+        playAudioCue('resume', 0.08);
     } else { 
-        // Pausing doesn't suffer from ducking, so we can fire both immediately
-        globalAudioEl.pause(); 
+        activePlayer.pause(); 
+        isPlaying.set(false);
         playAudioCue('pause');
     } 
 };
 
+let lastNextTime = 0;
+
 export const playNextGlobal = async (api) => {
-    if (!isIOS) {
-        unlockAudioContext();
-        if (!isEngineInitialized) initAudioEngine();
-    }
+    const now = Date.now();
+    if (now - lastNextTime < 500) return;
+    lastNextTime = now;
 
     const playlist = get(currentPlaylist);
     const index = get(currentIndex);
@@ -376,7 +403,7 @@ export const playNextGlobal = async (api) => {
         if (newTracks.length > 0) {
             currentPlaylist.update(list => [...list, ...newTracks]);
         } else {
-            if (globalAudioEl) globalAudioEl.pause();
+            if (activePlayer) activePlayer.pause();
             return;
         }
     }
@@ -403,20 +430,15 @@ export const playNextGlobal = async (api) => {
 };
 
 export const playPrevGlobal = () => {
-    if (!isIOS) {
-        unlockAudioContext();
-        if (!isEngineInitialized) initAudioEngine();
-    }
-
     const playlist = get(currentPlaylist);
     const index = get(currentIndex);
     const shuffle = get(isShuffle);
     const history = get(shuffleHistory);
 
-    if (!globalAudioEl || playlist.length === 0) return;
+    if (!activePlayer || playlist.length === 0) return;
 
-    if (globalAudioEl.currentTime > 3) {
-        globalAudioEl.currentTime = 0;
+    if (activePlayer.currentTime > 3) {
+        activePlayer.currentTime = 0;
     } else if (shuffle && history.length > 0) {
         const prevIndex = history.pop();
         shuffleHistory.set(history);

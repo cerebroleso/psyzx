@@ -25,6 +25,8 @@ export const accentColor = writable('rgb(181, 52, 209)');
 export const totalCacheSize = writable('0 MB');
 export const cachedTrackIds = writable(new Set());
 
+export const isBuffering = writable(false);
+
 export const refreshOfflineCache = async () => {
     if (typeof window === 'undefined' || !('caches' in window)) return;
     

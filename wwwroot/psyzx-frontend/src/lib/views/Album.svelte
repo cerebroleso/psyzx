@@ -4,7 +4,9 @@
     import { albumsMap, currentPlaylist, currentIndex, isPlaying, isShuffle, isRepeat, shuffleHistory, accentColor, isGlobalColorActive, isMaxGlassActive, appSessionVersion } from '../../store.js';
     import { formatTime } from '../utils.js';
     import { api } from '../api.js';
-    import { unlockAudioContext, initAudioEngine, isEngineInitialized } from '../audio.js';
+    
+    // 1. IMPORT ONLY WHAT IS NEEDED FROM THE NEW ENGINE
+    import { unlockAudioContext, togglePlayGlobal } from '../audio.js';
     
     function portal(node) {
         document.body.appendChild(node);
@@ -32,7 +34,8 @@
     $: maxPlay = Math.max(...tracks.map(t => t.playCount || 0));
     
     $: coverUrl = (album && album.coverPath) ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&v=${$appSessionVersion}` 
-    : DEFAULT_PLACEHOLDER;    $: avgBitrate = tracks.length > 0 ? Math.round(tracks.reduce((s, t) => s + (t.bitrate||0), 0) / tracks.length) : 0;
+    : DEFAULT_PLACEHOLDER;    
+    $: avgBitrate = tracks.length > 0 ? Math.round(tracks.reduce((s, t) => s + (t.bitrate||0), 0) / tracks.length) : 0;
     
     $: isPlayingAlbum = $isPlaying && $currentPlaylist.some(t => tracks.find(pt => pt.id === t.id));
 
@@ -80,17 +83,17 @@
     import Artist from './Artist.svelte';
     onMount(() => { setTimeout(() => mounted = true, 50); });
 
-    const togglePlayAlbum = () => {
+    // 2. REFACTORED TO USE NEW ENGINE
+    const togglePlayAlbum = async () => {
         if (typeof window !== 'undefined') {
-            unlockAudioContext();
-            if (!isEngineInitialized) initAudioEngine();
+            await unlockAudioContext(); // Await the unified setup/prime
         }
 
         if (isPlayingAlbum) {
-            document.querySelector('audio').pause();
+            togglePlayGlobal(); // Replaces querySelector('audio').pause()
         } else {
             if ($currentPlaylist.some(t => tracks.find(pt => pt.id === t.id))) {
-                document.querySelector('audio').play(); 
+                togglePlayGlobal(); // Replaces querySelector('audio').play()
             } else {
                 currentPlaylist.set(tracks);
                 if ($isShuffle) { shuffleHistory.set([]); currentIndex.set(Math.floor(Math.random() * tracks.length)); } 
@@ -106,10 +109,10 @@
         else { currentIndex.set(0); }
     };
 
-    const playSpecificTrack = (index) => { 
+    // 3. REFACTORED TO USE NEW ENGINE
+    const playSpecificTrack = async (index) => { 
         if (typeof window !== 'undefined') {
-            unlockAudioContext();
-            if (!isEngineInitialized) initAudioEngine();
+            await unlockAudioContext(); // Await the unified setup/prime
         }
         shuffleHistory.set([]); 
         currentPlaylist.set(tracks); 
