@@ -301,6 +301,12 @@
             closePlaylistSelector();
         }
     };
+
+    const goArtist = () => {
+        if (album && album.artistId) {
+            window.location.hash = `#artist/${album.artistId}`;
+        }
+    };
 </script>
 
 <svelte:window on:click={handleGlobalClick} />
@@ -322,7 +328,11 @@
                 <div class="album-type">Album</div>
                 <div class="album-title">{album.title}</div>
                 <div class="album-meta">
-                    <strong class="album-info-text">{album.artistName}</strong><span class="dot">•</span>
+                    <strong class="album-info-text"
+                        role="button" 
+                        tabindex="0" 
+                        on:click={goArtist} 
+                    >{album.artistName}</strong><span class="dot">•</span>
                     <span class="album-info-text">{album.releaseYear > 0 ? album.releaseYear : ''}</span><span class="dot">•</span>
                     <span class="album-info-text">{tracks.length} songs</span><span class="dot">•</span>
                     <span class="duration-highlight">{timeString}</span>

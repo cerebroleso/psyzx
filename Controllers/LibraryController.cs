@@ -16,7 +16,7 @@ public class LibraryController : ControllerBase
     public LibraryController(AppDbContext context, IConfiguration config)
     {
         _context = context;
-        _basePath = config["MusicSettings:BasePath"] ?? "";
+        _basePath = Path.GetFullPath(config["MusicSettings:BasePath"] ?? "");
         _coversPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "covers");
     }
 

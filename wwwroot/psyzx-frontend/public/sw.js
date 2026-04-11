@@ -41,18 +41,6 @@ const notifyClientsOfCacheUpdate = async () => {
     } catch (err) {}
 };
 
-// --- NEW: LRU Cache Cleanup Function ---
-async function enforceCacheLimit(cacheName, maxItems) {
-    const cache = await caches.open(cacheName);
-    const keys = await cache.keys();
-    if (keys.length > maxItems) {
-        // Delete the oldest entries (keys at the start of the array)
-        for (let i = 0; i < keys.length - maxItems; i++) {
-            await cache.delete(keys[i]);
-        }
-    }
-}
-
 const processQueue = async () => {
     if (activeDownloads >= MAX_CONCURRENT || downloadQueue.length === 0) return;
 
@@ -98,7 +86,6 @@ async function backgroundCacheMedia(cacheKey, originalUrl, trackId) {
         const total = parseInt(res.headers.get('content-length'), 10);
         if (!total) {
             await cachePromise;
-            await enforceCacheLimit(MEDIA_CACHE, 40); // Clean up old tracks
             await notifyClientsOfCacheUpdate();
             broadcastLog(`Stored ${trackId}`);
             return;
@@ -111,7 +98,6 @@ async function backgroundCacheMedia(cacheKey, originalUrl, trackId) {
             const { done, value } = await reader.read();
             if (done) {
                 await cachePromise; 
-                await enforceCacheLimit(MEDIA_CACHE, 40); // Clean up old tracks
                 await notifyClientsOfCacheUpdate();
                 broadcastLog(`Stored ${trackId}`);
                 break;
@@ -242,6 +228,7 @@ async function handleHtmlRequest(req) {
 
     try {
         // 🔥 FIX 2: iOS 'navigate' fetch crash prevention. 
+        // We fetch the raw URL string instead of the Request object.
         const res = await fetch(req.url);
         if (!res.ok) throw new Error(`Server returned ${res.status}`);
         
@@ -270,13 +257,15 @@ async function handleAppAsset(req) {
 
     // 2. Network Fallback
     try {
+        // 🔥 iOS BUG FIX: Fetch the string URL, not the strict Request object.
+        // iOS Safari sometimes blocks intercepted module script requests.
         const fetchRes = await fetch(req.url);
         if (!fetchRes.ok) throw new Error(`Asset fetch failed: ${fetchRes.status}`);
         
         cache.put(cleanUrlStr, fetchRes.clone()); 
         return fetchRes;
     } catch (err) {
-        // 3. Fuzzy Matcher
+        // 3. Fuzzy Matcher (In case of an update while offline)
         if (reqUrl.pathname.startsWith('/assets/')) {
             const keys = await cache.keys();
             const match = reqUrl.pathname.match(/\/assets\/([^/]+)-[a-zA-Z0-9_-]+\.(js|css)$/);
@@ -288,6 +277,7 @@ async function handleAppAsset(req) {
                     const kUrl = new URL(k.url);
                     return kUrl.pathname.startsWith(`/assets/${baseName}-`) && kUrl.pathname.endsWith(`.${ext}`);
                 });
+                // iOS Safe: Match the URL string of the found key
                 if (fuzzyReq) return await cache.match(fuzzyReq.url);
             }
         }

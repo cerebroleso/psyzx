@@ -31,9 +31,6 @@ public class PlaylistsController : ControllerBase
     {
         var userId = GetCurrentUserId();
 
-        // 1. Fetch raw data. 
-        // FIX: Removed .ToList() inside the projection. EF Core cannot translate it to SQL.
-        // FIX: Restored trackCount which was missing.
         var playlistData = await _db.Playlists
             .AsNoTracking()
             .Where(p => p.UserId == userId)
@@ -45,7 +42,6 @@ public class PlaylistsController : ControllerBase
             })
             .ToListAsync();
 
-        // 2. Perform distinct/take filtering in-memory (Client-side)
         var result = playlistData.Select(p => new {
             id = p.id,
             name = p.name,
@@ -75,7 +71,6 @@ public class PlaylistsController : ControllerBase
         _db.Playlists.Add(playlist);
         await _db.SaveChangesAsync();
 
-        // FIX: Return empty covers array to prevent Svelte from panicking
         return Ok(new { id = playlist.Id, name = playlist.Name, trackCount = 0, covers = new List<string>() });
     }
 

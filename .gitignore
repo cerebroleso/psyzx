@@ -11,3 +11,6 @@ Music/
 Downloads/
 *.crt
 *.key
+*.txt
+*.ini
+*.xml
