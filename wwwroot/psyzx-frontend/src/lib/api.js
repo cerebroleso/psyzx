@@ -167,9 +167,11 @@ export const api = {
         }
     },
 
-    async scanLibrary() {
+    async scanLibrary(hardScan = false) {
         try {
-            return await this.fetchWithTimeout('/System/scan', { method: 'POST' });
+            // Appending the flag as a query string so the ASP.NET controller can bind it
+            const endpoint = `/System/scan${hardScan ? '?hardScan=true' : ''}`;
+            return await this.fetchWithTimeout(endpoint, { method: 'POST' });
         } catch (e) {
             throw new Error('OFFLINE');
         }

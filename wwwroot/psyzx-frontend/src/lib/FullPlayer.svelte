@@ -12,7 +12,9 @@
         playerDuration, 
         isMaxGlassActive, 
         appSessionVersion,
-        isBuffering
+        isBuffering,
+        globalBitrate,
+        globalFileExt
     } from '../store.js';
     import { formatTime } from './utils.js';
     import { setEqBand, togglePlayGlobal, playNextGlobal, playPrevGlobal, activePlayer } from './audio.js';
@@ -495,6 +497,14 @@
                             on:keydown={(e) => e.key === 'Enter' && goAlbum()}
                         >
                             {track ? track.title : '---'}</div>
+                            <!-- {#if $globalBitrate > 0}
+                                <div class="kbps-badge">
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="var(--accent-color)"><rect x="3" y="8" width="4" height="8"/><rect x="10" y="4" width="4" height="16"/><rect x="17" y="10" width="4" height="4"/></svg>
+                                    <span>{$globalBitrate} kbps</span><span class="ext">{$globalFileExt}</span>
+                                </div>
+                            {:else}
+                                <span style="font-size: 11px; font-family: monospace; color: #555;">NO SIGNAL</span>
+                            {/if} -->
                         <div 
                             class="fp-artist" 
                             role="button" 
@@ -1174,4 +1184,28 @@
         z-index: 5;
         pointer-events: none;
     }
+
+    .kbps-badge {
+        /* Change flex to inline-flex */
+        display: inline-flex; 
+        
+        /* These ensure it stays tight */
+        width: fit-content; 
+        
+        align-items: center; 
+        gap: 6px; 
+        background: rgba(0,0,0,0.4); 
+        padding: 4px 8px; 
+        border-radius: 6px;
+        font-size: 11px; 
+        font-family: monospace; 
+        font-weight: bold; 
+        border: 1px solid rgba(255,255,255,0.1);
+        box-shadow: 0 2px 8px rgba(0,0,0,0.3); 
+        letter-spacing: 0.5px; 
+        
+        /* Keep your margin if you need the offset */
+        margin-left: -12px; 
+    }
+    .kbps-badge .ext { color: var(--accent-color); }
 </style>

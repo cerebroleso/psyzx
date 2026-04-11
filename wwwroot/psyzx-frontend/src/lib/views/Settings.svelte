@@ -3,9 +3,11 @@
     import { fade } from 'svelte/transition';
     import { isGlobalColorActive, isMaxGlassActive, isDesktopSwapActive, viewSize, isCacheDebugActive } from '../../store.js';
     import { setVolumeBoost, isWebAudioMode, setWebAudioGaplessMode } from '../audio.js';
+    import { api } from '../api.js';
 
     let currentBoost = '1.0';
     let localWebAudioMode = false;
+    let isScanning = false;
 
     onMount(() => {
         currentBoost = localStorage.getItem('psyzx_boost') || '1.0';
@@ -18,6 +20,19 @@
             });
         }
     });
+
+    const runScan = async (hard = false) => {
+        if (isScanning) return;
+        isScanning = true;
+        try {
+            await api.scanLibrary(hard);
+            console.log(hard ? "Deep scan initiated" : "Standard scan initiated");
+        } catch (err) {
+            alert("Scan failed: " + err.message);
+        } finally {
+            isScanning = false;
+        }
+    };
 
     const updateBoost = (e) => {
         const val = parseFloat(e.target.value).toFixed(1);
@@ -148,6 +163,30 @@
     </div>
 
     <div class="settings-section">
+        <h2>Library</h2>
+        
+        <div class="setting-item">
+            <div class="setting-info">
+                <span class="setting-title">Refresh Library</span>
+                <span class="setting-desc">Scans for new files and removes deleted tracks from the database.</span>
+            </div>
+            <button class="btn-action" on:click={() => runScan(false)} disabled={isScanning}>
+                {isScanning ? 'Scanning...' : 'Scan Now'}
+            </button>
+        </div>
+
+        <div class="setting-item">
+            <div class="setting-info">
+                <span class="setting-title">Deep Metadata Sweep</span>
+                <span class="setting-desc">Forcibly re-downloads missing artist images and album covers even if they already exist in the DB. (Uses Playwright)</span>
+            </div>
+            <button class="btn-action highlight" on:click={() => runScan(true)} disabled={isScanning}>
+                {isScanning ? 'Running Sweep...' : 'Hard Scan'}
+            </button>
+        </div>
+    </div>
+
+    <div class="settings-section">
         <h2>Audio Engine</h2>
         
         <div class="setting-item" style="margin-bottom: 24px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 24px;">
@@ -256,6 +295,38 @@
     }
     .range-slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 16px; height: 16px; border-radius: 50%; background: white; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,0.4); }
     .range-slider::-moz-range-thumb { width: 16px; height: 16px; border-radius: 50%; background: white; cursor: pointer; border: none; box-shadow: 0 2px 6px rgba(0,0,0,0.4); }
+
+    .btn-action {
+        background: rgba(255, 255, 255, 0.1);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        color: white;
+        padding: 8px 16px;
+        border-radius: 8px;
+        font-weight: 700;
+        font-size: 13px;
+        cursor: pointer;
+        transition: all 0.2s;
+        min-width: 100px;
+    }
+
+    .btn-action:hover:not(:disabled) {
+        background: rgba(255, 255, 255, 0.2);
+        border-color: rgba(255, 255, 255, 0.3);
+    }
+
+    .btn-action.highlight {
+        border-color: var(--accent-color);
+        color: var(--accent-color);
+    }
+
+    .btn-action.highlight:hover:not(:disabled) {
+        background: rgba(255, 255, 255, 0.1);
+    }
+
+    .btn-action:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
 
     .btn-refresh, .btn-danger {
         padding: 12px 24px; background: rgba(239, 68, 68, 0.1); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.5); 

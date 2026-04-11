@@ -1,6 +1,15 @@
 <script>
-    import { fade, fly } from 'svelte/transition';
-    import { artistsMap, albumsMap, appSessionVersion, isMaxGlassActive, viewSize } from '../../store.js';
+    import { fade, fly, scale } from 'svelte/transition';
+    import { 
+        artistsMap, 
+        albumsMap, 
+        appSessionVersion, 
+        isMaxGlassActive, 
+        viewSize,
+        currentPlaylist,
+        currentIndex,
+        isShuffle 
+    } from '../../store.js';
     import { api } from '../api.js';
 
     export let artistId;
@@ -27,6 +36,12 @@
     let editImage = '';
     let previewImage = '';
     let fileInput;
+
+    // --- Context Menu State ---
+    let contextMenuOpen = false;
+    let contextMenuX = 0;
+    let contextMenuY = 0;
+    let contextMenuAlbumId = null;
 
     const toggleEdit = () => {
         if (!isEditing) {
@@ -87,7 +102,96 @@
         viewSize.set(size);
         localStorage.setItem('psyzx_view_size', size);
     };
+
+    // --- Context Menu Logic ---
+    function openContextMenu(e, albumId) {
+        e.stopPropagation();
+        contextMenuAlbumId = albumId;
+        
+        const menuWidth = 220;
+        let x = e.clientX;
+        if (x + menuWidth > window.innerWidth) {
+            x = window.innerWidth - menuWidth - 10;
+        }
+
+        contextMenuX = x;
+        contextMenuY = e.clientY + 15;
+        contextMenuOpen = true;
+    }
+
+    function closeContextMenu() {
+        contextMenuOpen = false;
+        contextMenuAlbumId = null;
+    }
+
+    async function hardDeleteAlbum(id) {
+        const albumToDelete = artistAlbums.find(a => a.id === id);
+        if (!confirm(`Are you absolutely sure you want to delete '${albumToDelete.title}'?\n\nThis will permanently erase the album and all audio files from your hard drive. This cannot be undone.`)) {
+            closeContextMenu();
+            return;
+        }
+
+        try {
+            const res = await fetch(`/api/Library/album/${id}`, { method: 'DELETE' });
+            if (res.ok) {
+                albumsMap.update(m => { m.delete(id); return m; });
+                artistsMap.update(m => {
+                    const a = m.get(parseInt(artistId));
+                    if (a && a.albums) {
+                        a.albums.delete(id);
+                    }
+                    return m;
+                });
+            } else {
+                const err = await res.json();
+                alert(`Error: ${err.message || 'Failed to delete album.'}`);
+            }
+        } catch (e) {
+            alert('Network error while deleting album.');
+        }
+        closeContextMenu();
+    }
+
+    // --- Action Buttons Logic ---
+    const shuffleArtist = () => {
+        if (!artistAlbums || artistAlbums.length === 0) return;
+
+        let allTracks = [];
+        
+        // Gather all tracks from every album belonging to this artist
+        artistAlbums.forEach(album => {
+            if (album && album.tracks) {
+                allTracks.push(...Array.from(album.tracks));
+            }
+        });
+
+        // Filter out any undefined elements just to be safe
+        allTracks = allTracks.filter(t => t && typeof t === 'object');
+
+        if (allTracks.length === 0) {
+            alert("No tracks found to shuffle.");
+            return;
+        }
+
+        // Fisher-Yates Shuffle Algorithm
+        for (let i = allTracks.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [allTracks[i], allTracks[j]] = [allTracks[j], allTracks[i]];
+        }
+
+        // Hook up to the player stores
+        isShuffle.set(true);
+        currentPlaylist.set(allTracks);
+        currentIndex.set(0); // Triggers playback immediately in your player.svelte
+    };
+
+    const downloadArtist = () => {
+        console.log(`Triggering download for all albums by artist: ${artist.name}`);
+        alert(`MOCK: Sent request to download ${artist.albums.size} album(s) from ${artist.name}.`);
+    };
 </script>
+
+<svelte:window on:click={closeContextMenu} />
 
 {#if artist}
 <div class="fade-bg"></div>
@@ -107,21 +211,67 @@
         <div class="album-type">Artist</div>
         <div class="album-title">{artist.name}</div>
         <div class="album-meta"><span>{artist.albums.size} albums</span></div>
+        
+        <div class="artist-actions">
+            <button class="btn-primary" on:click={shuffleArtist} aria-label="Shuffle Artist">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 18h1.4c1.3 0 2.5-.6 3.3-1.7l6.1-8.6c.7-1.1 2-1.7 3.3-1.7H22"/><path d="m18 2 4 4-4 4M2 6h1.9c1.5 0 2.9.9 3.6 2.2M22 18h-5.9c-1.3 0-2.6-.7-3.3-1.8l-.5-.8M18 14l4 4-4 4"/></svg>
+                Shuffle
+            </button>
+            <button class="btn-secondary" on:click={downloadArtist} aria-label="Download Artist">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="7 10 12 15 17 10"></polyline>
+                    <line x1="12" y1="15" x2="12" y2="3"></line>
+                </svg>
+                Download
+            </button>
+        </div>
     </div>
 </div>
 
 <div class="grid-container {$viewSize || 'medium'}">
-    {#each artistAlbums as album}
+    {#each artistAlbums as album (album.id)}
         <div class="card" role="button" tabindex="0" on:click={() => goAlbum(album.id)} on:keydown={(e) => e.key === 'Enter' && goAlbum(album.id)}>
             <img 
-                        src={album.coverPath ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&v=${$appSessionVersion}` : DEFAULT_PLACEHOLDER} 
-                        alt=""
-                        on:error={handleImageError}
-                    >            
-            <div class="card-title">{album.title}</div>
+                src={album.coverPath ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&v=${$appSessionVersion}` : DEFAULT_PLACEHOLDER} 
+                alt=""
+                on:error={handleImageError}
+            >            
+            <div class="card-bottom">
+                <div class="card-title">{album.title}</div>
+                <button class="more-options-btn" aria-label="More options" on:click|stopPropagation={(e) => openContextMenu(e, album.id)}>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="1.5"></circle>
+                        <circle cx="12" cy="5" r="1.5"></circle>
+                        <circle cx="12" cy="19" r="1.5"></circle>
+                    </svg>
+                </button>
+            </div>
         </div>
     {/each}
 </div>
+
+{#if contextMenuOpen}
+    <div use:portal>
+        <div
+            class="context-menu"
+            style="top: {contextMenuY}px; left: {contextMenuX}px;"
+            in:scale={{ start: 0.95, duration: 100 }}
+            out:fade={{ duration: 100 }}
+            on:click|stopPropagation
+        >
+            <button class="context-item text-danger" on:click={() => hardDeleteAlbum(contextMenuAlbumId)}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="3 6 5 6 21 6"></polyline>
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                    <line x1="10" y1="11" x2="10" y2="17"></line>
+                    <line x1="14" y1="11" x2="14" y2="17"></line>
+                </svg>
+                Delete entirely from Disk
+            </button>
+        </div>
+    </div>
+{/if}
 
 {#if isEditing}
     <div class="modal-backdrop" use:portal transition:fade={{duration: 200}} on:click|self={toggleEdit}>
@@ -172,7 +322,7 @@
 
 <style>
     /* Content Padding Fixes */
-    .album-hero { padding: 32px 24px 72px 24px; } /* Ensures the hero doesn't touch the very edges */
+    .album-hero { padding: 32px 24px 72px 24px; }
     
     .artist-wrapper { position: relative; display: inline-block; cursor: pointer; border-radius: 50%; overflow: hidden; width: 232px; height: 232px; }
     .artist-wrapper img { width: 100%; height: 100%; object-fit: cover; }
@@ -183,6 +333,50 @@
     }
     .artist-wrapper:hover .edit-overlay-circle { opacity: 1; }
 
+    /* --- Action Buttons Styling --- */
+    .artist-actions {
+        display: flex;
+        gap: 12px;
+        margin-top: 24px;
+    }
+
+    .artist-actions button {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 12px 24px;
+        border-radius: 30px;
+        font-weight: 700;
+        font-size: 14px;
+        cursor: pointer;
+        border: none;
+        transition: transform 0.2s ease, background 0.2s ease, border-color 0.2s ease;
+    }
+
+    .btn-primary {
+        background: var(--accent-color, white);
+        color: black;
+    }
+    
+    .btn-primary:hover {
+        transform: scale(1.04);
+        background: #f0f0f0; 
+    }
+
+    .btn-secondary {
+        background: rgba(255, 255, 255, 0.05);
+        color: white;
+        border: 1px solid rgba(255, 255, 255, 0.15) !important;
+    }
+
+    .btn-secondary:hover {
+        background: rgba(255, 255, 255, 0.1);
+        border-color: rgba(255, 255, 255, 0.3) !important;
+        transform: scale(1.04);
+    }
+
+    /* Modals & Edit Views */
     .modal-backdrop {
         position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
         background: rgba(0,0,0,0.7); backdrop-filter: blur(8px);
@@ -240,25 +434,89 @@
     .btn-cancel { flex: 1; background: rgba(255,255,255,0.1); color: white; border: none; padding: 14px; border-radius: 30px; font-weight: bold; cursor: pointer; transition: background 0.2s; }
     .btn-cancel:hover { background: rgba(255,255,255,0.2); }
 
-    /* Size Controls Layout & Padding Fix */
-    .view-controls-wrapper {
-        display: flex; justify-content: space-between; align-items: center;
-        margin: 32px 0 16px 0; 
-        padding: 0 24px; /* Increased padding to match your typical app bounds */
-    }
+    /* Size Controls Layout */
+    .view-controls-wrapper { display: flex; justify-content: space-between; align-items: center; margin: 32px 0 16px 0; padding: 0 24px; }
     .section-title { margin: 0; font-size: 20px; font-weight: 700; color: white; }
     
-    .segmented-control {
-        display: flex; background: rgba(255,255,255,0.08); padding: 4px; border-radius: 10px;
-        border: 1px solid rgba(255,255,255,0.05);
-    }
-    .segmented-control button {
-        background: transparent; border: none; color: white; width: 36px; height: 32px;
-        font-size: 12px; font-weight: 800; cursor: pointer; border-radius: 6px;
-        transition: all 0.2s; display: flex; align-items: center; justify-content: center;
-    }
+    .segmented-control { display: flex; background: rgba(255,255,255,0.08); padding: 4px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.05); }
+    .segmented-control button { background: transparent; border: none; color: white; width: 36px; height: 32px; font-size: 12px; font-weight: 800; cursor: pointer; border-radius: 6px; transition: all 0.2s; display: flex; align-items: center; justify-content: center; }
     .segmented-control button.active { background: var(--accent-color); color: black; box-shadow: 0 2px 8px rgba(0,0,0,0.3); }
 
-    /* Ensures the grid isn't stuck to the screen edges if it isn't globally handled */
     .grid-container { padding: 0 24px 32px 24px; }
+
+    /* --- Context Menu Modal --- */
+    .context-menu {
+        position: fixed;
+        z-index: 9999999;
+        background: rgba(30, 30, 30, 0.75);
+        backdrop-filter: blur(20px) saturate(150%);
+        -webkit-backdrop-filter: blur(20px) saturate(150%);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 8px;
+        padding: 4px;
+        min-width: 200px;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    }
+
+    .context-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+        padding: 10px 12px;
+        background: transparent;
+        border: none;
+        color: white;
+        font-size: 13px;
+        font-weight: 500;
+        border-radius: 4px;
+        cursor: pointer;
+        text-align: left;
+        transition: background 0.15s;
+    }
+    .context-item:hover { background: rgba(255, 255, 255, 0.1); }
+    .context-item.text-danger { color: #ef4444; }
+    .context-item.text-danger:hover { background: rgba(239, 68, 68, 0.1); }
+
+    /* --- Card Bottom & 3-Dots Logic --- */
+    .card-bottom {
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-top: 8px;
+    }
+
+    .card-title {
+        flex-grow: 1;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 100%;
+        transition: max-width 0.2s ease;
+    }
+
+    .more-options-btn {
+        position: absolute;
+        right: 0;
+        background: transparent;
+        border: none;
+        color: rgba(255, 255, 255, 0.6);
+        cursor: pointer;
+        padding: 4px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        opacity: 0;
+        transition: opacity 0.2s ease, background 0.2s ease, color 0.2s ease;
+    }
+
+    .more-options-btn:hover {
+        color: white;
+        background: rgba(255, 255, 255, 0.1);
+    }
+
+    .card:hover .card-title { max-width: calc(100% - 32px); }
+    .card:hover .more-options-btn { opacity: 1; }
 </style>

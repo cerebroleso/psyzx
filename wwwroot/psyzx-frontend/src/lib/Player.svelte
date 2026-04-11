@@ -4,7 +4,7 @@
     currentPlaylist, currentIndex, isPlaying, isShuffle, isRepeat,
     shuffleHistory, albumsMap, playerCurrentTime, playerDuration,
     accentColor, isMaxGlassActive, isDesktopSwapActive, appSessionVersion,
-    isBuffering
+    isBuffering, globalBitrate, globalFileExt,
   } from '../store.js';
   import {
     audioCtx, updateMediaSession, registerAudioElements, setVolumeBoost,
@@ -46,6 +46,9 @@
   $: progressPct = $playerDuration > 0 ? ($playerCurrentTime / $playerDuration) * 100 : 0;
   $: fileExt = track ? track.filePath.split('.').pop().toUpperCase() : 'UNK';
   $: bitrate = track ? track.bitrate : 0;
+  $: globalBitrate.set(bitrate);
+  $: globalFileExt.set(fileExt);
+
 
   $: {
     if (audioElA) audioElA.volume = volume / 100;

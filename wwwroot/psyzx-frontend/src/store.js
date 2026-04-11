@@ -27,6 +27,10 @@ export const cachedTrackIds = writable(new Set());
 
 export const isBuffering = writable(false);
 
+export const globalBitrate = writable(0);
+export const globalFileExt = writable('');
+
+
 export const refreshOfflineCache = async () => {
     if (typeof window === 'undefined' || !('caches' in window)) return;
     

@@ -1,6 +1,7 @@
 namespace psyzx.Controllers;
 
 using psyzx.Data;
+using psyzx.Services;
 using System.Collections.Concurrent;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
@@ -194,16 +195,16 @@ public class SystemController : ControllerBase
     }
 
     [HttpPost("scan")]
-    public async Task<IActionResult> TriggerScan()
+    public async Task<IActionResult> Scan([FromQuery] bool hardScan = false)
     {
-        try {
-            using var scope = _scopeFactory.CreateScope();
-            var scanner = scope.ServiceProvider.GetRequiredService<psyzx.Services.LibraryScanner>();
-            await scanner.ScanAsync();
-            return Ok(new { text = "Scan complete." });
-        } catch (Exception ex) {
-            return StatusCode(500, new { text = ex.Message });
-        }
+        // We use _scopeFactory (which you already injected) to create the scope for the background task
+        _ = Task.Run(async () => {
+            using var scope = _scopeFactory.CreateScope(); 
+            var scanner = scope.ServiceProvider.GetRequiredService<LibraryScanner>();
+            await scanner.ScanAsync(hardScan);
+        });
+
+        return Ok(new { message = "Scan started", hardMode = hardScan });
     }
 
     [HttpPost("ytdlp")]
