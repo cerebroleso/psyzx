@@ -33,17 +33,22 @@ let pauseOffset = 0;
 let currentTrackUrl = null;
 let nextTrackUrl = null;
 
-// synthetic clock survives backgrounding better than raf
 let syntheticClockInterval = null;
 
 const decodeCache = new Map();
+const MAX_CACHE_SIZE = 5;
+
+let currentAbortController = null;
 
 export let isEngineInitialized = false;
 let hasDoneSilentPrime = false;
 let stallTimeout = null;
 
-// dedicated dom-attached silent player for ios keep-alive
 let silentPlayer = null;
+
+let scrubOsc = null;
+let scrubNoise = null;
+let scrubGain = null;
 
 export let isWebAudioMode =
     typeof window !== 'undefined'
@@ -119,7 +124,7 @@ const initSilentPlayer = () => {
     silentPlayer = document.createElement('audio');
     silentPlayer.src = SILENCE_B64;
     silentPlayer.loop = true;
-    silentPlayer.volume = 0.0001;    
+    silentPlayer.volume = 0.001;
     silentPlayer.preload = 'auto';
     silentPlayer.autoplay = false;
     silentPlayer.playsInline = true;
@@ -129,7 +134,6 @@ const initSilentPlayer = () => {
     silentPlayer.setAttribute('x-webkit-airplay', 'allow');
     silentPlayer.setAttribute('controls', 'false');
 
-    // don't use display:none on ios
     silentPlayer.style.cssText = `
         position: fixed;
         left: -9999px;
@@ -149,10 +153,9 @@ const startSilentKeepAlive = () => {
 
     try {
         silentPlayer.loop = true;
-        silentPlayer.volume = 0.0001;
+        silentPlayer.volume = 0.001;
 
         const p = silentPlayer.play();
-        // FIX: Remove 'await'. Do not yield the event loop here.
         if (p !== undefined) p.catch(() => {});
     } catch {}
 };
@@ -224,9 +227,15 @@ const buildWebAudioGraph = () => {
 const fetchAndDecode = async (url) => {
     if (decodeCache.has(url)) return await decodeCache.get(url);
 
+    if (currentAbortController) {
+        currentAbortController.abort();
+    }
+    currentAbortController = new AbortController();
+    const signal = currentAbortController.signal;
+
     const p = (async () => {
         try {
-            const response = await fetch(url);
+            const response = await fetch(url, { signal });
             if (!response.ok) throw new Error('fetch failed');
             const arrayBuffer = await response.arrayBuffer();
 
@@ -243,6 +252,12 @@ const fetchAndDecode = async (url) => {
     })();
 
     decodeCache.set(url, p);
+
+    if (decodeCache.size > MAX_CACHE_SIZE) {
+        const firstKey = decodeCache.keys().next().value;
+        decodeCache.delete(firstKey);
+    }
+
     return p;
 };
 
@@ -268,14 +283,14 @@ const startSyntheticClock = () => {
     }, 100);
 };
 
-const playWebAudio = () => { // FIX: Removed async
+const playWebAudio = () => {
     if (!currentBuffer || !audioCtx) return;
 
     if (audioCtx.state === 'suspended') {
         audioCtx.resume().catch(() => {});
     }
 
-    startSilentKeepAlive(); // FIX: Call synchronously
+    startSilentKeepAlive();
 
     if (currentSource) {
         try { currentSource.stop(); } catch {}
@@ -318,7 +333,6 @@ const stopWebAudio = () => {
         currentSource = null;
     }
 
-    // do not touch silentPlayer here
     pauseOffset = 0;
     if (syntheticClockInterval) clearInterval(syntheticClockInterval);
 };
@@ -376,25 +390,24 @@ export const unlockAudioContext = () => {
         playerA.pause();
         playerB.pause();
     } else {
-    if (silentPlayer) {
-        silentPlayer.volume = 0.0001;
-        silentPlayer.loop = true;
+        if (silentPlayer) {
+            silentPlayer.volume = 0.001;
+            silentPlayer.loop = true;
 
-        const p = silentPlayer.play();
-        if (p !== undefined) {
-            p.then(() => {
-                // don’t stop it if music is about to play
-                if (!get(isPlaying)) {
-                    silentPlayer.pause();
-                }
-            }).catch(() => {});
+            const p = silentPlayer.play();
+            if (p !== undefined) {
+                p.then(() => {
+                    if (!get(isPlaying)) {
+                        silentPlayer.pause();
+                    }
+                }).catch(() => {});
+            }
+        }
+
+        if (audioCtx.state === 'suspended') {
+            audioCtx.resume().catch(() => {});
         }
     }
-
-    if (audioCtx.state === 'suspended') {
-        audioCtx.resume().catch(() => {});
-    }
-}
 
     hasDoneSilentPrime = true;
     isEngineInitialized = true;
@@ -429,7 +442,6 @@ export const registerAudioElements = (elA, elB) => {
                 el._earlyEndFired = false;
                 clearTimeout(stallTimeout);
                 stallTimeout = setTimeout(() => checkDeadlock(el), 3500);
-                if (el === html5ActivePlayer) isPlaying.set(true);
             });
 
             el.addEventListener('waiting', () => {
@@ -478,7 +490,8 @@ export const preloadNextUrl = async (url) => {
             const targetGain = targetPlayer === playerA ? gainA : gainB;
             if (targetGain && audioCtx) {
                 targetGain.gain.cancelScheduledValues(audioCtx.currentTime);
-                targetGain.gain.value = 0;
+                targetGain.gain.setValueAtTime(targetGain.gain.value, audioCtx.currentTime);
+                targetGain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.05);
             }
 
             targetPlayer.load();
@@ -498,11 +511,10 @@ export const preloadNextUrl = async (url) => {
 
 export const loadAndPlayUrl = async (url) => {
     if (!isEngineInitialized) unlockAudioContext();
-    
-    // FIX: Prime the context and keep-alive BEFORE the async fetch
+
     if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
     if (isWebAudioMode) {
-        startSilentKeepAlive(); // Locks the iOS audio session immediately
+        startSilentKeepAlive();
     }
 
     if (isWebAudioMode) {
@@ -510,6 +522,9 @@ export const loadAndPlayUrl = async (url) => {
             currentBuffer && ((currentBuffer.duration - get(playerCurrentTime)) <= 0.3);
 
         if (isNaturalRollover) {
+            if (currentSource) {
+                try { currentSource.disconnect(); } catch {}
+            }
             currentSource = null;
         } else {
             stopWebAudio();
@@ -518,7 +533,6 @@ export const loadAndPlayUrl = async (url) => {
         isBuffering.set(true);
         isPlaying.set(false);
 
-        // By the time this fetch completes, silentPlayer has held the session open
         currentBuffer = await fetchAndDecode(url);
         currentTrackUrl = url;
 
@@ -531,10 +545,9 @@ export const loadAndPlayUrl = async (url) => {
         playerDuration.set(currentBuffer.duration);
         pauseOffset = 0;
 
-        playWebAudio(); // Now synchronous
+        playWebAudio();
         isBuffering.set(false);
     } else {
-        // HTML5 Mode
         const oldPlayer = html5ActivePlayer;
         html5ActivePlayer = html5StandbyPlayer;
         html5StandbyPlayer = oldPlayer;
@@ -553,8 +566,7 @@ export const loadAndPlayUrl = async (url) => {
             const playPromise = html5ActivePlayer.play();
             if (playPromise !== undefined) {
                 playPromise.then(() => {
-                    // FIX: Only pause the standby player AFTER the new player has successfully started.
-                    // This ensures the iOS background audio session is never dropped.
+                    isPlaying.set(true);
                     if (audioCtx && oldTargetGain) {
                         oldTargetGain.gain.cancelScheduledValues(audioCtx.currentTime);
                         oldTargetGain.gain.setValueAtTime(oldTargetGain.gain.value, audioCtx.currentTime);
@@ -568,14 +580,13 @@ export const loadAndPlayUrl = async (url) => {
                     isPlaying.set(false);
                 });
             }
-            
+
             if (audioCtx && activeTargetGain) {
                 activeTargetGain.gain.cancelScheduledValues(audioCtx.currentTime);
-                activeTargetGain.gain.setValueAtTime(0, audioCtx.currentTime);
+                activeTargetGain.gain.setValueAtTime(activeTargetGain.gain.value || 0, audioCtx.currentTime);
                 activeTargetGain.gain.linearRampToValueAtTime(1, audioCtx.currentTime + 0.05);
             }
-            
-            isPlaying.set(true);
+
         } catch (e) {
             isPlaying.set(false);
         }
@@ -600,15 +611,18 @@ export const togglePlayGlobal = () => {
             const activeTargetGain = html5ActivePlayer === playerA ? gainA : gainB;
             if (activeTargetGain && audioCtx) {
                 activeTargetGain.gain.cancelScheduledValues(audioCtx.currentTime);
-                activeTargetGain.gain.value = 1;
+                activeTargetGain.gain.setValueAtTime(activeTargetGain.gain.value, audioCtx.currentTime);
+                activeTargetGain.gain.linearRampToValueAtTime(1, audioCtx.currentTime + 0.05);
             }
 
             const playPromise = html5ActivePlayer.play();
             if (playPromise !== undefined) {
-                playPromise.catch(() => {});
+                playPromise.then(() => {
+                    isPlaying.set(true);
+                }).catch(() => {
+                    isPlaying.set(false);
+                });
             }
-
-            isPlaying.set(true);
         } else {
             html5ActivePlayer.pause();
             isPlaying.set(false);
@@ -755,5 +769,74 @@ export const playPrevGlobal = () => {
         currentIndex.set(prevIndex);
     } else {
         currentIndex.set((index - 1 + playlist.length) % playlist.length);
+    }
+};
+
+export const startScrubEffect = () => {
+    if (!audioCtx || !isWebAudioMode) return;
+    if (audioCtx.state === 'suspended') audioCtx.resume().catch(()=>{});
+    const soundType = typeof window !== 'undefined' ? localStorage.getItem('psyzx_scrub_sound') || 'beep' : 'beep';
+    if (soundType === 'none') return;
+
+    scrubGain = audioCtx.createGain();
+    scrubGain.connect(mixerNode);
+    scrubGain.gain.value = 0;
+
+    if (soundType === 'speed' || soundType === 'beep') {
+        scrubOsc = audioCtx.createOscillator();
+        scrubOsc.type = soundType === 'speed' ? 'triangle' : 'square';
+        scrubOsc.connect(scrubGain);
+        scrubOsc.start();
+    } else if (soundType === 'vinyl') {
+        const bufferSize = audioCtx.sampleRate;
+        const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+        scrubNoise = audioCtx.createBufferSource();
+        scrubNoise.buffer = buffer;
+        scrubNoise.loop = true;
+
+        const filter = audioCtx.createBiquadFilter();
+        filter.type = 'bandpass';
+        filter.Q.value = 2.0;
+        scrubNoise.connect(filter);
+        filter.connect(scrubGain);
+        scrubOsc = filter;
+        scrubNoise.start();
+    }
+};
+
+export const updateScrubEffect = (speed, dir) => {
+    if (!scrubGain || !isWebAudioMode) return;
+    const soundType = typeof window !== 'undefined' ? localStorage.getItem('psyzx_scrub_sound') || 'beep' : 'beep';
+    if (soundType === 'none') return;
+
+    const targetGain = Math.min(0.15, speed * 0.08);
+    scrubGain.gain.setTargetAtTime(targetGain, audioCtx.currentTime, 0.05);
+
+    if (soundType === 'speed' && scrubOsc.frequency) {
+        const targetFreq = 400 + (speed * 1000) * (dir > 0 ? 1 : 0.8);
+        scrubOsc.frequency.setTargetAtTime(Math.max(200, Math.min(3000, targetFreq)), audioCtx.currentTime, 0.05);
+    } else if (soundType === 'vinyl' && scrubOsc.frequency) {
+        const targetFreq = 600 + (speed * 2000);
+        scrubOsc.frequency.setTargetAtTime(Math.max(300, Math.min(4000, targetFreq)), audioCtx.currentTime, 0.05);
+    } else if (soundType === 'beep' && scrubOsc.frequency) {
+        const targetFreq = dir > 0 ? 800 : 600;
+        scrubOsc.frequency.setTargetAtTime(targetFreq, audioCtx.currentTime, 0.02);
+        scrubGain.gain.setTargetAtTime((Date.now() % 100 < 50) ? targetGain : 0, audioCtx.currentTime, 0.01);
+    }
+};
+
+export const stopScrubEffect = () => {
+    if (scrubGain) {
+        scrubGain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.02);
+        setTimeout(() => {
+            if (scrubOsc && scrubOsc.stop) try { scrubOsc.stop(); } catch(e){}
+            if (scrubNoise) try { scrubNoise.stop(); scrubNoise.disconnect(); } catch(e){}
+            if (scrubGain) scrubGain.disconnect();
+            scrubOsc = null;
+            scrubNoise = null;
+            scrubGain = null;
+        }, 100);
     }
 };

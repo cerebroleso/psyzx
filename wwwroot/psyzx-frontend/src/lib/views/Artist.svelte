@@ -43,6 +43,10 @@
     let contextMenuY = 0;
     let contextMenuAlbumId = null;
 
+    // --- Add Missing Album State ---
+    let showAddAlbumModal = false;
+    let newAlbumInput = '';
+
     const toggleEdit = () => {
         if (!isEditing) {
             editName = artist.name;
@@ -50,6 +54,11 @@
             previewImage = artist.imagePath ? `/api/Tracks/image?path=${encodeURIComponent(artist.imagePath)}&v=${$appSessionVersion}` : '';
         }
         isEditing = !isEditing;
+    };
+
+    const toggleAddAlbumModal = () => {
+        showAddAlbumModal = !showAddAlbumModal;
+        newAlbumInput = '';
     };
 
     let selectedFile = null;
@@ -158,14 +167,12 @@
 
         let allTracks = [];
         
-        // Gather all tracks from every album belonging to this artist
         artistAlbums.forEach(album => {
             if (album && album.tracks) {
                 allTracks.push(...Array.from(album.tracks));
             }
         });
 
-        // Filter out any undefined elements just to be safe
         allTracks = allTracks.filter(t => t && typeof t === 'object');
 
         if (allTracks.length === 0) {
@@ -173,21 +180,49 @@
             return;
         }
 
-        // Fisher-Yates Shuffle Algorithm
         for (let i = allTracks.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
             [allTracks[i], allTracks[j]] = [allTracks[j], allTracks[i]];
         }
 
-        // Hook up to the player stores
         isShuffle.set(true);
         currentPlaylist.set(allTracks);
-        currentIndex.set(0); // Triggers playback immediately in your player.svelte
+        currentIndex.set(0); 
     };
 
     const downloadArtist = () => {
         console.log(`Triggering download for all albums by artist: ${artist.name}`);
         alert(`MOCK: Sent request to download ${artist.albums.size} album(s) from ${artist.name}.`);
+    };
+
+    const submitMissingAlbum = async () => {
+        if (!newAlbumInput.trim()) return;
+
+        let query = newAlbumInput.trim();
+        if (!query.startsWith('http://') && !query.startsWith('https://')) {
+            query = `ytsearch1:${artist.name} ${query} album`;
+        }
+
+        try {
+            const res = await fetch('/api/System/ytdlp', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    url: query,
+                    targetArtist: artist.name // Force the backend to use this folder
+                })
+            });
+
+            if (res.ok) {
+                alert('Album added to download queue!');
+                toggleAddAlbumModal();
+            } else {
+                const data = await res.json();
+                alert(`Error: ${data.text || 'Failed to queue album'}`);
+            }
+        } catch (err) {
+            alert('Network error while queueing album.');
+        }
     };
 </script>
 
@@ -249,6 +284,16 @@
             </div>
         </div>
     {/each}
+
+    <div class="card add-album-card" role="button" tabindex="0" on:click={toggleAddAlbumModal} on:keydown={(e) => e.key === 'Enter' && toggleAddAlbumModal()}>
+        <div class="add-album-content">
+            <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="12" y1="5" x2="12" y2="19"></line>
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+            <span style="font-weight: 600; font-size: 14px;">Add Album</span>
+        </div>
+    </div>
 </div>
 
 {#if contextMenuOpen}
@@ -269,6 +314,40 @@
                 </svg>
                 Delete entirely from Disk
             </button>
+        </div>
+    </div>
+{/if}
+
+{#if showAddAlbumModal}
+    <div use:portal>
+        <div
+            class="add-modal-backdrop"
+            transition:fade={{duration: 200}}
+            on:click|self={toggleAddAlbumModal}
+        >
+            <div class="modal-glass-card" transition:scale={{ start: 0.95, duration: 200 }}>
+                <div class="edit-header" style="margin-bottom: 20px;">Add Missing Album</div>
+                
+                <div class="form-group">
+                    <label>Album Name or URL</label>
+                    <input 
+                        type="text" 
+                        class="sleek-input" 
+                        placeholder="e.g. The Wall or Spotify URL" 
+                        bind:value={newAlbumInput} 
+                        on:keydown={(e) => e.key === 'Enter' && submitMissingAlbum()}
+                        autofocus
+                    />
+                    <small style="color: rgba(255,255,255,0.5); font-size: 11px; margin-top: 4px;">
+                        Enter a direct link or just type the name to auto-search.
+                    </small>
+                </div>
+
+                <div style="display: flex; gap: 12px; margin-top: 24px;">
+                    <button class="btn-save" on:click={submitMissingAlbum}>Download</button>
+                    <button class="btn-cancel" on:click={toggleAddAlbumModal}>Cancel</button>
+                </div>
+            </div>
         </div>
     </div>
 {/if}
@@ -354,19 +433,11 @@
         transition: transform 0.2s ease, background 0.2s ease, border-color 0.2s ease;
     }
 
-    .btn-primary {
-        background: var(--accent-color, white);
-        color: black;
-    }
-    
-    .btn-primary:hover {
-        transform: scale(1.04);
-        background: #f0f0f0; 
-    }
+    .btn-primary { background: var(--accent-color, white); color: black; }
+    .btn-primary:hover { transform: scale(1.04); background: #f0f0f0; }
 
     .btn-secondary {
-        background: rgba(255, 255, 255, 0.05);
-        color: white;
+        background: rgba(255, 255, 255, 0.05); color: white;
         border: 1px solid rgba(255, 255, 255, 0.15) !important;
     }
 
@@ -376,7 +447,53 @@
         transform: scale(1.04);
     }
 
-    /* Modals & Edit Views */
+    /* Add Album Card */
+    .card.add-album-card {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: 2px dashed rgba(255, 255, 255, 0.15);
+        background: rgba(255, 255, 255, 0.02);
+        cursor: pointer;
+        transition: all 0.2s ease;
+       
+    }
+    .card.add-album-card:hover {
+        border-color: var(--accent-color, #fff);
+        background: rgba(255, 255, 255, 0.05);
+    }
+    .add-album-content {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 12px;
+        color: rgba(255, 255, 255, 0.4);
+        transition: color 0.2s ease;
+    }
+    .card.add-album-card:hover .add-album-content {
+        color: var(--accent-color, #fff);
+    }
+
+    /* Add Album Modal (User provided styling) */
+    .add-modal-backdrop {
+        position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+        background: rgba(0,0,0,0.55); backdrop-filter: blur(4px);
+        -webkit-backdrop-filter: blur(4px);
+        z-index: 999999; display: flex; align-items: center; justify-content: center;
+    }
+
+    .modal-glass-card {
+        background: rgba(255, 255, 255, 0.05);
+        backdrop-filter: blur(40px) saturate(150%);
+        -webkit-backdrop-filter: blur(40px) saturate(150%);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-top: 1px solid rgba(255, 255, 255, 0.25);
+        border-radius: 24px; padding: 24px;
+        width: 90%; max-width: 400px;
+        box-shadow: 0 32px 64px rgba(0, 0, 0, 0.5);
+    }
+
+    /* Edit Artist Modals */
     .modal-backdrop {
         position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
         background: rgba(0,0,0,0.7); backdrop-filter: blur(8px);

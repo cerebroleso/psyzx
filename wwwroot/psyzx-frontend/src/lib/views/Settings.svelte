@@ -6,12 +6,14 @@
     import { api } from '../api.js';
 
     let currentBoost = '1.0';
-    let localWebAudioMode = false;
+    let localWebAudioMode = true;
     let isScanning = false;
+    let currentScrubSound = 'vinyl';
 
     onMount(() => {
         currentBoost = localStorage.getItem('psyzx_boost') || '1.0';
         localWebAudioMode = isWebAudioMode;
+        currentScrubSound = localStorage.getItem('psyzx_scrub_sound') || 'speed';
         
         if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
             navigator.serviceWorker.controller.postMessage({
@@ -26,7 +28,6 @@
         isScanning = true;
         try {
             await api.scanLibrary(hard);
-            console.log(hard ? "Deep scan initiated" : "Standard scan initiated");
         } catch (err) {
             alert("Scan failed: " + err.message);
         } finally {
@@ -39,6 +40,11 @@
         currentBoost = val;
         localStorage.setItem('psyzx_boost', val);
         setVolumeBoost(val);
+    };
+
+    const updateScrubSound = (val) => {
+        currentScrubSound = val;
+        localStorage.setItem('psyzx_scrub_sound', val);
     };
 
     const toggleGlobalColor = () => isGlobalColorActive.set(!$isGlobalColorActive);
@@ -80,7 +86,6 @@
             
             window.location.reload();
         } catch (e) {
-            console.error(e);
             window.location.reload();
         }
     };
@@ -199,6 +204,19 @@
             </button>
         </div>
 
+        <div class="setting-item" style="margin-bottom: 24px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 24px;">
+            <div class="setting-info">
+                <span class="setting-title">Gapless Scrub Sound</span>
+                <span class="setting-desc">Effect played when dragging the progress bar (True Gapless only).</span>
+            </div>
+            <div class="segmented-control">
+                <button class:active={currentScrubSound === 'vinyl'} on:click={() => updateScrubSound('vinyl')}>Vinyl</button>
+                <button class:active={currentScrubSound === 'speed'} on:click={() => updateScrubSound('speed')}>Speed</button>
+                <button class:active={currentScrubSound === 'beep'} on:click={() => updateScrubSound('beep')}>Beep</button>
+                <button class:active={currentScrubSound === 'none'} on:click={() => updateScrubSound('none')}>Off</button>
+            </div>
+        </div>
+
         <div class="setting-item-col">
             <div class="setting-info w-full">
                 <div class="flex-between">
@@ -271,8 +289,8 @@
         margin-left: 10px;
     }
     .segmented-control button {
-        background: transparent; border: none; color: white; width: 36px; height: 32px;
-        font-size: 12px; font-weight: 800; cursor: pointer; border-radius: 6px;
+        background: transparent; border: none; color: white; width: 46px; height: 32px;
+        font-size: 11px; font-weight: 800; cursor: pointer; border-radius: 6px;
         transition: all 0.2s; display: flex; align-items: center; justify-content: center;
     }
     .segmented-control button.active { background: var(--accent-color); color: black; box-shadow: 0 2px 8px rgba(0,0,0,0.3); }

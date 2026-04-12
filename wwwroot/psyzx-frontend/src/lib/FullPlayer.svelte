@@ -17,7 +17,17 @@
         globalFileExt
     } from '../store.js';
     import { formatTime } from './utils.js';
-    import { setEqBand, togglePlayGlobal, playNextGlobal, playPrevGlobal, activePlayer } from './audio.js';
+    import { 
+        setEqBand, 
+        togglePlayGlobal, 
+        playNextGlobal, 
+        playPrevGlobal, 
+        activePlayer,
+        startScrubEffect,
+        updateScrubEffect,
+        stopScrubEffect,
+        isWebAudioMode
+    } from './audio.js';
     import { api } from './api.js';
     import { quintOut, expoIn, expoOut, linear } from 'svelte/easing';
     import { spring } from 'svelte/motion';
@@ -140,7 +150,6 @@
 
     let wasPlayerElPresent = false;
 
-    // Use strictly the stores driven by audio.js
     const frameLoop = () => {
         if (!isSeekingBar) {
             const current = $playerCurrentTime || 0;
@@ -271,8 +280,6 @@
         }
     }
 
-    $: activeLyricIdx = lyrics ? lyrics.findLastIndex(l => $playerCurrentTime >= l.t) : -1;
-
     $: hasSyncLyrics = lyrics.length > 0 &&
                        lyrics[0].text !== "◆ LYRICS SYNC NOT AVAILABLE ◆" &&
                        lyrics[0].text !== "♪ (Instrumental / No text) ♪" &&
@@ -286,17 +293,6 @@
         clearTimeout(scrollTimeout);
         scrollTimeout = setTimeout(() => { isUserScrolling = false; lastScrolledIdx = -1; }, 3000);
     };
-
-    $: if (lyricsScrollEl && activeLyricIdx >= 0 && !isUserScrolling && activeLyricIdx !== lastScrolledIdx) {
-        lastScrolledIdx = activeLyricIdx;
-        const activeLine = lyricsScrollEl.querySelectorAll('.lyric-line')[activeLyricIdx];
-        if (activeLine) {
-            lyricsScrollEl.scrollTo({ 
-                top: activeLine.offsetTop - lyricsScrollEl.clientHeight / 2 + activeLine.clientHeight / 2, 
-                behavior: 'smooth' 
-            });
-        }
-    }
 
     const togglePlay = () => togglePlayGlobal();
     const playNext = () => playNextGlobal(api);
@@ -330,19 +326,40 @@
     };
 
     let pendingSeekTime = null;
+    let lastSeekX = 0;
+    let lastSeekTime = 0;
 
     const onSeekStart = (e) => { 
         isSeekingBar = true; 
+        lastSeekX = e.touches ? e.touches[0].clientX : e.clientX;
+        lastSeekTime = Date.now();
+        if (isWebAudioMode) startScrubEffect();
         updateSeek(e); 
     };
 
     const onSeekMove = (e) => { 
         if (!isSeekingBar) return; 
         e.preventDefault(); 
+        
+        const currentX = e.touches ? e.touches[0].clientX : e.clientX;
+        const now = Date.now();
+
+        if (isWebAudioMode) {
+            const dt = Math.max(1, now - lastSeekTime);
+            if (dt > 16) {
+                const dx = currentX - lastSeekX;
+                const speed = Math.abs(dx / dt);
+                const dir = dx >= 0 ? 1 : -1;
+                updateScrubEffect(speed, dir);
+                lastSeekX = currentX;
+                lastSeekTime = now;
+            }
+        }
         updateSeek(e); 
     };
 
     const onSeekEnd = () => { 
+        if (isSeekingBar && isWebAudioMode) stopScrubEffect();
         isSeekingBar = false; 
         if (pendingSeekTime !== null) {
             activePlayer.currentTime = pendingSeekTime;
@@ -365,6 +382,31 @@
             currentTimeRef.textContent = formatTime(pendingSeekTime);
         }
     };
+
+    $: effectiveLyricIdx = isSeekingBar && pendingSeekTime !== null
+        ? (lyrics ? lyrics.findLastIndex(l => pendingSeekTime >= l.t) : -1)
+        : (lyrics ? lyrics.findLastIndex(l => $playerCurrentTime >= l.t) : -1);
+
+    $: if (lyricsScrollEl && effectiveLyricIdx >= 0) {
+        if (isSeekingBar) {
+            const activeLine = lyricsScrollEl.querySelectorAll('.lyric-line')[effectiveLyricIdx];
+            if (activeLine) {
+                lyricsScrollEl.scrollTo({
+                    top: activeLine.offsetTop - lyricsScrollEl.clientHeight / 2 + activeLine.clientHeight / 2,
+                    behavior: 'auto'
+                });
+            }
+        } else if (!isUserScrolling && effectiveLyricIdx !== lastScrolledIdx) {
+            lastScrolledIdx = effectiveLyricIdx;
+            const activeLine = lyricsScrollEl.querySelectorAll('.lyric-line')[effectiveLyricIdx];
+            if (activeLine) {
+                lyricsScrollEl.scrollTo({
+                    top: activeLine.offsetTop - lyricsScrollEl.clientHeight / 2 + activeLine.clientHeight / 2,
+                    behavior: 'smooth'
+                });
+            }
+        }
+    }
 
     function getDynamicFontSize(text, isActive) {
         if (!isActive) return '10px';
@@ -471,12 +513,12 @@
                                 role="button" 
                                 tabindex="0"
                             >
-                                <div class="lyrics-preview-strip" style="transform: translate3d(0, calc({-activeLyricIdx} * 24px), 0);">
+                                <div class="lyrics-preview-strip" style="transform: translate3d(0, calc({-effectiveLyricIdx} * 24px), 0);">
                                     {#each lyrics as line, i}
                                         <div 
                                             class="lp-mini-line" 
-                                            class:active={i === activeLyricIdx}
-                                            style="font-size: {getDynamicFontSize(line.text, i === activeLyricIdx)}"
+                                            class:active={i === effectiveLyricIdx}
+                                            style="font-size: {getDynamicFontSize(line.text, i === effectiveLyricIdx)}"
                                         >
                                             {line.text}
                                         </div>
@@ -497,14 +539,6 @@
                             on:keydown={(e) => e.key === 'Enter' && goAlbum()}
                         >
                             {track ? track.title : '---'}</div>
-                            <!-- {#if $globalBitrate > 0}
-                                <div class="kbps-badge">
-                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="var(--accent-color)"><rect x="3" y="8" width="4" height="8"/><rect x="10" y="4" width="4" height="16"/><rect x="17" y="10" width="4" height="4"/></svg>
-                                    <span>{$globalBitrate} kbps</span><span class="ext">{$globalFileExt}</span>
-                                </div>
-                            {:else}
-                                <span style="font-size: 11px; font-family: monospace; color: #555;">NO SIGNAL</span>
-                            {/if} -->
                         <div 
                             class="fp-artist" 
                             role="button" 
@@ -608,7 +642,7 @@
 
                     <div class="lyrics-scroll-box" bind:this={lyricsScrollEl} on:wheel={handleUserScroll} on:touchmove={handleUserScroll}>
                         {#each lyrics as line, i}
-                            <div class="lyric-line" class:active={i === activeLyricIdx} on:click={() => { activePlayer.currentTime = line.t; }}>
+                            <div class="lyric-line" class:active={i === effectiveLyricIdx} on:click={() => { activePlayer.currentTime = line.t; }}>
                                 {line.text}
                             </div>
                         {/each}
@@ -679,7 +713,7 @@
             </div>
             <div class="lyrics-scroll-box popup-version" bind:this={lyricsScrollEl} on:wheel={handleUserScroll} on:touchmove={handleUserScroll}>
                 {#each lyrics as line, i}
-                    <div class="lyric-line" class:active={i === activeLyricIdx} on:click={() => { activePlayer.currentTime = line.t; }}>
+                    <div class="lyric-line" class:active={i === effectiveLyricIdx} on:click={() => { activePlayer.currentTime = line.t; }}>
                         {line.text}
                     </div>
                 {/each}
@@ -821,13 +855,12 @@
         position: relative;
         display: flex;
         align-items: center;
-        justify-content: center; /* Centering the content */
+        justify-content: center;
         width: 100%;
         margin-top: 8px;
         height: 16px;
     }
 
-    /* The Label Wrapper: Handles the fading background mask */
     .queue-dl-label-wrapper {
         position: relative;
         z-index: 2;
@@ -836,7 +869,6 @@
         align-items: center;
         padding: 0 24px; 
         
-        /* Your improved wide gradient */
         background: linear-gradient(
             90deg, 
             transparent 0%, 
@@ -845,7 +877,6 @@
             transparent 100%
         );
 
-        /* Prevents any flickering before the 1s animation starts */
         will-change: transform, opacity;
     }
 
@@ -853,7 +884,7 @@
         font-size: 8px;
         font-weight: 900;
         letter-spacing: 0.1em;
-        color: rgba(255, 255, 255, 0.9); /* Neutral text color */
+        color: rgba(255, 255, 255, 0.9);
         display: flex;
         align-items: center;
         gap: 4px;
@@ -861,36 +892,32 @@
         white-space: nowrap;
     }
 
-    /* The Progress Track (Larger height, neutral color) */
     .queue-dl-track-container {
         position: absolute;
         left: 0;
         right: 0;
         top: 50%;
         transform: translateY(-50%);
-        height: 3px; /* Larger height as requested */
+        height: 3px;
         background: rgba(255, 255, 255, 0.1);
         border-radius: 4px;
         overflow: hidden;
         z-index: 1;
     }
 
-    /* The Filling Bar (Neutral White/Gray) */
     .queue-dl-bar {
         height: 100%;
         width: 100%;
-        background: rgba(255, 255, 255, 0.5); /* No accent color */
+        background: rgba(255, 255, 255, 0.5);
         transform-origin: left;
         transition: transform 0.4s cubic-bezier(0.32, 0.72, 0, 1);
         will-change: transform;
     }
 
-    /* Ensure queue items have enough vertical space */
     .queue-item {
         padding: 16px 12px;
     }
 
-    /* Hover effect similar to your .fp-progress-track */
     .queue-dl-status-row:hover .queue-dl-track-container {
         height: 4px;
         background: rgba(255, 255, 255, 0.2);
@@ -1186,12 +1213,8 @@
     }
 
     .kbps-badge {
-        /* Change flex to inline-flex */
         display: inline-flex; 
-        
-        /* These ensure it stays tight */
         width: fit-content; 
-        
         align-items: center; 
         gap: 6px; 
         background: rgba(0,0,0,0.4); 
@@ -1203,8 +1226,6 @@
         border: 1px solid rgba(255,255,255,0.1);
         box-shadow: 0 2px 8px rgba(0,0,0,0.3); 
         letter-spacing: 0.5px; 
-        
-        /* Keep your margin if you need the offset */
         margin-left: -12px; 
     }
     .kbps-badge .ext { color: var(--accent-color); }

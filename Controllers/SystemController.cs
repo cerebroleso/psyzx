@@ -24,8 +24,8 @@ public class SystemController : ControllerBase
     private readonly HttpClient _http;
     private readonly IServiceScopeFactory _scopeFactory;
     
-    // Core Processing Queues
-    private static readonly ConcurrentQueue<string> _downloadQueue = new ConcurrentQueue<string>();
+    // Core Processing Queues - Updated to hold the Target Artist override
+    private static readonly ConcurrentQueue<DownloadTaskItem> _downloadQueue = new ConcurrentQueue<DownloadTaskItem>();
     private static readonly ConcurrentQueue<string> _successfulDownloads = new ConcurrentQueue<string>();
     private static readonly ConcurrentQueue<string> _failedDownloads = new ConcurrentQueue<string>();
     
@@ -221,7 +221,7 @@ public class SystemController : ControllerBase
         }
 
         Console.WriteLine($"[DEBUG-YTDLP] Enqueuing new URL: {cleanUrl}");
-        _downloadQueue.Enqueue(cleanUrl);
+        _downloadQueue.Enqueue(new DownloadTaskItem { Url = cleanUrl, TargetArtist = req.targetArtist });
         
         if (Interlocked.Exchange(ref _isProcessing, 1) == 0)
         {
@@ -241,8 +241,11 @@ public class SystemController : ControllerBase
 
         EnsureExecutable(ytDlpPath);
 
-        while (_downloadQueue.TryDequeue(out var url))
+        while (_downloadQueue.TryDequeue(out var task))
         {
+            var url = task.Url;
+            var targetArtist = task.TargetArtist;
+
             Console.WriteLine($"\n============================================");
             Console.WriteLine($"[DEBUG-PROCESS] Dequeued URL: {url}");
             _currentTrackInfo = $"Processing: {url}";
@@ -260,7 +263,7 @@ public class SystemController : ControllerBase
                 {
                     Console.WriteLine("[DEBUG-PROCESS] Routing to Playwright Spotify Scraper...");
                     _currentTrackInfo = "Scraping Spotify Playlist...";
-                    await ManualScrapeSpotifyPlaylist(url);
+                    await ManualScrapeSpotifyPlaylist(url, targetArtist);
                     isSuccess = true;
                     identifier = $"Playlist Extracted: {url}";
                 }
@@ -286,7 +289,7 @@ public class SystemController : ControllerBase
                         }
                         else
                         {
-                            isSuccess = await RunYtDlpDownload(ytDlpPath, $"ytsearch1:{searchQuery}", fullBasePath, cookieArg);
+                            isSuccess = await RunYtDlpDownload(ytDlpPath, $"ytsearch1:{searchQuery}", fullBasePath, cookieArg, targetArtist);
                         }
                     }
                     else
@@ -326,7 +329,7 @@ public class SystemController : ControllerBase
 
                     if (string.IsNullOrEmpty(skipReason))
                     {
-                        isSuccess = await RunYtDlpDownload(ytDlpPath, url, fullBasePath, cookieArg);
+                        isSuccess = await RunYtDlpDownload(ytDlpPath, url, fullBasePath, cookieArg, targetArtist);
                     }
                 }
             }
@@ -366,7 +369,7 @@ public class SystemController : ControllerBase
     // =======================================================
     // PLAYWRIGHT SPOTIFY SCRAPER (Extracts Track + Artist natively!)
     // =======================================================
-    private async Task ManualScrapeSpotifyPlaylist(string url)
+    private async Task ManualScrapeSpotifyPlaylist(string url, string? targetArtist)
     {
         string realUrl = url;
         var matchId = Regex.Match(url, @"(?:playlist|album)\/([a-zA-Z0-9]+)");
@@ -485,7 +488,7 @@ public class SystemController : ControllerBase
 
             foreach (var query in extractedQueries)
             {
-                _downloadQueue.Enqueue(query);
+                _downloadQueue.Enqueue(new DownloadTaskItem { Url = query, TargetArtist = targetArtist });
             }
         }
         catch (Exception ex)
@@ -566,9 +569,11 @@ public class SystemController : ControllerBase
         }
     }
 
-    private async Task<bool> RunYtDlpDownload(string binPath, string target, string basePath, string cookieArg)
+    private async Task<bool> RunYtDlpDownload(string binPath, string target, string basePath, string cookieArg, string? targetArtist)
     {
-        string outputTemplate = $"{basePath}/%(artist,uploader|Unknown Artist)s/%(album,playlist_title|Unknown Album)s/%(title)s.%(ext)s";
+        string safeArtistFolder = !string.IsNullOrWhiteSpace(targetArtist) ? SanitizePath(targetArtist) : "%(artist,uploader|Unknown Artist)s";
+        string outputTemplate = $"{basePath}/{safeArtistFolder}/%(album,playlist_title|Unknown Album)s/%(title)s.%(ext)s";
+        
         string args = $"{cookieArg}--js-runtimes node -i -x --audio-format mp3 --audio-quality 0 " +
                       $"--embed-metadata --embed-thumbnail --add-metadata " +
                       $"-o \"{outputTemplate}\" \"{target}\"";
@@ -711,10 +716,20 @@ public class SystemController : ControllerBase
     private string SanitizePath(string name)
     {
         if (string.IsNullOrWhiteSpace(name)) return "Unknown";
-        return new string(name.Where(x => !Path.GetInvalidFileNameChars().Contains(x)).ToArray()).Trim().Replace(' ', '_');
+        // Removed .Replace(' ', '_') to prevent Old Album turning into Old_Album
+        return new string(name.Where(x => !Path.GetInvalidFileNameChars().Contains(x)).ToArray()).Trim();
     }
 }
 
-public class YtDlpRequest { public string url { get; set; } = string.Empty; }
+public class DownloadTaskItem {
+    public string Url { get; set; } = string.Empty;
+    public string? TargetArtist { get; set; }
+}
+
+public class YtDlpRequest { 
+    public string url { get; set; } = string.Empty; 
+    public string? targetArtist { get; set; } 
+}
+
 public class ArtistUpdateDto { public string name { get; set; } = string.Empty; public string imagePath { get; set; } = string.Empty; }
 public class AlbumUpdateDto { public string title { get; set; } = string.Empty; public string coverPath { get; set; } = string.Empty; }
