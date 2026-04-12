@@ -1,6 +1,6 @@
 <script>
     import { createEventDispatcher, onMount, onDestroy, afterUpdate } from 'svelte';
-    import { fly, fade, slide } from 'svelte/transition';
+    import { fly, fade, slide, scale } from 'svelte/transition';
     import { 
         currentPlaylist, 
         currentIndex, 
@@ -12,9 +12,7 @@
         playerDuration, 
         isMaxGlassActive, 
         appSessionVersion,
-        isBuffering,
-        globalBitrate,
-        globalFileExt
+        isBuffering
     } from '../store.js';
     import { formatTime } from './utils.js';
     import { 
@@ -50,11 +48,54 @@
     let progressContainerEl;
     let isClosing = false;
     let isClosingByDrag = false;
+    
+    // Tap & Info State
     let coverClick = false;
     let playToggle = false;
+    let isFavorite = false;
+    let showHeartAnim = false;
+    let tapTimeout;
+    let lastTapTime = 0;
 
-    function handleCoverClick() {
-        coverClick = !coverClick;
+    function handleCoverClick(e) {
+        const currentTime = new Date().getTime();
+        const tapLength = currentTime - lastTapTime;
+        
+        clearTimeout(tapTimeout);
+
+        if (tapLength < 300 && tapLength > 0) {
+            // Double Tap
+            lastTapTime = 0; 
+            toggleFavorite();
+            e.preventDefault();
+        } else {
+            // Single Tap
+            tapTimeout = setTimeout(() => {
+                coverClick = !coverClick;
+            }, 300);
+        }
+        lastTapTime = currentTime;
+    }
+
+    async function toggleFavorite() {
+        if (!track || !track.id) return;
+
+        // Optimistic UI Update
+        isFavorite = !isFavorite;
+        showHeartAnim = true;
+        setTimeout(() => {
+            showHeartAnim = false;
+        }, 800);
+
+        // API Call
+        if (api.toggleFavorite) {
+            const success = await api.toggleFavorite(track.id, isFavorite);
+            if (!success) {
+                // Revert if the network request fails
+                isFavorite = !isFavorite;
+                console.error("[API] Failed to toggle favorite status");
+            }
+        }
     }
 
     function handlePlayToggle() {
@@ -502,6 +543,14 @@
                     {#key coverUrl}
                         <img class="sober-cover" src={coverUrl} alt="Album Cover" in:fade={{duration: 250}} on:error={handleImageError} />
                     {/key}
+                    
+                    {#if showHeartAnim}
+                        <div class="heart-anim-overlay" in:scale={{duration: 200, easing: expoOut, start: 0.5}} out:fade={{duration: 300}}>
+                            <svg viewBox="0 0 24 24" fill={isFavorite ? "#eeeeee" : "white"} stroke={isFavorite ? "#eeeeee" : "white"} stroke-width="2">
+                                <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path>
+                            </svg>
+                        </div>
+                    {/if}
                 </div>
 
                 {#if hasSyncLyrics}
@@ -538,7 +587,8 @@
                             on:click={goAlbum} 
                             on:keydown={(e) => e.key === 'Enter' && goAlbum()}
                         >
-                            {track ? track.title : '---'}</div>
+                            {track ? track.title : '---'}
+                        </div>
                         <div 
                             class="fp-artist" 
                             role="button" 
@@ -723,6 +773,23 @@
 {/if}
 
 <style>
+    .heart-anim-overlay {
+        position: absolute;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 100px;
+        height: 100px;
+        pointer-events: none;
+        z-index: 10;
+        filter: drop-shadow(0 10px 15px rgba(0,0,0,0.5));
+    }
+
+    .heart-anim-overlay svg {
+        width: 100%;
+        height: 100%;
+    }
+
     #full-player {
         --fp-offset: 18px;
         --base-header-height: 64px;
@@ -939,34 +1006,34 @@
     .popup-version .lyric-line.active { font-size: 36px; }
 
     @keyframes iosPremiumSpawn {
-    0% {
-        opacity: 0;
-        transform: translate3d(0, 16px, 0) scale(0.96);
+        0% {
+            opacity: 0;
+            transform: translate3d(0, 16px, 0) scale(0.96);
+        }
+        100% {
+            opacity: 1;
+            transform: translate3d(0, 0, 0) scale(1);
+        }
     }
-    100% {
-        opacity: 1;
-        transform: translate3d(0, 0, 0) scale(1);
-    }
-}
 
     .lyrics-spawn-container {
-    padding-bottom: 16px; 
-    animation: iosPremiumSpawn 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
-    will-change: transform, opacity;
-}
+        padding-bottom: 16px; 
+        animation: iosPremiumSpawn 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+        will-change: transform, opacity;
+    }
 
-.lyrics-preview-window {
-    height: 72px; 
-    overflow: hidden; 
-    position: relative;
-    cursor: pointer;
-    -webkit-mask-image: linear-gradient(to bottom, transparent 0%, rgba(0,0,0,1) 35%, rgba(0,0,0,1) 65%, transparent 100%);
-    mask-image: linear-gradient(to bottom, transparent 0%, rgba(0,0,0,1) 35%, rgba(0,0,0,1) 65%, transparent 100%);
-    -webkit-mask-size: 100% 100%;
-    -webkit-mask-repeat: no-repeat;
-    -webkit-transform: translateZ(0);
-    transform: translateZ(0);
-}
+    .lyrics-preview-window {
+        height: 72px; 
+        overflow: hidden; 
+        position: relative;
+        cursor: pointer;
+        -webkit-mask-image: linear-gradient(to bottom, transparent 0%, rgba(0,0,0,1) 35%, rgba(0,0,0,1) 65%, transparent 100%);
+        mask-image: linear-gradient(to bottom, transparent 0%, rgba(0,0,0,1) 35%, rgba(0,0,0,1) 65%, transparent 100%);
+        -webkit-mask-size: 100% 100%;
+        -webkit-mask-repeat: no-repeat;
+        -webkit-transform: translateZ(0);
+        transform: translateZ(0);
+    }
 
     .lyrics-preview-strip {
         width: 100%; transition: transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1); padding-top: 24px;
@@ -1041,27 +1108,27 @@
     .close-btn:hover { background: rgba(255,255,255,0.1); }
 
     .fp-cover-container { 
-    display: flex; 
-    align-items: center; 
-    justify-content: center; 
-    width: 100%; 
-    max-width: 350px; 
-    
-    margin: 0 auto 24px auto; 
-    
-    transition: max-width 0.4s cubic-bezier(0.25, 1, 0.5, 1),
-                margin-bottom 0.4s cubic-bezier(0.25, 1, 0.5, 1); 
-    
-    will-change: max-width, margin-bottom;
-    -webkit-transform: translate3d(0,0,0);
-    transform: translate3d(0,0,0);
-}
+        position: relative;
+        display: flex; 
+        align-items: center; 
+        justify-content: center; 
+        width: 100%; 
+        max-width: 350px; 
+        
+        margin: 0 auto 24px auto; 
+        
+        transition: max-width 0.4s cubic-bezier(0.25, 1, 0.5, 1),
+                    margin-bottom 0.4s cubic-bezier(0.25, 1, 0.5, 1); 
+        
+        will-change: max-width, margin-bottom;
+        -webkit-transform: translate3d(0,0,0);
+        transform: translate3d(0,0,0);
+    }
 
-.fp-cover-container.shrink {
-    max-width: 262px; 
-    
-    margin-bottom: 16px; 
-}
+    .fp-cover-container.shrink {
+        max-width: 262px; 
+        margin-bottom: 16px; 
+    }
 
     .sober-cover { 
         width: 100%; 
@@ -1088,12 +1155,12 @@
     }
 
     .fp-info { 
-    display: flex; 
-    justify-content: space-between; 
-    align-items: center; 
-    margin-bottom: 16px; 
-    padding: 0;
-}
+        display: flex; 
+        justify-content: space-between; 
+        align-items: center; 
+        margin-bottom: 16px; 
+        padding: 0;
+    }
 
     .fp-info.enlarge,
     .fp-info.enlarge ~ .fp-progress-section,
@@ -1211,22 +1278,4 @@
         z-index: 5;
         pointer-events: none;
     }
-
-    .kbps-badge {
-        display: inline-flex; 
-        width: fit-content; 
-        align-items: center; 
-        gap: 6px; 
-        background: rgba(0,0,0,0.4); 
-        padding: 4px 8px; 
-        border-radius: 6px;
-        font-size: 11px; 
-        font-family: monospace; 
-        font-weight: bold; 
-        border: 1px solid rgba(255,255,255,0.1);
-        box-shadow: 0 2px 8px rgba(0,0,0,0.3); 
-        letter-spacing: 0.5px; 
-        margin-left: -12px; 
-    }
-    .kbps-badge .ext { color: var(--accent-color); }
 </style>

@@ -102,6 +102,23 @@ const getInitialCacheDebug = () => {
 
 export const isCacheDebugActive = writable(getInitialCacheDebug());
 
+const getInitialGaplessMode = () => {
+    if (typeof localStorage !== 'undefined') {
+        const saved = localStorage.getItem('psyzx_gapless');
+        // If it's never been set, return true (On by default)
+        if (saved !== null) return saved === 'true';
+    }
+    return true; 
+};
+
+export const isGaplessModeActive = writable(getInitialGaplessMode());
+
+isGaplessModeActive.subscribe(val => {
+    if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('psyzx_gapless', val.toString());
+    }
+});
+
 isCacheDebugActive.subscribe(val => {
     if (typeof localStorage !== 'undefined') {
         localStorage.setItem('psyzx_cache_debug', val.toString());

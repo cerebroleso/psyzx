@@ -1,7 +1,7 @@
 <script>
     import { onMount } from 'svelte';
     import { fade } from 'svelte/transition';
-    import { isGlobalColorActive, isMaxGlassActive, isDesktopSwapActive, viewSize, isCacheDebugActive } from '../../store.js';
+    import { isGlobalColorActive, isMaxGlassActive, isDesktopSwapActive, viewSize, isCacheDebugActive, isGaplessModeActive } from '../../store.js';
     import { setVolumeBoost, isWebAudioMode, setWebAudioGaplessMode } from '../audio.js';
     import { api } from '../api.js';
 
@@ -12,9 +12,8 @@
 
     onMount(() => {
         currentBoost = localStorage.getItem('psyzx_boost') || '1.0';
-        localWebAudioMode = isWebAudioMode;
-        currentScrubSound = localStorage.getItem('psyzx_scrub_sound') || 'speed';
-        
+        currentScrubSound = localStorage.getItem('psyzx_scrub_sound') || 'vinyl';
+
         if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
             navigator.serviceWorker.controller.postMessage({
                 type: 'SET_DEBUG_MODE',
@@ -68,9 +67,18 @@
     };
 
     const toggleGaplessMode = () => {
-        localWebAudioMode = !localWebAudioMode;
-        setWebAudioGaplessMode(localWebAudioMode);
-    };
+        // 1. Calculate the new state
+        const newState = !$isGaplessModeActive;
+        
+        // 2. Update the store (this saves it to localStorage automatically)
+        isGaplessModeActive.set(newState);
+        
+        // 3. Trigger the engine change/reload ONLY on user click
+        // Using a small timeout ensures the localStorage write finishes first
+        setTimeout(() => {
+            setWebAudioGaplessMode(newState);
+        }, 50);
+    }; 
 
     const refreshApp = async () => {
         try {
@@ -197,9 +205,9 @@
         <div class="setting-item" style="margin-bottom: 24px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 24px;">
             <div class="setting-info">
                 <span class="setting-title">True Gapless (RAM Engine)</span>
-                <span class="setting-desc">Bypasses HTML5 logic to force 0ms continuous audio using RAM buffers. Makes playback more fluid at the cost of more memory usage. Changing requires reload.</span>
+                <span class="setting-desc">Bypasses HTML5 logic to force 0ms continuous audio using RAM buffers.</span>
             </div>
-            <button class="toggle-btn" class:active={localWebAudioMode} on:click={toggleGaplessMode} aria-label="Toggle WebAudio RAM Engine">
+            <button class="toggle-btn" class:active={$isGaplessModeActive} on:click={toggleGaplessMode} aria-label="Toggle WebAudio RAM Engine">
                 <div class="toggle-knob"></div>
             </button>
         </div>

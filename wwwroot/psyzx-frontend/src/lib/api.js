@@ -91,6 +91,16 @@ export const api = {
         }
     },
 
+    async getArtistStats() {
+        try {
+            const res = await this.fetchWithTimeout('/Library/artists/stats');
+            if (!res.ok) throw new Error();
+            return await res.json();
+        } catch {
+            return [];
+        }
+    },
+
     async getTracks() {
         try {
             const res = await this.fetchWithTimeout('/Tracks');
@@ -163,6 +173,22 @@ export const api = {
             });
             return res.ok;
         } catch {
+            return false;
+        }
+    },
+
+    async toggleFavorite(trackId, isFavorite) {
+        try {
+            // Adjust the endpoint matching your backend structure
+            const method = isFavorite ? 'POST' : 'DELETE';
+            const res = await this.fetchWithTimeout(`/Playlists/1/tracks`, {
+                method: method,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ trackId })
+            });
+            return res.ok;
+        } catch (err) {
+            console.error("[API] Failed to update favorite status", err);
             return false;
         }
     },

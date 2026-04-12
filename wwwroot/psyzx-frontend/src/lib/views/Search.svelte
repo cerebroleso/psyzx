@@ -39,7 +39,7 @@
             <div class="grid-container">
                 {#each resultsArtists as artist}
                     <a href="#artist/{artist.id}" class="card artist-card">
-                        <img src={artist.imagePath ? `/api/Tracks/image?path=${encodeURIComponent(artist.imagePath.split('?')[0])}` : '/placeholder.png'} alt={artist.name} />
+                        <img src={artist.imagePath ? `/api/Tracks/image?path=${encodeURIComponent(artist.imagePath.split('?')[0])}&size=thumb` : '/placeholder.png'} alt={artist.name} />
                         <div class="card-info">
                             <div class="title">{artist.name}</div>
                         </div>
@@ -53,7 +53,7 @@
             <div class="grid-container">
                 {#each resultsAlbums as album}
                     <a href="#album/{album.id}" class="card album-card">
-                        <img src={album.coverPath ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath.split('?')[0])}` : '/placeholder.png'} alt={album.title} />
+                        <img src={album.coverPath ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath.split('?')[0])}&size=thumb` : '/placeholder.png'} alt={album.title} />
                         <div class="card-info">
                             <div class="title">{album.title}</div>
                             <div class="subtitle">{album.artistName}</div>

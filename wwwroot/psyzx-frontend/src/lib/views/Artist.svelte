@@ -199,8 +199,17 @@
         if (!newAlbumInput.trim()) return;
 
         let query = newAlbumInput.trim();
+        
+        // 1. Force the user to use an actual URL. Text searches result in 1-hour compilations.
         if (!query.startsWith('http://') && !query.startsWith('https://')) {
-            query = `ytsearch1:${artist.name} ${query} album`;
+            alert('To avoid downloading 1-hour single compilation tracks, please paste a direct YouTube Playlist or Spotify Album URL.');
+            return;
+        }
+
+        // 2. Reject single YouTube videos without a playlist ID attached.
+        if ((query.includes('youtube.com') || query.includes('youtu.be')) && !query.includes('list=')) {
+            alert('Single YouTube videos are blocked. Please provide a YouTube Playlist link (the URL must contain "list=").');
+            return;
         }
 
         try {
@@ -209,12 +218,12 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ 
                     url: query,
-                    targetArtist: artist.name // Force the backend to use this folder
+                    targetArtist: artist.name 
                 })
             });
 
             if (res.ok) {
-                alert('Album added to download queue!');
+                alert('Playlist added to download queue!');
                 toggleAddAlbumModal();
             } else {
                 const data = await res.json();

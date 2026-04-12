@@ -85,6 +85,17 @@ public class PlaylistsController : ControllerBase
         var trackExists = await _db.Tracks.AnyAsync(t => t.Id == dto.TrackId);
         if (!trackExists) return NotFound();
 
+        // --- ADD THIS CHECK ---
+        var alreadyExists = await _db.PlaylistTracks
+            .AnyAsync(pt => pt.PlaylistId == id && pt.TrackId == dto.TrackId);
+
+        if (alreadyExists) 
+        {
+            // It's already in the playlist, so we just return success.
+            return Ok(); 
+        }
+        // ----------------------
+
         var playlistTrack = new PlaylistTrack
         {
             PlaylistId = id,
@@ -94,6 +105,28 @@ public class PlaylistsController : ControllerBase
         _db.PlaylistTracks.Add(playlistTrack);
         await _db.SaveChangesAsync();
 
+        return Ok();
+    }
+
+    [HttpDelete("{id}/tracks")]
+    public async Task<IActionResult> RemoveTrack(int id, [FromBody] AddTrackDto dto)
+    {
+        var userId = GetCurrentUserId();
+        
+        // Ensure the playlist belongs to the user
+        var playlist = await _db.Playlists.FirstOrDefaultAsync(p => p.Id == id && p.UserId == userId);
+        if (playlist == null) return NotFound();
+
+        // Find the link between the playlist and the track
+        var playlistTrack = await _db.PlaylistTracks
+            .FirstOrDefaultAsync(pt => pt.PlaylistId == id && pt.TrackId == dto.TrackId);
+
+        // If it exists, delete it
+        if (playlistTrack != null)
+        {
+            _db.PlaylistTracks.Remove(playlistTrack);
+            await _db.SaveChangesAsync();
+        }
         return Ok();
     }
 

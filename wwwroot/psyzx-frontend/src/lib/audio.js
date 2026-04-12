@@ -50,10 +50,8 @@ let silentPlayer = null;
 let scrubOsc = null;
 let scrubGain = null;
 
-export let isWebAudioMode =
-    typeof window !== 'undefined'
-        ? localStorage.getItem('psyzx_webaudio_gapless') === 'true'
-        : false;
+const savedGapless = typeof window !== 'undefined' ? localStorage.getItem('psyzx_webaudio_gapless') : null;
+export let isWebAudioMode = savedGapless === null ? true : savedGapless === 'true';
 
 export const setWebAudioGaplessMode = (enabled) => {
     isWebAudioMode = enabled;

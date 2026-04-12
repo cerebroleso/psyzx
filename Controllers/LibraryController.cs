@@ -20,6 +20,23 @@ public class LibraryController : ControllerBase
         _coversPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "covers");
     }
 
+    [HttpGet("artists/stats")]
+    public async Task<IActionResult> GetArtistStats()
+    {
+        var stats = await _context.Artists
+            .Select(a => new
+            {
+                id = a.Id,
+                albumCount = a.Albums.Count(),
+                trackCount = a.Albums.SelectMany(al => al.Tracks).Count(),
+                // 🔥 NEW: Sums up the total plays across all tracks for this artist
+                playCount = a.Albums.SelectMany(al => al.Tracks).Sum(t => t.PlayCount)
+            })
+            .ToListAsync();
+            
+        return Ok(stats);
+    }
+
     [HttpPost("scan")]
     public async Task<IActionResult> ScanLibrary()
     {
@@ -424,7 +441,6 @@ public class LibraryController : ControllerBase
         return Ok(new { message = $"Merged '{source.Title}' into '{target.Title}' successfully." });
     }
 
-    // --- NEW: Hard Delete Artist ---
     [HttpDelete("artist/{id}")]
     public async Task<IActionResult> DeleteArtist(int id)
     {
@@ -436,13 +452,12 @@ public class LibraryController : ControllerBase
         if (artist == null)
             return NotFound(new { message = "Artist not found." });
 
-        // 1. Delete the physical directory and all contents
         var artistDir = Path.Combine(_basePath, artist.Name);
         if (Directory.Exists(artistDir))
         {
             try
             {
-                Directory.Delete(artistDir, true); // true = recursive wipe
+                Directory.Delete(artistDir, true); 
             }
             catch (Exception ex)
             {
@@ -450,12 +465,12 @@ public class LibraryController : ControllerBase
             }
         }
 
-        // 2. Remove from DB (EF will cascade delete albums and tracks if configured, or just remove the parent)
         _context.Artists.Remove(artist);
         await _context.SaveChangesAsync();
 
         return Ok(new { message = $"Artist '{artist.Name}' and all associated files were permanently deleted." });
     }
+    
     [HttpDelete("album/{id}")]
     public async Task<IActionResult> DeleteAlbum(int id)
     {
@@ -467,13 +482,12 @@ public class LibraryController : ControllerBase
         if (album == null)
             return NotFound(new { message = "Album not found." });
 
-        // 1. Delete the physical directory and all contents
         var albumDir = Path.Combine(_basePath, album.Artist.Name, album.Title);
         if (Directory.Exists(albumDir))
         {
             try
             {
-                Directory.Delete(albumDir, true); // true = recursive wipe
+                Directory.Delete(albumDir, true); 
             }
             catch (Exception ex)
             {
@@ -481,7 +495,6 @@ public class LibraryController : ControllerBase
             }
         }
 
-        // 2. Remove from DB (EF will cascade delete tracks if configured, or just remove the parent)
         _context.Albums.Remove(album);
         await _context.SaveChangesAsync();
 

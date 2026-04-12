@@ -11,12 +11,13 @@
     const DEFAULT_PLACEHOLDER = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxIDEiPjxyZWN0IHdpZHRoPSIxIiBoZWlnaHQ9IjEiIGZpbGw9IiMzMzMiLz48L3N2Zz4=';
     const handleImageError = (ev) => { ev.target.src = DEFAULT_PLACEHOLDER; };
 
-    $: artistsArray = Array.from($artistsMap.values()).sort((a, b) => a.name.localeCompare(b.name));
-
-    let visibleCount = 40;
-    $: visibleArtists = artistsArray.slice(0, visibleCount);
-
     let observerTarget;
+
+    // --- Filter & Sort State ---
+    let visibleCount = 40;
+    let searchQuery = '';
+    let activeSort = 'az'; // az, za, most_albums, most_tracks, most_played, duplicates
+    let enrichedStats = new Map();
 
     // --- Artist Duplicates State ---
     let duplicates = [];
@@ -41,7 +42,7 @@
 
     onMount(() => {
         const observer = new IntersectionObserver((entries) => {
-            if (entries[0].isIntersecting && visibleCount < artistsArray.length) {
+            if (entries[0].isIntersecting && visibleCount < filteredArtists.length) {
                 visibleCount += 40;
             }
         }, { rootMargin: '400px' });
@@ -50,9 +51,22 @@
 
         fetchArtistDuplicates();
         fetchAlbumDuplicates();
+        fetchArtistStats();
 
         return () => observer.disconnect();
     });
+
+    async function fetchArtistStats() {
+        try {
+            const res = await fetch('/api/Library/artists/stats');
+            if (res.ok) {
+                const data = await res.json();
+                const map = new Map();
+                data.forEach(d => map.set(d.id, d));
+                enrichedStats = map;
+            }
+        } catch { /* silent */ }
+    }
 
     async function fetchArtistDuplicates() {
         try {
@@ -85,6 +99,48 @@
             }
         } catch { /* silent */ }
     }
+
+    // 🔥 FIX: Cleanly separate value binding from reactive triggers
+    // This auto-resets the pagination back to top whenever search or sort changes
+    $: if (activeSort || searchQuery !== null) {
+        visibleCount = 40;
+        if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    // --- Reactive Filter/Sort Engine ---
+    $: filteredArtists = Array.from($artistsMap.values())
+        .filter(a => {
+            if (searchQuery && !a.name.toLowerCase().includes(searchQuery.toLowerCase())) return false;
+            if (activeSort === 'duplicates') {
+                return duplicates.some(d => d.sourceId === a.id || d.targetId === a.id);
+            }
+            return true;
+        })
+        .sort((a, b) => {
+            if (activeSort === 'az') return a.name.localeCompare(b.name);
+            if (activeSort === 'za') return b.name.localeCompare(a.name);
+            
+            const statsA = enrichedStats.get(a.id) || {};
+            const statsB = enrichedStats.get(b.id) || {};
+
+            // 🔥 FIX: Added fallback || 0 so missing data never causes NaN sorting failures
+            if (activeSort === 'most_albums') {
+                const diff = (statsB.albumCount || 0) - (statsA.albumCount || 0);
+                return diff !== 0 ? diff : a.name.localeCompare(b.name);
+            }
+            if (activeSort === 'most_tracks') {
+                const diff = (statsB.trackCount || 0) - (statsA.trackCount || 0);
+                return diff !== 0 ? diff : a.name.localeCompare(b.name);
+            }
+            if (activeSort === 'most_played') {
+                const diff = (statsB.playCount || 0) - (statsA.playCount || 0);
+                return diff !== 0 ? diff : a.name.localeCompare(b.name);
+            }
+            
+            return 0;
+        });
+
+    $: visibleArtists = filteredArtists.slice(0, visibleCount);
 
     function lockScroll() {
         const mainView = document.getElementById('main-view');
@@ -142,7 +198,6 @@
         }
     }
 
-    // --- Context Menu Logic ---
     function openContextMenu(e, artistId) {
         e.stopPropagation();
         contextMenuArtistId = artistId;
@@ -164,7 +219,7 @@
     }
 
     async function hardDeleteArtist(id) {
-        const artist = artistsArray.find(a => a.id === id);
+        const artist = Array.from($artistsMap.values()).find(a => a.id === id);
         if (!confirm(`Are you absolutely sure you want to delete '${artist.name}'?\n\nThis will permanently erase the artist, all their albums, and all audio files from your hard drive. This cannot be undone.`)) {
             closeContextMenu();
             return;
@@ -245,20 +300,38 @@
     {/if}
 </div>
 
+<div class="controls-bar">
+    <div class="search-wrapper">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+        <input 
+            type="text" 
+            bind:value={searchQuery} 
+            placeholder="Filter library..." 
+        />
+    </div>
+    
+    <div class="sort-wrapper">
+        <select class="sort-select" bind:value={activeSort}>
+            <option value="az">A to Z</option>
+            <option value="za">Z to A</option>
+            <option value="most_played">Most Played</option>
+            <option value="most_albums">Most Albums</option>
+            <option value="most_tracks">Most Tracks</option>
+            <option value="duplicates">Possible Duplicates</option>
+        </select>
+        <svg class="sort-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="6 9 12 15 18 9"></polyline>
+        </svg>
+    </div>
+</div>
+
 {#if showModal}
     <div use:portal>
-        <div
-            class="modal-backdrop"
-            style="top: {modalTop}px; height: {modalHeight}px;"
-            in:fade={{ duration: 200 }}
-            out:fade={{ duration: 150 }}
-            on:click={closeModal}
-        >
-            <div
-                class="modal-glass-card"
-                in:scale={{ start: 0.95, duration: 250, opacity: 0 }}
-                on:click|stopPropagation
-            >
+        <div class="modal-backdrop" style="top: {modalTop}px; height: {modalHeight}px;" in:fade={{ duration: 200 }} out:fade={{ duration: 150 }} on:click={closeModal}>
+            <div class="modal-glass-card" in:scale={{ start: 0.95, duration: 250, opacity: 0 }} on:click|stopPropagation>
                 <div class="modal-header">
                     <h3>Duplicate Artists</h3>
                     <button class="btn-close" on:click={closeModal} aria-label="Close">
@@ -268,7 +341,6 @@
                         </svg>
                     </button>
                 </div>
-
                 <div class="modal-list">
                     {#each duplicates as dup (`${dup.sourceId}-${dup.targetId}`)}
                         <div class="dup-row">
@@ -283,13 +355,7 @@
                                     </div>
                                 {/if}
                             </div>
-
-                            <button
-                                class="merge-btn"
-                                disabled={mergingIds.has(dup.sourceId)}
-                                on:click={() => mergeArtist(dup.sourceId, dup.targetId)}
-                                aria-label="Merge {dup.sourceName} into {dup.targetName}"
-                            >
+                            <button class="merge-btn" disabled={mergingIds.has(dup.sourceId)} on:click={() => mergeArtist(dup.sourceId, dup.targetId)}>
                                 {#if mergingIds.has(dup.sourceId)}
                                     <span class="spinner" aria-hidden="true"></span>
                                 {:else}
@@ -309,18 +375,8 @@
 
 {#if showAlbumModal}
     <div use:portal>
-        <div
-            class="modal-backdrop"
-            style="top: {modalTop}px; height: {modalHeight}px;"
-            in:fade={{ duration: 200 }}
-            out:fade={{ duration: 150 }}
-            on:click={closeAlbumModal}
-        >
-            <div
-                class="modal-glass-card"
-                in:scale={{ start: 0.95, duration: 250, opacity: 0 }}
-                on:click|stopPropagation
-            >
+        <div class="modal-backdrop" style="top: {modalTop}px; height: {modalHeight}px;" in:fade={{ duration: 200 }} out:fade={{ duration: 150 }} on:click={closeAlbumModal}>
+            <div class="modal-glass-card" in:scale={{ start: 0.95, duration: 250, opacity: 0 }} on:click|stopPropagation>
                 <div class="modal-header">
                     <h3>Duplicate Albums</h3>
                     <button class="btn-close" on:click={closeAlbumModal} aria-label="Close">
@@ -330,7 +386,6 @@
                         </svg>
                     </button>
                 </div>
-
                 <div class="modal-list">
                     {#each albumDuplicates as dup (`${dup.sourceId}-${dup.targetId}`)}
                         <div class="dup-row">
@@ -342,13 +397,7 @@
                                 <div class="dup-source">{dup.sourceName} <span class="track-count">({dup.sourceTracks} tracks)</span></div>
                                 <div class="dup-target">→ {dup.targetName} <span class="track-count">({dup.targetTracks} tracks)</span></div>
                             </div>
-
-                            <button
-                                class="merge-btn album-merge-btn"
-                                disabled={mergingAlbumIds.has(dup.sourceId)}
-                                on:click={() => mergeAlbum(dup.sourceId, dup.targetId)}
-                                aria-label="Merge {dup.sourceName} into {dup.targetName}"
-                            >
+                            <button class="merge-btn album-merge-btn" disabled={mergingAlbumIds.has(dup.sourceId)} on:click={() => mergeAlbum(dup.sourceId, dup.targetId)}>
                                 {#if mergingAlbumIds.has(dup.sourceId)}
                                     <span class="spinner" aria-hidden="true"></span>
                                 {:else}
@@ -368,13 +417,7 @@
 
 {#if contextMenuOpen}
     <div use:portal>
-        <div
-            class="context-menu"
-            style="top: {contextMenuY}px; left: {contextMenuX}px;"
-            in:scale={{ start: 0.95, duration: 100 }}
-            out:fade={{ duration: 100 }}
-            on:click|stopPropagation
-        >
+        <div class="context-menu" style="top: {contextMenuY}px; left: {contextMenuX}px;" in:scale={{ start: 0.95, duration: 100 }} out:fade={{ duration: 100 }} on:click|stopPropagation>
             <button class="context-item text-danger" on:click={() => hardDeleteArtist(contextMenuArtistId)}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <polyline points="3 6 5 6 21 6"></polyline>
@@ -420,36 +463,89 @@
 <div bind:this={observerTarget} style="height: 1px; width: 100%;"></div>
 
 <style>
-    /* Context Menu Modal */
-    .context-menu {
-        position: fixed;
-        z-index: 9999999;
-        background: rgba(30, 30, 30, 0.75);
-        backdrop-filter: blur(20px) saturate(150%);
-        -webkit-backdrop-filter: blur(20px) saturate(150%);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 8px;
-        padding: 4px;
-        min-width: 200px;
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    /* --- Library Controls --- */
+    .controls-bar {
+        display: flex;
+        gap: 16px;
+        margin-bottom: 24px;
+        align-items: center;
+        flex-wrap: wrap;
     }
 
-    .context-item {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        width: 100%;
-        padding: 10px 12px;
-        background: transparent;
-        border: none;
-        color: white;
-        font-size: 13px;
-        font-weight: 500;
-        border-radius: 4px;
-        cursor: pointer;
-        text-align: left;
-        transition: background 0.15s;
+    .search-wrapper {
+        position: relative;
+        flex: 1;
+        min-width: 200px;
     }
+
+    .search-wrapper svg {
+        position: absolute;
+        left: 14px;
+        top: 50%;
+        transform: translateY(-50%);
+        color: rgba(255, 255, 255, 0.4);
+    }
+
+    .search-wrapper input {
+        width: 100%;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        color: white;
+        padding: 12px 14px 12px 42px;
+        border-radius: 12px;
+        font-size: 14px;
+        outline: none;
+        transition: all 0.2s ease;
+    }
+
+    .search-wrapper input:focus {
+        background: rgba(255, 255, 255, 0.08);
+        border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .sort-wrapper {
+        position: relative;
+    }
+
+    .sort-select {
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        color: white;
+        padding: 12px 36px 12px 16px;
+        border-radius: 12px;
+        font-size: 14px;
+        outline: none;
+        cursor: pointer;
+        appearance: none;
+        -webkit-appearance: none;
+        transition: all 0.2s ease;
+    }
+
+    .sort-select:hover {
+        background: rgba(255, 255, 255, 0.08);
+    }
+
+    .sort-select:focus {
+        border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .sort-select option {
+        background: #1e1e1e;
+        color: white;
+    }
+
+    .sort-chevron {
+        position: absolute;
+        right: 12px;
+        top: 50%;
+        transform: translateY(-50%);
+        pointer-events: none;
+        color: rgba(255, 255, 255, 0.5);
+    }
+
+    /* Context Menu Modal */
+    .context-menu { position: fixed; z-index: 9999999; background: rgba(30, 30, 30, 0.75); backdrop-filter: blur(20px) saturate(150%); -webkit-backdrop-filter: blur(20px) saturate(150%); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; padding: 4px; min-width: 200px; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4); }
+    .context-item { display: flex; align-items: center; gap: 8px; width: 100%; padding: 10px 12px; background: transparent; border: none; color: white; font-size: 13px; font-weight: 500; border-radius: 4px; cursor: pointer; text-align: left; transition: background 0.15s; }
     .context-item:hover { background: rgba(255, 255, 255, 0.1); }
     .context-item.text-danger { color: #ef4444; }
     .context-item.text-danger:hover { background: rgba(239, 68, 68, 0.1); }
@@ -499,45 +595,10 @@
     .sleek-cover.loaded { opacity: 1; transform: scale(1); filter: blur(0); }
 
     /* --- Card Bottom & 3-Dots Logic --- */
-    .card-bottom {
-        position: relative;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        margin-top: 8px; /* Spacing from the image */
-    }
-
-    .card-title {
-        flex-grow: 1;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        max-width: 100%;
-        transition: max-width 0.2s ease;
-    }
-
-    .more-options-btn {
-        position: absolute;
-        right: 0;
-        background: transparent;
-        border: none;
-        color: rgba(255, 255, 255, 0.6);
-        cursor: pointer;
-        padding: 4px;
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        opacity: 0;
-        transition: opacity 0.2s ease, background 0.2s ease, color 0.2s ease;
-    }
-
-    .more-options-btn:hover {
-        color: white;
-        background: rgba(255, 255, 255, 0.1);
-    }
-
-    /* Shrink the title max-width and fade in the button on card hover */
+    .card-bottom { position: relative; display: flex; align-items: center; justify-content: space-between; margin-top: 8px; }
+    .card-title { flex-grow: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; transition: max-width 0.2s ease; }
+    .more-options-btn { position: absolute; right: 0; background: transparent; border: none; color: rgba(255, 255, 255, 0.6); cursor: pointer; padding: 4px; border-radius: 50%; display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.2s ease, background 0.2s ease, color 0.2s ease; }
+    .more-options-btn:hover { color: white; background: rgba(255, 255, 255, 0.1); }
     .card:hover .card-title { max-width: calc(100% - 32px); }
     .card:hover .more-options-btn { opacity: 1; }
 </style>

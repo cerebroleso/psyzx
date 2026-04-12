@@ -212,12 +212,20 @@ public class SystemController : ControllerBase
     {
         if (string.IsNullOrEmpty(req.url)) return BadRequest(new { text = "URL missing" });
         
-        string cleanUrl = req.url;
+        string cleanUrl = req.url.Trim();
+        
+        // Backend safety net: block non-URLs and single videos
+        if (!cleanUrl.StartsWith("http")) 
+            return BadRequest(new { text = "Text searches disabled. Please provide a direct Playlist URL." });
+            
+        if ((cleanUrl.Contains("youtube.com") || cleanUrl.Contains("youtu.be")) && !cleanUrl.Contains("list="))
+            return BadRequest(new { text = "Single YouTube videos are disabled. Provide a Playlist URL (must contain 'list=')." });
+
         if (cleanUrl.Contains("googleusercontent"))
         {
-             var idMatch = Regex.Match(cleanUrl, @"\/([a-zA-Z0-9]{22})(?:\?|$)");
-             if (idMatch.Success) cleanUrl = $"https://open.spotify.com/track/{idMatch.Groups[1].Value}";
-             else return BadRequest(new { text = "Invalid corrupted URL structure." });
+            var idMatch = Regex.Match(cleanUrl, @"\/([a-zA-Z0-9]{22})(?:\?|$)");
+            if (idMatch.Success) cleanUrl = $"https://open.spotify.com/track/{idMatch.Groups[1].Value}";
+            else return BadRequest(new { text = "Invalid corrupted URL structure." });
         }
 
         Console.WriteLine($"[DEBUG-YTDLP] Enqueuing new URL: {cleanUrl}");
@@ -237,7 +245,9 @@ public class SystemController : ControllerBase
     {
         var ytDlpPath = Path.Combine(fullBasePath, "yt-dlp_linux");
         var cookiePath = Path.Combine(fullBasePath, "cookies.txt");
-        var cookieArg = System.IO.File.Exists(cookiePath) ? $"--cookies \"{cookiePath}\" " : "";
+        
+        // FIX: Inject --yes-playlist (forces playlists) and --split-chapters (forces 1-hour tracks to split natively)
+        var ytDlpArgs = (System.IO.File.Exists(cookiePath) ? $"--cookies \"{cookiePath}\" " : "") + "--yes-playlist --split-chapters ";
 
         EnsureExecutable(ytDlpPath);
 
@@ -251,7 +261,12 @@ public class SystemController : ControllerBase
             _currentTrackInfo = $"Processing: {url}";
             
             bool isSpotify = url.Contains("spotify", StringComparison.OrdinalIgnoreCase);
-            bool isPlaylist = url.Contains("/playlist/", StringComparison.OrdinalIgnoreCase) || url.Contains("/album/", StringComparison.OrdinalIgnoreCase);
+            
+            // FIX: The original code used "/playlist/" which failed on YouTube's "/playlist?list=".
+            // FIX: Added "list=" check to correctly identify YouTube video URLs that contain an attached playlist.
+            bool isPlaylist = url.Contains("/playlist", StringComparison.OrdinalIgnoreCase) || 
+                            url.Contains("/album/", StringComparison.OrdinalIgnoreCase) || 
+                            url.Contains("list=", StringComparison.OrdinalIgnoreCase);
 
             string identifier = url;
             bool isSuccess = false;
@@ -272,7 +287,6 @@ public class SystemController : ControllerBase
                     Console.WriteLine("[DEBUG-PROCESS] Routing to Spotify Single Track Resolver...");
                     _currentTrackInfo = "Resolving Spotify Track...";
                     
-                    // Directly use Playwright Single Track Resolver. Do not ask yt-dlp for metadata to avoid DRM blocks.
                     string searchQuery = await ManualScrapeSpotifyTitle(url);
 
                     if (!string.IsNullOrEmpty(searchQuery))
@@ -289,7 +303,8 @@ public class SystemController : ControllerBase
                         }
                         else
                         {
-                            isSuccess = await RunYtDlpDownload(ytDlpPath, $"ytsearch1:{searchQuery}", fullBasePath, cookieArg, targetArtist);
+                            // Use updated ytDlpArgs
+                            isSuccess = await RunYtDlpDownload(ytDlpPath, $"ytsearch1:{searchQuery}", fullBasePath, ytDlpArgs, targetArtist);
                         }
                     }
                     else
@@ -306,10 +321,10 @@ public class SystemController : ControllerBase
                     {
                         string meta = url;
                         
-                        // Only fetch metadata if it's an actual URL, not a pre-resolved search query!
                         if (!url.StartsWith("ytsearch1:"))
                         {
-                            meta = await GetMetadataWithYtDlp(ytDlpPath, url, cookieArg);
+                            // Use updated ytDlpArgs
+                            meta = await GetMetadataWithYtDlp(ytDlpPath, url, ytDlpArgs);
                         }
                         else
                         {
@@ -329,7 +344,8 @@ public class SystemController : ControllerBase
 
                     if (string.IsNullOrEmpty(skipReason))
                     {
-                        isSuccess = await RunYtDlpDownload(ytDlpPath, url, fullBasePath, cookieArg, targetArtist);
+                        // Use updated ytDlpArgs
+                        isSuccess = await RunYtDlpDownload(ytDlpPath, url, fullBasePath, ytDlpArgs, targetArtist);
                     }
                 }
             }
@@ -346,24 +362,6 @@ public class SystemController : ControllerBase
         Console.WriteLine("[DEBUG-PROCESS] Queue is empty. Halting processor.");
         _currentTrackInfo = "";
         Interlocked.Exchange(ref _isProcessing, 0); 
-    }
-
-    private async Task<bool> IsSongInDbAsync(string trackQuery)
-    {
-        if (string.IsNullOrWhiteSpace(trackQuery)) return false;
-        
-        try {
-            using var scope = _scopeFactory.CreateScope();
-            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-
-            string cleanQuery = trackQuery.Replace("ytsearch1:", "").Trim();
-            var parts = cleanQuery.Split(" - ", 2, StringSplitOptions.RemoveEmptyEntries);
-            
-            string searchTitle = parts.Length == 2 ? parts[1].Trim() : cleanQuery;
-            searchTitle = searchTitle.Replace("'", "").Replace("\"", "").Trim();
-
-            return await db.Albums.SelectMany(a => a.Tracks).AnyAsync(t => t.FilePath != null && t.FilePath.Contains(searchTitle));
-        } catch { return false; }
     }
 
     // =======================================================
