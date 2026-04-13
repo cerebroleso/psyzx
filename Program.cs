@@ -1,6 +1,8 @@
 using Microsoft.EntityFrameworkCore;
 using psyzx.Data;
 using psyzx.Services;
+using psyzx.Hubs;
+using Microsoft.AspNetCore.SignalR;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using System.Diagnostics;
@@ -30,6 +32,9 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
     });
 
 builder.Services.AddAuthorization();
+
+builder.Services.AddSignalR();
+builder.Services.AddSingleton<IUserIdProvider, UserIdProvider>();
 
 builder.Services.AddControllers().AddJsonOptions(options =>
 {
@@ -123,6 +128,8 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers().RequireAuthorization();
+
+app.MapHub<PlaybackHub>("/hubs/playback").RequireAuthorization();
 
 app.MapGet("/api/health", () =>
 {

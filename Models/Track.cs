@@ -10,6 +10,9 @@ public class Track
     public int Bitrate { get; set; }
     public int PlayCount { get; set; }
     
+    // NEW: Hidden field to store genres, moods, or alternate spellings
+    public string SearchTags { get; set; } = string.Empty; 
+    
     public int AlbumId { get; set; }
     public Album Album { get; set; } = null!;
 

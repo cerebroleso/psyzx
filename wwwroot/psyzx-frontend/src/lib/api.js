@@ -1,4 +1,8 @@
 import { currentUser } from '../store.js';
+import { initSync, stopSync, broadcastState } from './sync.js';
+import { activePlayer } from './audio.js';
+import { get } from 'svelte/store';
+import { isPlaying, playerCurrentTime } from '../store.js';
 
 const triggerMetadataSweep = (tracks) => {
     if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
@@ -14,7 +18,6 @@ export const api = {
     baseUrl: '/api',
 
     async fetchWithTimeout(endpoint, options = {}) {
-        
         const timeout = 5000;
         const controller = new AbortController();
         const id = setTimeout(() => controller.abort(), timeout);
@@ -50,6 +53,7 @@ export const api = {
             if (res.ok) {
                 const data = await res.json();
                 currentUser.set(data);
+                try { await this.startSync(); } catch(e) { console.warn("Sync error", e); }
                 return true;
             }
             currentUser.set(null);
@@ -64,30 +68,48 @@ export const api = {
         try {
             const res = await this.fetchWithTimeout('/Auth/login', {
                 method: 'POST',
-                body: new URLSearchParams(formData),
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+                body: JSON.stringify(formData),
+                headers: { 'Content-Type': 'application/json' }
             });
+            
             if (res.ok) {
                 const data = await res.json();
                 currentUser.set(data);
-                return { ok: true, data };
+                // Protect the sync call so it doesn't crash the login flow
+                try { 
+                    await this.startSync(); 
+                } catch (syncErr) {
+                    console.warn('[API] Sync failed to start, but login succeeded.', syncErr);
+                }
             }
-            return { ok: false };
-        } catch {
-            return { ok: false };
+            // Return the raw response so Svelte can accurately check res.ok and res.status
+            return res; 
+        } catch (error) {
+            console.error('[API] Login Fetch Error:', error);
+            throw error; // Let the UI handle network errors gracefully
         }
+    },
+
+    async logout() {
+        try {
+            await this.fetchWithTimeout('/Auth/logout', { method: 'POST' });
+        } catch { /* ignore */ }
+        await this.stopSync();
+        currentUser.set(null);
     },
 
     async register(formData) {
         try {
             const res = await this.fetchWithTimeout('/Auth/register', {
                 method: 'POST',
-                body: new URLSearchParams(formData),
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+                body: JSON.stringify(formData),
+                headers: { 'Content-Type': 'application/json' }
             });
-            return { ok: res.ok };
-        } catch {
-            return { ok: false };
+            // Return the raw response so Svelte can check res.ok
+            return res; 
+        } catch (error) {
+            console.error('[API] Register Fetch Error:', error);
+            throw error;
         }
     },
 
@@ -111,9 +133,7 @@ export const api = {
                 }
                 throw new Error('SERVER_ERROR');
             }
-            const tracks = await res.json();
-            
-            return tracks;
+            return await res.json();
         } catch (e) {
             if (e.message === 'TIMEOUT' || e.message === 'NETWORK_ERROR') {
                 try {
@@ -123,7 +143,6 @@ export const api = {
                         return await cachedRes.json();
                     }
                 } catch (cacheErr) {}
-                
                 throw new Error('OFFLINE_NO_CACHE');
             }
             throw e;
@@ -179,7 +198,6 @@ export const api = {
 
     async toggleFavorite(trackId, isFavorite) {
         try {
-            // Adjust the endpoint matching your backend structure
             const method = isFavorite ? 'POST' : 'DELETE';
             const res = await this.fetchWithTimeout(`/Playlists/1/tracks`, {
                 method: method,
@@ -195,7 +213,6 @@ export const api = {
 
     async scanLibrary(hardScan = false) {
         try {
-            // Appending the flag as a query string so the ASP.NET controller can bind it
             const endpoint = `/System/scan${hardScan ? '?hardScan=true' : ''}`;
             return await this.fetchWithTimeout(endpoint, { method: 'POST' });
         } catch (e) {
@@ -295,10 +312,32 @@ export const api = {
 
     async recordPlay(trackId) {
         try {
-            // We don't await the result because we don't want to block the UI
             this.fetchWithTimeout(`/Tracks/${trackId}/play`, { method: 'POST' });
         } catch (e) {
             console.error("[API] Failed to record play:", e);
         }
+    },
+
+    async startSync() {
+        try {
+            await initSync(
+                () => {
+                    // Replaced undefined variables with safe fallbacks
+                    return {
+                        trackUrl: null,
+                        currentTime: activePlayer ? activePlayer.currentTime : 0,
+                        isPlaying: get(isPlaying),
+                        timestamp: Date.now(),
+                    };
+                },
+                (state) => { console.log('Remote state applied:', state); }
+            );
+        } catch (e) {
+            console.warn('[Sync] Could not initialize sync', e);
+        }
+    },
+    
+    async stopSync() {
+        await stopSync();
     },
 };

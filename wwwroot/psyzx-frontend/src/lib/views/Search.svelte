@@ -1,24 +1,45 @@
 <script>
-    import { allTracks, artistsMap, albumsMap, currentPlaylist, currentIndex, shuffleHistory } from '../../store.js';
+    import { currentPlaylist, currentIndex, shuffleHistory } from '../../store.js';
+    import { api } from '../api.js';
 
     export let query = '';
 
-    $: q = query.toLowerCase().trim();
+    let resultsTracks = [];
+    let resultsArtists = [];
+    let resultsAlbums = [];
+    
+    let searchTimeout;
+    let isSearching = false;
 
-    $: resultsTracks = $allTracks.filter(t => 
-        t.title?.toLowerCase().includes(q) || 
-        t.album?.title?.toLowerCase().includes(q) || 
-        t.album?.artist?.name?.toLowerCase().includes(q)
-    );
-
-    $: resultsArtists = Array.from($artistsMap.values()).filter(a => 
-        a.name?.toLowerCase().includes(q)
-    );
-
-    $: resultsAlbums = Array.from($albumsMap.values()).filter(a => 
-        a.title?.toLowerCase().includes(q) || 
-        a.artistName?.toLowerCase().includes(q)
-    );
+    // Reactively watch 'query' and debounce the API call
+    $: {
+        clearTimeout(searchTimeout);
+        const q = query.trim();
+        
+        if (q === '') {
+            resultsTracks = [];
+            resultsArtists = [];
+            resultsAlbums = [];
+            isSearching = false;
+        } else {
+            isSearching = true;
+            searchTimeout = setTimeout(async () => {
+                try {
+                    const res = await api.fetchWithTimeout(`/Search?q=${encodeURIComponent(q)}`);
+                    if (res.ok) {
+                        const data = await res.json();
+                        resultsArtists = data.artists;
+                        resultsAlbums = data.albums;
+                        resultsTracks = data.tracks;
+                    }
+                } catch (err) {
+                    console.error("[Search] Failed to fetch results", err);
+                } finally {
+                    isSearching = false;
+                }
+            }, 300); // 300ms delay prevents spamming your AMD E1-6010 processor
+        }
+    }
 
     const playTrack = (track) => {
         const indexInResults = resultsTracks.findIndex(t => t.id === track.id);
@@ -31,8 +52,10 @@
 </script>
 
 <div class="search-view">
-    {#if q === ''}
+    {#if query.trim() === ''}
         <div class="empty-state">Type something to search</div>
+    {:else if isSearching}
+        <div class="empty-state">Searching...</div>
     {:else}
         {#if resultsArtists.length > 0}
             <h2>Artists</h2>
@@ -70,7 +93,7 @@
                     <div class="track-item" role="button" tabindex="0" on:click={() => playTrack(track)} on:keydown={(e) => e.key === 'Enter' && playTrack(track)}>
                         <div class="track-info">
                             <div class="track-title">{track.title}</div>
-                            <div class="track-artist">{track.album.artist.name} &bull; {track.album.title}</div>
+                            <div class="track-artist">{track.album.artist.name} • {track.album.title}</div>
                         </div>
                     </div>
                 {/each}

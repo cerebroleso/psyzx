@@ -29,24 +29,22 @@ let gainB = null;
 
 let currentBuffer = null;
 let nextBuffer = null;
-let currentSource = null;
 let trackStartTime = 0;
 let pauseOffset = 0;
 let currentTrackUrl = null;
 let nextTrackUrl = null;
 
-// synthetic clock survives backgrounding better than raf
-let syntheticClockInterval = null;
+let activeSources = new Set();
+let pendingLoadId = 0; 
 
+let syntheticClockInterval = null;
 const decodeCache = new Map();
 
 export let isEngineInitialized = false;
 let hasDoneSilentPrime = false;
 let stallTimeout = null;
 
-// dedicated dom-attached silent player for ios keep-alive (WebAudio mode only)
 let silentPlayer = null;
-
 let scrubOsc = null;
 let scrubGain = null;
 
@@ -132,6 +130,7 @@ const initSilentPlayer = () => {
     silentPlayer.preload = 'auto';
     silentPlayer.autoplay = false;
     silentPlayer.playsInline = true;
+    silentPlayer.disableRemotePlayback = true; 
     silentPlayer.setAttribute('playsinline', '');
     silentPlayer.setAttribute('webkit-playsinline', '');
     silentPlayer.setAttribute('aria-hidden', 'true');
@@ -182,8 +181,6 @@ const buildWebAudioGraph = () => {
         mixerNode.gain.value = 1.0;
     }
 
-    // Connect MediaElementSources universally so the HTML5 player can act as
-    // an iOS widget driver in Web Audio Mode without blasting at 1.0 volume.
     try {
         if (!gainA) {
             const sourceA = audioCtx.createMediaElementSource(playerA);
@@ -234,7 +231,6 @@ const buildWebAudioGraph = () => {
 const fetchAndDecode = async (url) => {
     if (decodeCache.has(url)) return await decodeCache.get(url);
 
-    // Enforce memory limit
     if (decodeCache.size >= MAX_CACHE_SIZE) {
         const oldestKey = decodeCache.keys().next().value;
         decodeCache.delete(oldestKey);
@@ -265,6 +261,7 @@ const fetchAndDecode = async (url) => {
 const startSyntheticClock = () => {
     if (syntheticClockInterval) clearInterval(syntheticClockInterval);
     let earlyEndFired = false;
+    let syncPulseCounter = 0; 
 
     syntheticClockInterval = setInterval(() => {
         if (get(isPlaying) && currentBuffer && audioCtx) {
@@ -272,6 +269,23 @@ const startSyntheticClock = () => {
             playerCurrentTime.set(currentRealTime);
 
             if (isWebAudioMode) {
+                syncPulseCounter++;
+                if (syncPulseCounter >= 10) { 
+                    syncPulseCounter = 0;
+                    updateMediaPositionState(currentRealTime, currentBuffer.duration);
+
+                    // FIX 2: Self-heal if iOS aggressively suspends the HTML5 keep-alive driver
+                    if (html5ActivePlayer) {
+                        if (html5ActivePlayer.paused) {
+                            const p = html5ActivePlayer.play();
+                            if (p !== undefined) p.catch(() => {});
+                        }
+                        if (Math.abs(html5ActivePlayer.currentTime - currentRealTime) > 1.0) {
+                            try { html5ActivePlayer.currentTime = currentRealTime; } catch(e) {}
+                        }
+                    }
+                }
+
                 if (currentBuffer.duration - currentRealTime <= 0.15 && !earlyEndFired) {
                     earlyEndFired = true;
                     window.dispatchEvent(new CustomEvent('track-ended'));
@@ -290,30 +304,33 @@ const startSyntheticClock = () => {
 const playWebAudio = () => {
     if (!currentBuffer || !audioCtx) return;
 
+    if (get(isPlaying)) return;
+
     if (audioCtx.state === 'suspended') {
         audioCtx.resume().catch(() => {});
     }
 
-    startSilentKeepAlive();
-
-    // Dynamically hold lock screen scrubber active natively
     if (html5ActivePlayer && html5ActivePlayer.paused) {
         const p = html5ActivePlayer.play();
-        if (p !== undefined) p.catch(() => {});
+        if (p !== undefined) {
+            p.then(() => stopSilentKeepAlive()).catch(() => startSilentKeepAlive());
+        }
+    } else if (!html5ActivePlayer) {
+        startSilentKeepAlive();
     }
 
-    if (currentSource) {
-        try { currentSource.stop(); } catch {}
-        try { currentSource.disconnect(); } catch {}
-        currentSource = null;
-    }
+    const newSource = audioCtx.createBufferSource();
+    newSource.buffer = currentBuffer;
+    newSource.connect(mixerNode);
 
-    currentSource = audioCtx.createBufferSource();
-    currentSource.buffer = currentBuffer;
-    currentSource.connect(mixerNode);
+    newSource.onended = () => {
+        activeSources.delete(newSource);
+    };
 
     trackStartTime = audioCtx.currentTime;
-    currentSource.start(0, pauseOffset);
+    newSource.start(0, pauseOffset);
+    
+    activeSources.add(newSource);
 
     isPlaying.set(true);
     startSyntheticClock();
@@ -322,11 +339,14 @@ const playWebAudio = () => {
 };
 
 const pauseWebAudio = () => {
-    if (!currentSource || !audioCtx) return;
-
-    try { currentSource.stop(); } catch {}
-    try { currentSource.disconnect(); } catch {}
-    currentSource = null;
+    activeSources.forEach(source => {
+        try { 
+            source.onended = null; 
+            source.stop(); 
+            source.disconnect(); 
+        } catch {}
+    });
+    activeSources.clear();
 
     pauseOffset += (audioCtx.currentTime - trackStartTime);
 
@@ -334,7 +354,7 @@ const pauseWebAudio = () => {
         html5ActivePlayer.pause();
     }
 
-    if (!get(isPlaying)) stopSilentKeepAlive();
+    stopSilentKeepAlive();
 
     isPlaying.set(false);
     if (syntheticClockInterval) clearInterval(syntheticClockInterval);
@@ -343,11 +363,11 @@ const pauseWebAudio = () => {
 };
 
 const stopWebAudio = () => {
-    if (currentSource) {
-        try { currentSource.stop(); } catch {}
-        try { currentSource.disconnect(); } catch {}
-        currentSource = null;
-    }
+    activeSources.forEach(source => {
+        try { source.onended = null; source.stop(); source.disconnect(); } catch {}
+    });
+    activeSources.clear();
+    
     pauseOffset = 0;
     if (syntheticClockInterval) clearInterval(syntheticClockInterval);
 };
@@ -356,7 +376,9 @@ const seekWebAudio = (time) => {
     if (!currentBuffer || !audioCtx) return;
 
     const wasPlaying = get(isPlaying);
-    stopWebAudio();
+    if (wasPlaying) isPlaying.set(false); 
+
+    stopWebAudio(); 
 
     pauseOffset = Math.max(0, Math.min(time, currentBuffer.duration));
     playerCurrentTime.set(pauseOffset);
@@ -377,6 +399,7 @@ const seekWebAudio = (time) => {
 // ─────────────────────────────────────────────────────────────────────────────
 export const unlockAudioContext = () => {
     if (hasDoneSilentPrime) return;
+    hasDoneSilentPrime = true; 
 
     const AudioCtx = window.AudioContext || window['webkitAudioContext'];
     if (!audioCtx) audioCtx = new AudioCtx();
@@ -412,9 +435,6 @@ export const unlockAudioContext = () => {
 
     if (isWebAudioMode) {
         if (silentPlayer) {
-            silentPlayer.volume = 0.0001;
-            silentPlayer.loop = true;
-
             const p = silentPlayer.play();
             if (p !== undefined) {
                 p.then(() => {
@@ -428,7 +448,6 @@ export const unlockAudioContext = () => {
         }
     }
 
-    hasDoneSilentPrime = true;
     isEngineInitialized = true;
 };
 
@@ -532,74 +551,80 @@ export const preloadNextUrl = async (url) => {
 // LOAD AND PLAY
 // ─────────────────────────────────────────────────────────────────────────────
 export const loadAndPlayUrl = async (url) => {
+    const currentLoadId = ++pendingLoadId;
+
     if (!isEngineInitialized) unlockAudioContext();
 
     if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
-    if (isWebAudioMode) startSilentKeepAlive();
 
-    // Universal Setup - ALWAYS fetch real track metadata natively to feed iOS System UI
-    const oldPlayer = html5ActivePlayer;
-    html5ActivePlayer = html5StandbyPlayer;
-    html5StandbyPlayer = oldPlayer;
+    if (html5StandbyPlayer && html5StandbyPlayer.src.includes(url)) {
+        const temp = html5ActivePlayer;
+        html5ActivePlayer = html5StandbyPlayer;
+        html5StandbyPlayer = temp;
+    } else if (html5ActivePlayer && !html5ActivePlayer.src.includes(url)) {
+        const temp = html5ActivePlayer;
+        html5ActivePlayer = html5StandbyPlayer;
+        html5StandbyPlayer = temp;
+        html5ActivePlayer.src = url;
+        html5ActivePlayer.load();
+    }
 
     const activeTargetGain = html5ActivePlayer === playerA ? gainA : gainB;
     const oldTargetGain = html5StandbyPlayer === playerA ? gainA : gainB;
 
-    if (!html5ActivePlayer.src.includes(url)) {
-        html5ActivePlayer.src = url;
-        html5ActivePlayer.load();
-    }
     html5ActivePlayer.currentTime = 0;
+    if (html5StandbyPlayer) html5StandbyPlayer.pause();
 
     try {
         const playPromise = html5ActivePlayer.play();
         if (playPromise !== undefined) {
             playPromise.then(() => {
+                if (isWebAudioMode) stopSilentKeepAlive();
+                
                 if (audioCtx && oldTargetGain) {
                     oldTargetGain.gain.cancelScheduledValues(audioCtx.currentTime);
                     oldTargetGain.gain.setValueAtTime(oldTargetGain.gain.value, audioCtx.currentTime);
                     oldTargetGain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.15);
                 }
-                setTimeout(() => {
-                    html5StandbyPlayer.pause();
-                }, 200);
             }).catch(() => {
-                if (!isWebAudioMode) isPlaying.set(false);
+                if (isWebAudioMode) startSilentKeepAlive(); 
+                else if (currentLoadId === pendingLoadId) isPlaying.set(false);
             });
         }
 
         if (audioCtx && activeTargetGain) {
             activeTargetGain.gain.cancelScheduledValues(audioCtx.currentTime);
             activeTargetGain.gain.setValueAtTime(0, audioCtx.currentTime);
-            // If Web Audio Mode, keep native player effectively muted so it acts as iOS widget driver
             const targetVol = isWebAudioMode ? 0.0001 : 1;
             activeTargetGain.gain.linearRampToValueAtTime(targetVol, audioCtx.currentTime + 0.05);
         }
 
         if (!isWebAudioMode) isPlaying.set(true);
     } catch (e) {
-        if (!isWebAudioMode) isPlaying.set(false);
+        if (!isWebAudioMode && currentLoadId === pendingLoadId) isPlaying.set(false);
     }
 
     if (isWebAudioMode) {
         const isNaturalRollover =
             currentBuffer && ((currentBuffer.duration - get(playerCurrentTime)) <= 0.3);
 
-        if (isNaturalRollover) {
-            currentSource = null;
-        } else {
-            stopWebAudio();
+        if (!isNaturalRollover && currentLoadId === pendingLoadId) {
+            stopWebAudio(); 
         }
 
         isBuffering.set(true);
         isPlaying.set(false);
 
-        currentBuffer = await fetchAndDecode(url);
+        const decodedBuffer = await fetchAndDecode(url);
+
+        if (currentLoadId !== pendingLoadId) return;
+
+        currentBuffer = decodedBuffer;
         currentTrackUrl = url;
 
         if (!currentBuffer) {
             isBuffering.set(false);
-            html5ActivePlayer.pause();
+            if (html5ActivePlayer) html5ActivePlayer.pause();
             if (!get(isPlaying)) stopSilentKeepAlive();
             return;
         }
@@ -607,12 +632,41 @@ export const loadAndPlayUrl = async (url) => {
         playerDuration.set(currentBuffer.duration);
         pauseOffset = 0;
 
-        // Lock native player back to 0 perfectly inline with Gapless source
-        html5ActivePlayer.currentTime = 0;
+        if (html5ActivePlayer) html5ActivePlayer.currentTime = 0;
 
-        playWebAudio(); // synchronous
+        playWebAudio();
         isBuffering.set(false);
     }
+};
+
+export const playStateCue = (isPausing) => {
+    if (!audioCtx || !isWebAudioMode) return;
+    try {
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.type = 'sine';
+        
+        const now = audioCtx.currentTime;
+        
+        if (isPausing) {
+            osc.frequency.setValueAtTime(400, now);
+            osc.frequency.exponentialRampToValueAtTime(150, now + 0.15);
+        } else {
+            osc.frequency.setValueAtTime(150, now);
+            osc.frequency.exponentialRampToValueAtTime(400, now + 0.15);
+        }
+        
+        gain.gain.setValueAtTime(0.3, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+        
+        osc.start(now);
+        osc.stop(now + 0.15);
+    } catch(e) {}
 };
 
 export const togglePlayGlobal = () => {
@@ -620,8 +674,10 @@ export const togglePlayGlobal = () => {
 
     if (isWebAudioMode) {
         if (get(isPlaying)) {
+            playStateCue(true);
             pauseWebAudio();
         } else {
+            playStateCue(false);
             void playWebAudio();
         }
     } else {
@@ -665,19 +721,22 @@ export const setEqBand = (index, val) => {
 export const updateMediaSession = (track, album, handlers) => {
     if (!track || !('mediaSession' in navigator)) return;
 
+    // FIX 3: Force iOS to recognize square aspect ratio by providing multiple standard target sizes
+    const coverUrl = album?.coverPath
+        ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&size=thumb`
+        : '';
+        
+    const explicitSquareSizes = ['96x96', '128x128', '192x192', '256x256', '384x384', '512x512'];
+    
     navigator.mediaSession.metadata = new MediaMetadata({
         title: track.title,
         artist: album?.artistName,
         album: album?.title,
-        artwork: [
-            {
-                src: album?.coverPath
-                    ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&size=thumb`
-                    : '',
-                sizes: '512x512',
-                type: 'image/jpeg'
-            }
-        ]
+        artwork: explicitSquareSizes.map(size => ({
+            src: coverUrl,
+            sizes: size,
+            type: 'image/jpeg'
+        }))
     });
 
     navigator.mediaSession.setActionHandler('pause', async () => {
@@ -693,7 +752,6 @@ export const updateMediaSession = (track, album, handlers) => {
         navigator.mediaSession.setActionHandler('seekto', (details) => {
             const seekTime = details.seekTime || 0;
             
-            // 1. Physically Force OS Scrubber Acknowledgement FIRST
             activePlayer.currentTime = seekTime;
             
             const dur = activePlayer.duration;
@@ -701,7 +759,6 @@ export const updateMediaSession = (track, album, handlers) => {
                 updateMediaPositionState(seekTime, dur);
             }
 
-            // 2. Resolve Svelte App UI state
             if (handlers.seek) handlers.seek(seekTime);
         });
     }
@@ -713,10 +770,15 @@ export const updateMediaSession = (track, album, handlers) => {
 export const updateMediaPositionState = (currentTime, duration) => {
     if ('mediaSession' in navigator && !isNaN(duration) && duration > 0) {
         try {
+            const isPlay = get(isPlaying);
+            
+            // FIX 1: Explicitly tell iOS if it should show the Play or Pause icon
+            navigator.mediaSession.playbackState = isPlay ? 'playing' : 'paused';
+            
             const safePosition = Math.max(0, Math.min(currentTime, duration));
             navigator.mediaSession.setPositionState({
                 duration: duration,
-                playbackRate: get(isPlaying) ? 1.0 : 0.0,
+                playbackRate: isPlay ? 1.0 : 0.0,
                 position: safePosition
             });
         } catch (e) {}
@@ -741,7 +803,6 @@ export const playSkipCue = (dir) => {
             osc.frequency.setValueAtTime(300, now);
             osc.frequency.exponentialRampToValueAtTime(600, now + 0.1);
         } else {
-            // prev
             osc.frequency.setValueAtTime(600, now);
             osc.frequency.exponentialRampToValueAtTime(300, now + 0.1);
         }
@@ -769,7 +830,6 @@ export const playNextGlobal = async (api, forceManualCue = false) => {
 
     if (playlist.length === 0) return;
 
-    // Detect if this is an automatic rollover by checking if the track is within 0.5s of ending
     const currentTime = get(playerCurrentTime);
     const duration = get(playerDuration);
     const isAutoAdvance = duration > 0 && (duration - currentTime <= 0.5);
@@ -875,13 +935,15 @@ export const updateScrubEffect = (speed, dir) => {
     if (soundType === 'none') return;
 
     if (soundType === 'vinyl') {
-        if (currentSource && currentSource.playbackRate) {
-            const warpRate = dir > 0
-                ? Math.min(2.5, 1.0 + (speed * 4.0))
-                : Math.max(0.2, 1.0 - (speed * 3.0));
-            currentSource.playbackRate.cancelScheduledValues(audioCtx.currentTime);
-            currentSource.playbackRate.setTargetAtTime(warpRate, audioCtx.currentTime, 0.01);
-        }
+        activeSources.forEach(source => {
+            if (source.playbackRate) {
+                const warpRate = dir > 0
+                    ? Math.min(2.5, 1.0 + (speed * 4.0))
+                    : Math.max(0.2, 1.0 - (speed * 3.0));
+                source.playbackRate.cancelScheduledValues(audioCtx.currentTime);
+                source.playbackRate.setTargetAtTime(warpRate, audioCtx.currentTime, 0.01);
+            }
+        });
         return;
     }
 
@@ -912,10 +974,12 @@ export const updateScrubEffect = (speed, dir) => {
 export const stopScrubEffect = () => {
     if (!audioCtx) return;
 
-    if (currentSource && currentSource.playbackRate) {
-        currentSource.playbackRate.cancelScheduledValues(audioCtx.currentTime);
-        currentSource.playbackRate.value = 1.0;
-    }
+    activeSources.forEach(source => {
+        if (source.playbackRate) {
+            source.playbackRate.cancelScheduledValues(audioCtx.currentTime);
+            source.playbackRate.value = 1.0;
+        }
+    });
 
     if (scrubGain) {
         scrubGain.gain.cancelScheduledValues(audioCtx.currentTime);

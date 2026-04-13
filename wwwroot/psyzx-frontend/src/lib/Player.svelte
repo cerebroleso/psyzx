@@ -12,6 +12,10 @@
     togglePlayGlobal, playNextGlobal, playPrevGlobal,
     loadAndPlayUrl, activePlayer, preloadNextUrl
   } from './audio.js';
+  
+  // NEW IMPORTS FOR AUDIO ROUTING
+  import { connectedDevices, thisDeviceName, targetDeviceId, myDeviceId, selectTargetDevice } from './sync.js'; 
+  
   import { api } from './api.js';
   import { formatTime } from './utils.js';
 
@@ -30,6 +34,8 @@
 
   let mouseX = 0;
   let mouseY = 0;
+  
+  let showSyncModal = false; // Modal State
 
   const handleMouseMove = (e) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -48,7 +54,6 @@
   $: bitrate = track ? track.bitrate : 0;
   $: globalBitrate.set(bitrate);
   $: globalFileExt.set(fileExt);
-
 
   $: {
     if (audioElA) audioElA.volume = volume / 100;
@@ -176,7 +181,6 @@
     }
   };
 
-  // Syncs the UI directly from Svelte stores instead of tracking DOM node objects
   const updateProgressBarLoop = () => {
     if (progressBarNode) {
       progressBarNode.style.width = `${progressPct}%`;
@@ -218,7 +222,7 @@
   let lastUrl = '';
   $: if (streamUrl && streamUrl !== lastUrl) {
     lastUrl = streamUrl;
-    loadAndPlayUrl(streamUrl);
+    loadAndPlayUrl(streamUrl, track?.id);
 
     if (track) {
       api.recordPlay(track.id);
@@ -329,25 +333,16 @@
     </div>
 
     <div id="nerdy-info" class="hide-on-mobile">
-      <div
-          class="vol-control"
-          on:mousemove={handleMouseMove}
-          style="--m-x: {mouseX}px; --m-y: {mouseY}px;"
-      >
+      <div class="vol-control" on:mousemove={handleMouseMove} style="--m-x: {mouseX}px; --m-y: {mouseY}px;">
           <svg class="vol-icon" viewBox="0 0 16 16" fill="currentColor">
               <path d="M9.741.85a.75.75 0 0 1 .375.65v13a.75.75 0 0 1-1.125.65l-6.925-4a3.64 3.64 0 0 1-1.33-4.967 3.64 3.64 0 0 1 1.33-1.332l6.925-4a.75.75 0 0 1 .75 0zm-6.924 5.3a2.14 2.14 0 0 0 0 3.7l5.8 3.35V2.8zm8.683 4.29V5.56a2.75 2.75 0 0 1 0 4.88"></path>
               <path d="M11.5 13.614a5.752 5.752 0 0 0 0-11.228v1.55a4.252 4.252 0 0 1 0 8.127z"></path>
           </svg>
           <div class="glass-slider-wrapper bloom-effect">
-              <input
-                  class="volume-slider"
-                  type="range"
-                  min="0" max="100"
-                  bind:value={volume}
-                  style="--val: {volume}%"
-              >
+              <input class="volume-slider" type="range" min="0" max="100" bind:value={volume} style="--val: {volume}%">
           </div>
       </div>
+
       {#if bitrate > 0}
           <div class="kbps-badge">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="var(--accent-color)"><rect x="3" y="8" width="4" height="8"/><rect x="10" y="4" width="4" height="16"/><rect x="17" y="10" width="4" height="4"/></svg>
@@ -356,9 +351,53 @@
       {:else}
           <span style="font-size: 11px; font-family: monospace; color: #555;">NO SIGNAL</span>
       {/if}
+
+      {#if $connectedDevices && $connectedDevices.length > 0}
+          <button class="kbps-badge sync-btn" class:active-sync={$targetDeviceId && $targetDeviceId !== $myDeviceId} on:click={() => showSyncModal = true} title="Audio Routing">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                  <line x1="8" y1="21" x2="16" y2="21"></line>
+                  <line x1="12" y1="17" x2="12" y2="21"></line>
+              </svg>
+              <span>Devices</span>
+          </button>
+      {/if}
     </div>
   </div>
 </footer>
+
+{#if showSyncModal}
+    <div class="sync-modal-backdrop" on:click|self={() => showSyncModal = false}>
+        <div class="sync-modal">
+            <h3>Play Audio On</h3>
+            <ul class="device-list">
+                <li 
+                    class:active={$targetDeviceId === $myDeviceId || !$targetDeviceId} 
+                    on:click={() => { selectTargetDevice($myDeviceId); showSyncModal = false; }}
+                >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+                    <span>This Device ({thisDeviceName})</span>
+                    {#if $targetDeviceId === $myDeviceId || !$targetDeviceId}
+                        <div class="active-dot"></div>
+                    {/if}
+                </li>
+                
+                {#each $connectedDevices as dev}
+                    <li 
+                        class:active={$targetDeviceId === dev.deviceId} 
+                        on:click={() => { selectTargetDevice(dev.deviceId); showSyncModal = false; }}
+                    >
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="2" width="16" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
+                        <span>{dev.deviceName}</span>
+                        {#if $targetDeviceId === dev.deviceId}
+                            <div class="active-dot"></div>
+                        {/if}
+                    </li>
+                {/each}
+            </ul>
+        </div>
+    </div>
+{/if}
 
 <style>
   /* 1. CONTROL CENTER: Edit these values to resize and position everything */
@@ -383,7 +422,6 @@
     );
   }
 
-  /* --- FIX 1: The Parent Footer (No Backgrounds/Blurs here to protect WebKit) --- */
   footer#player {
     position: fixed;
     bottom: 0;
@@ -406,7 +444,6 @@
     box-shadow: none !important;
   }
 
-  /* --- FIX 1B: The Dedicated Glass Layer --- */
   footer#player::before {
     content: "";
     position: absolute;
@@ -443,34 +480,17 @@
     box-shadow: 0 25px 50px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.1);
   }
 
-  /* GENERAL BLOOM FOR THE WHOLE PLAYER */
-  footer#player.bloom-effect {
-      overflow: visible !important;
-  }
+  footer#player.bloom-effect { overflow: visible !important; }
 
   footer#player.bloom-effect::after {
-      content: "";
-      position: absolute;
-      inset: 0;
-      border-radius: inherit;
-      pointer-events: none;
-      background: radial-gradient(
-          circle at var(--m-x) var(--m-y),
-          rgba(255, 255, 255, 0.08),
-          transparent 400px
-      );
-      opacity: 0;
-      transition: opacity 0.5s ease;
-      z-index: 1;
+      content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+      background: radial-gradient(circle at var(--m-x) var(--m-y), rgba(255, 255, 255, 0.08), transparent 400px);
+      opacity: 0; transition: opacity 0.5s ease; z-index: 1;
   }
 
   footer#player.bloom-effect:hover::after { opacity: 1; }
 
-  .max-glass #player-main {
-    height: calc(var(--footer-h-max) - 40px);
-    padding-top: 0;
-    order: 1;
-  }
+  .max-glass #player-main { height: calc(var(--footer-h-max) - 40px); padding-top: 0; order: 1; }
 
   .max-glass .np-info-hover {
     background: rgba(255, 255, 255, 0.08) !important;
@@ -482,178 +502,74 @@
     padding: 4px 16px 4px 6px !important;
   }
 
-  .max-glass #progress-wrapper {
-    display: flex !important;
-    order: 3;
-    width: 100%;
-    margin-top: auto;
-    margin-bottom: 4px;
-  }
+  .max-glass #progress-wrapper { display: flex !important; order: 3; width: 100%; margin-top: auto; margin-bottom: 4px; }
 
-  #progress-wrapper {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-top: -6px;
-    position: relative;
-    z-index: 2;
-  }
+  #progress-wrapper { display: flex; align-items: center; gap: 12px; margin-top: -6px; position: relative; z-index: 2; }
 
-  #time-current, #time-total {
-    font-size: 11px;
-    color: rgba(255,255,255,0.6);
-    font-variant-numeric: tabular-nums;
-    width: 32px;
-  }
+  #time-current, #time-total { font-size: 11px; color: rgba(255,255,255,0.6); font-variant-numeric: tabular-nums; width: 32px; }
 
-  #progress-container {
-    flex: 1;
-    height: 4px;
-    background: rgba(255, 255, 255, 0.2);
-    border-radius: 2px;
-    cursor: pointer;
-    position: relative;
-  }
+  #progress-container { flex: 1; height: 4px; background: rgba(255, 255, 255, 0.2); border-radius: 2px; cursor: pointer; position: relative; }
 
   #progress-container:hover #progress-bar { background: white !important; }
 
-  #progress-bar {
-    height: 100%;
-    border-radius: 2px;
-    background: rgba(255,255,255,0.8);
-    transition: background 0.2s;
-  }
+  #progress-bar { height: 100%; border-radius: 2px; background: rgba(255,255,255,0.8); transition: background 0.2s; }
 
-  /* --- FIX 2: Flexbox Math Layout to naturally center controls and stop overlap --- */
   #player-main {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 16px; /* Buffer zone so elements never touch */
-    height: calc(var(--footer-h) - 16px);
-    padding-top: 8px;
-    position: relative;
-    z-index: 2;
+    display: flex; justify-content: space-between; align-items: center; gap: 16px;
+    height: calc(var(--footer-h) - 16px); padding-top: 8px; position: relative; z-index: 2;
   }
 
-  #controls {
-    flex: 0 0 auto; /* Locks the controls to their natural width */
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
+  #controls { flex: 0 0 auto; display: flex; align-items: center; justify-content: center; }
 
   .np-info-hover {
-    flex: 1 1 0%; /* Acts as equal left weight */
-    max-width: var(--np-bubble-w);
-    width: 100%;
-    height: var(--np-bubble-h) !important;
-
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    padding: 6px 8px;
-    border-radius: 20px !important;
-    cursor: pointer;
-    box-sizing: border-box;
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.05);
-    position: relative;
-    overflow: hidden;
-
-    -webkit-transform: translate3d(var(--np-x), var(--np-y), 0) !important;
-    transform: translate3d(var(--np-x), var(--np-y), 0) !important;
-    -webkit-backface-visibility: hidden;
-    backface-visibility: hidden;
-
+    flex: 1 1 0%; max-width: var(--np-bubble-w); width: 100%; height: var(--np-bubble-h) !important;
+    display: flex; align-items: center; gap: 14px; padding: 6px 8px; border-radius: 20px !important;
+    cursor: pointer; box-sizing: border-box; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.05);
+    position: relative; overflow: hidden;
+    -webkit-transform: translate3d(var(--np-x), var(--np-y), 0) !important; transform: translate3d(var(--np-x), var(--np-y), 0) !important;
+    -webkit-backface-visibility: hidden; backface-visibility: hidden;
     transition: background 0.3s ease, box-shadow 0.3s ease, filter 0.3s ease, transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
   }
 
   #nerdy-info {
-    flex: 1 1 0%; /* Acts as equal right weight, perfectly centering #controls */
-    max-width: var(--np-bubble-w);
-    width: 100%;
-    height: var(--np-bubble-h);
-
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
+    flex: 1 1 0%; max-width: var(--np-bubble-w); width: 100%; height: var(--np-bubble-h);
+    display: flex; align-items: center; justify-content: flex-end;
   }
 
   .np-info-hover::after {
-    content: "";
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
+    content: ""; position: absolute; top: 0; left: 0; width: 100%; height: 100%;
     background: radial-gradient(circle at var(--m-x) var(--m-y), rgba(255, 255, 255, 0.15), transparent 60%);
-    opacity: 0;
-    transition: opacity 0.4s ease;
-    pointer-events: none;
-    z-index: 10;
+    opacity: 0; transition: opacity 0.4s ease; pointer-events: none; z-index: 10;
   }
 
   .np-info-hover:hover::after { opacity: 1; }
 
   .np-info-hover:not(.disabled):hover {
-    background: rgba(255, 255, 255, 0.1);
-    border-color: rgba(255, 255, 255, 0.2);
-    box-shadow: 0 0 30px rgba(255, 255, 255, 0.1), inset 0 0 10px rgba(255, 255, 255, 0.1);
-    filter: brightness(1.2);
+    background: rgba(255, 255, 255, 0.1); border-color: rgba(255, 255, 255, 0.2);
+    box-shadow: 0 0 30px rgba(255, 255, 255, 0.1), inset 0 0 10px rgba(255, 255, 255, 0.1); filter: brightness(1.2);
   }
 
   .np-info-hover:not(.disabled):active {
     -webkit-transform: translate3d(var(--np-x), var(--np-y), 0) scale(0.94) !important;
-    transform: translate3d(var(--np-x), var(--np-y), 0) scale(0.94) !important;
-    filter: brightness(0.9);
-    transition: transform 0.1s ease;
+    transform: translate3d(var(--np-x), var(--np-y), 0) scale(0.94) !important; filter: brightness(0.9); transition: transform 0.1s ease;
   }
 
-  .np-info-hover.disabled {
-    cursor: default;
-    opacity: 0.5;
-    filter: grayscale(1) !important;
-    pointer-events: none;
-  }
+  .np-info-hover.disabled { cursor: default; opacity: 0.5; filter: grayscale(1) !important; pointer-events: none; }
 
   #np-cover { width: 48px; height: 48px; border-radius: 8px; object-fit: cover; }
 
   #now-playing { display: flex; flex-direction: column; justify-content: center; overflow: hidden; white-space: nowrap; flex: 1; }
-
   #np-title { font-size: 12px; font-weight: 600; color: white; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px; }
-
   #np-artist { font-size: 10px; color: rgba(255,255,255,0.5); overflow: hidden; text-overflow: ellipsis; }
 
-  .vol-control {
-    display: flex; align-items: center; gap: 12px; width: 120px; height: 32px; position: relative; margin-right: 8px;
-  }
-
+  .vol-control { display: flex; align-items: center; gap: 12px; width: 120px; height: 32px; position: relative; margin-right: 8px; }
   .vol-icon { width: 16px; height: 16px; flex-shrink: 0; color: rgba(255, 255, 255, 0.5); transition: color 0.2s ease; }
 
   .glass-slider-wrapper {
-    flex: 1; height: 6px;
-    background: rgba(255, 255, 255, 0.05);
-    -webkit-backdrop-filter: blur(15px) saturate(180%);
-    backdrop-filter: blur(15px) saturate(180%);
-    border-radius: 30px; border: 1px solid rgba(255, 255, 255, 0.12);
-    box-shadow: inset 0 1px 2px rgba(0,0,0,0.3);
+    flex: 1; height: 6px; background: rgba(255, 255, 255, 0.05);
+    -webkit-backdrop-filter: blur(15px) saturate(180%); backdrop-filter: blur(15px) saturate(180%);
+    border-radius: 30px; border: 1px solid rgba(255, 255, 255, 0.12); box-shadow: inset 0 1px 2px rgba(0,0,0,0.3);
     position: relative; display: flex; align-items: center; overflow: visible;
-    -webkit-transform: translateZ(0); transform: translateZ(0);
-    -webkit-backface-visibility: hidden; backface-visibility: hidden;
-  }
-
-  .glass-slider-wrapper.bloom-effect::after {
-    content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
-    background: radial-gradient(circle at var(--m-x) var(--m-y), rgba(255, 255, 255, 0.2), transparent 60%);
-    opacity: 0; transition: opacity 0.3s ease; z-index: 1;
-  }
-  .glass-slider-wrapper.bloom-effect:hover::after { opacity: 1; }
-
-  .glass-slider-wrapper::before {
-    content: ""; position: absolute; top: 0; left: 0; right: 0; height: 50%;
-    background: linear-gradient(to bottom, rgba(255,255,255,0.1), transparent);
-    border-radius: 30px 30px 0 0; z-index: 1; pointer-events: none;
   }
 
   .volume-slider {
@@ -666,50 +582,69 @@
     -webkit-appearance: none; appearance: none; width: 16px; height: 16px; border-radius: 50%;
     background: radial-gradient(circle at center, #000 24%, transparent 25%), radial-gradient(circle at center, #333 26%, transparent 32%), var(--metal-shine), linear-gradient(135deg, #fff 0%, #666 100%);
     background-position: center; background-repeat: no-repeat; border: 1px solid #111;
-    box-shadow: 0 4px 8px rgba(0,0,0,0.7), inset 0 1px 1px rgba(255,255,255,0.8);
-    transition: transform 0.1s ease; z-index: 20;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.7), inset 0 1px 1px rgba(255,255,255,0.8); transition: transform 0.1s ease;
   }
-
-  .volume-slider::-moz-range-thumb {
-    width: 16px; height: 16px; border-radius: 50%;
-    background: var(--metal-shine); border: 1px solid #111;
-    box-shadow: 0 4px 8px rgba(0,0,0,0.7);
-  }
-
-  .volume-slider:active::-webkit-slider-thumb { transform: scale(1.1); filter: brightness(1.1); }
-  .volume-slider:hover { height: 8px; }
-
-  .fp-btn-main {
-    width: 48px; height: 48px; border-radius: 50%; border: none; background: white; color: black; display: flex; align-items: center; justify-content: center; cursor: pointer; position: relative; z-index: 1;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3), 0 0 5px 2px rgba(255, 255, 255, 0.6), 0 0 25px rgba(255, 255, 255, 0.2) !important;
-    transition: transform 0.2s cubic-bezier(0.32, 0.72, 0, 1), box-shadow 0.3s ease !important;
-  }
-  .fp-btn-main:hover {
-    transform: scale(1.08) !important;
-    box-shadow: 0 0 20px rgba(255, 255, 255, 0.4), 0 0 10px rgba(255, 255, 255, 0.2), 0 0 4px rgba(255, 255, 255, 0.1) !important;
-  }
-  .fp-btn-main:active { transform: scale(0.96) !important; filter: brightness(0.9); }
 
   .btn-icon-main {
     width: 44px; height: 44px; border-radius: 50%; border: none; background: white; color: black; display: flex; align-items: center; justify-content: center; cursor: pointer; margin: 0 8px; flex-shrink: 0; position: relative; z-index: 1;
-    outline: none !important; -webkit-tap-highlight-color: transparent !important;
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3), 0 0 5px 2px rgba(255, 255, 255, 0.6), 0 0 25px rgba(255, 255, 255, 0.2) !important;
     transition: transform 0.2s cubic-bezier(0.32, 0.72, 0, 1), box-shadow 0.3s ease !important;
   }
-  .btn-icon-main:hover {
-    transform: scale(1.08) !important;
-    box-shadow: 0 0 20px rgba(255, 255, 255, 0.4), 0 0 10px rgba(255, 255, 255, 0.2), 0 0 4px rgba(255, 255, 255, 0.1) !important;
-  }
+  .btn-icon-main:hover { transform: scale(1.08) !important; box-shadow: 0 0 20px rgba(255, 255, 255, 0.4), 0 0 10px rgba(255, 255, 255, 0.2), 0 0 4px rgba(255, 255, 255, 0.1) !important; }
   .btn-icon-main:active { transform: scale(0.94) !important; filter: brightness(0.85); }
 
   .kbps-badge {
     display: flex; align-items: center; gap: 6px; background: rgba(0,0,0,0.4); padding: 4px 8px; border-radius: 6px;
     font-size: 11px; font-family: monospace; font-weight: bold; border: 1px solid rgba(255,255,255,0.1);
-    box-shadow: 0 2px 8px rgba(0,0,0,0.3); letter-spacing: 0.5px; margin-left: -12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3); letter-spacing: 0.5px;
   }
   .kbps-badge .ext { color: var(--accent-color); }
+  
+  /* --- SYNC MODAL CSS --- */
+  .sync-btn {
+      cursor: pointer; margin-left: 8px; color: rgba(255,255,255,0.8); 
+      transition: all 0.2s ease; border: 1px solid rgba(255,255,255,0.1);
+  }
+  .sync-btn:hover { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.3); }
+  .sync-btn.active-sync { border-color: var(--accent-color); color: var(--accent-color); }
 
-  /* Invert Layout properly swaps flex order now */
+  .sync-modal-backdrop {
+      position: fixed; inset: 0; z-index: 20000;
+      background: rgba(0,0,0,0.5); 
+      -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+      display: flex; align-items: center; justify-content: center;
+      animation: fadeIn 0.2s ease;
+  }
+  .sync-modal {
+      background: rgba(20, 20, 20, 0.7);
+      -webkit-backdrop-filter: blur(40px) saturate(180%); backdrop-filter: blur(40px) saturate(180%);
+      border: 1px solid rgba(255,255,255,0.1); border-top: 1px solid rgba(255,255,255,0.2);
+      border-radius: 20px; padding: 24px; width: 300px;
+      box-shadow: 0 20px 50px rgba(0,0,0,0.6); color: white;
+  }
+  .sync-modal h3 { margin: 0 0 16px 0; font-size: 15px; font-weight: 600; text-align: center; letter-spacing: 0.5px; }
+  
+  .device-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+  .device-list li {
+      padding: 12px 16px; border-radius: 12px; background: rgba(255,255,255,0.03);
+      cursor: pointer; display: flex; align-items: center; gap: 12px; font-size: 13px; font-weight: 500;
+      border: 1px solid transparent; transition: all 0.2s ease; position: relative;
+  }
+  .device-list li:hover { background: rgba(255,255,255,0.08); }
+  .device-list li.active {
+      background: rgba(255,255,255,0.1); border-color: var(--accent-color);
+      box-shadow: inset 0 0 20px rgba(255,255,255,0.05);
+  }
+  .device-list svg { color: rgba(255,255,255,0.5); }
+  .device-list li.active svg { color: var(--accent-color); }
+  
+  .active-dot {
+      position: absolute; right: 16px; width: 8px; height: 8px; border-radius: 50%;
+      background: var(--accent-color); box-shadow: 0 0 8px var(--accent-color);
+  }
+
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
   @media (min-width: 769px) {
     :global(footer#player.layout-swapped #player-main) { flex-direction: row-reverse; }
     :global(footer#player.layout-swapped .np-info-hover) { flex-direction: row-reverse; text-align: right; }
@@ -719,101 +654,24 @@
 
   @media (max-width: 768px) {
     .hide-on-mobile { display: none !important; }
-
-    #player-main {
-        gap: 8px;
-        align-items: center; /* Guarantees flex alignment */
-    }
-
-    .np-info-hover {
-        flex: 1 1 auto;
-        max-width: none;
-        margin-right: 12px;
-        margin-bottom: 10px;
-        margin-left: 0 !important; /* Resets desktop margin */
-
-        /* --- FIX 1: Kill the desktop X/Y offset ---
-           This shifts the bubble left to its natural edge
-           and drops it down 5px so it perfectly aligns with the button! */
-        transform: none !important;
-        -webkit-transform: none !important;
-    }
-
-    /* --- FIX 2: Prevent jumping when tapping the bubble on mobile --- */
-    .np-info-hover:not(.disabled):active {
-        transform: scale(0.94) !important;
-        -webkit-transform: scale(0.94) !important;
-    }
-
-    #controls {
-        justify-content: flex-end;
-    }
-
+    #player-main { gap: 8px; align-items: center; }
+    .np-info-hover { flex: 1 1 auto; max-width: none; margin-right: 12px; margin-bottom: 10px; margin-left: 0 !important; transform: none !important; }
+    .np-info-hover:not(.disabled):active { transform: scale(0.94) !important; }
+    #controls { justify-content: flex-end; }
     .btn-icon-main {
-      height: var(--np-bubble-h) !important;
-      width: var(--np-bubble-h) !important;
-      border-radius: 50% !important;
-
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      padding: 0 !important;
-      margin: 0 !important;
-      margin-bottom: 10px !important;
-
-      -webkit-tap-highlight-color: transparent !important;
-      touch-action: manipulation;
-
-      background: rgba(255, 255, 255, 0.15) !important;
-      -webkit-backdrop-filter: blur(32px) saturate(120%) !important;
-      backdrop-filter: blur(32px) saturate(120%) !important;
-      border: 1px solid rgba(255, 255, 255, 0.1) !important;
-
+      height: var(--np-bubble-h) !important; width: var(--np-bubble-h) !important; border-radius: 50% !important;
+      display: inline-flex; align-items: center; justify-content: center; padding: 0 !important; margin: 0 !important; margin-bottom: 10px !important;
+      background: rgba(255, 255, 255, 0.15) !important; -webkit-backdrop-filter: blur(32px) saturate(120%) !important; backdrop-filter: blur(32px) saturate(120%) !important; border: 1px solid rgba(255, 255, 255, 0.1) !important;
       box-shadow: 0 10px 25px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.2) !important;
-      transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.2s ease, filter 0.2s ease !important;
-
-      transform: scale(1) !important;
-    }
-
-    .btn-icon-main:active {
-      transform: scale(0.92) !important;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.5), inset 0 2px 4px rgba(0,0,0,0.2) !important;
-      filter: brightness(0.85);
-
-      transition: transform 0.05s ease, box-shadow 0.05s ease, filter 0.05s ease !important;
-    }
-
-    footer#player.max-glass {
-      bottom: 12px !important;
-      left: 50% !important;
-      -webkit-transform: translateX(-50%) translate3d(0, 0, 0) !important;
-      transform: translateX(-50%) translate3d(0, 0, 0) !important;
-      width: calc(100vw - 24px) !important;
-      padding: 12px 16px !important;
-      border-radius: 20px !important;
-      height: auto !important;
-      min-height: 80px !important;
     }
   }
 
   /* --- BUFFERING WAVE ANIMATION --- */
-  @keyframes buffer-wave {
-      0% { transform: translateX(-100%); }
-      100% { transform: translateX(100%); }
-  }
-
-  .is-buffering {
-      position: relative;
-      overflow: hidden !important; /* Clips the wave to the track */
-  }
-
+  @keyframes buffer-wave { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
+  .is-buffering { position: relative; overflow: hidden !important; }
   .is-buffering::after {
-      content: "";
-      position: absolute;
-      top: 0; left: 0; right: 0; bottom: 0;
+      content: ""; position: absolute; top: 0; left: 0; right: 0; bottom: 0;
       background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.4), transparent);
-      animation: buffer-wave 1.2s infinite linear;
-      z-index: 5;
-      pointer-events: none;
+      animation: buffer-wave 1.2s infinite linear; z-index: 5; pointer-events: none;
   }
 </style>

@@ -119,8 +119,6 @@
         albumsMap.set(newAlbums);
     };
 
-    
-
     let bootProgress = 0;
     let bootStatus = "Waking up...";
 
@@ -128,23 +126,35 @@
         isLoading = true;
         isFirstLoad = !sessionStorage.getItem('psyzx_booted');
 
-        // Trickle: Updates bootProgress directly
         const trickle = setInterval(() => {
             if (bootProgress < 95) bootProgress += 0.2;
         }, 100);
 
-        // Step 1
         bootStatus = "Verifying Identity...";
-        const isAuth = await api.checkAuth();
+        console.group('[AUTH DEBUG] bootEngine() Initialization');
+        console.log('[AUTH DEBUG] Calling api.checkAuth()...');
+        
+        let isAuth = false;
+        try {
+            isAuth = await api.checkAuth();
+            console.log('[AUTH DEBUG] api.checkAuth() returned:', isAuth);
+        } catch (e) {
+            console.error('[AUTH DEBUG] Exception during api.checkAuth():', e);
+        }
+
         if (!isAuth) { 
+            console.warn('[AUTH DEBUG] Not authenticated. Triggering login screen.');
+            console.groupEnd();
             clearInterval(trickle);
             requiresLogin = true; 
             isLoading = false; 
             return; 
         }
-        bootProgress = 25; // Updated from targetProgress
+        console.log('[AUTH DEBUG] Authentication confirmed. Booting core...');
+        console.groupEnd();
+        
+        bootProgress = 25; 
 
-        // --- NEW: Auto-Create Favorites ---
         try {
             bootStatus = "Checking core playlists...";
             const playlists = await api.getPlaylists();
@@ -152,28 +162,25 @@
                 await api.createPlaylist('Favorites');
             }
         } catch (e) { console.warn("Could not check favorites", e); }
-        // ----------------------------------
 
         bootProgress = 35;
 
         try {
-            // Step 2
             bootStatus = "Checking local storage...";
             const cachedLocal = await localDB.get('psyzx_library_cache');
             if (cachedLocal?.length > 0) {
                 buildLibrary(cachedLocal, null);
-                bootProgress = 45; // Updated from targetProgress
+                bootProgress = 45; 
             }
 
-            // Step 3
             bootStatus = "Syncing tracks from server...";
             let data = await api.getTracks();
-            bootProgress = 85; // Updated from targetProgress
+            bootProgress = 85; 
 
             if (data?.length > 0) {
                 bootStatus = "Optimizing library...";
                 localDB.set('psyzx_library_cache', data);
-                bootProgress = 95; // Updated from targetProgress
+                bootProgress = 95; 
                 
                 let statsData = null;
                 try { statsData = await api.getStats(); } catch(e) {}
@@ -183,7 +190,7 @@
             console.error(e);
         } finally {
             clearInterval(trickle);
-            bootProgress = 100; // Updated from targetProgress
+            bootProgress = 100; 
             bootStatus = "Ready.";
             setTimeout(() => {
                 isLoading = false;
@@ -194,21 +201,18 @@
 
     const handleRefresh = async () => {
         isLoading = true;
-        isFirstLoad = true; // Forces the nice full-screen loader to show up
+        isFirstLoad = true; 
         bootProgress = 10;
         bootStatus = "Commanding C# to scan /Music...";
         
         try {
-            // 1. Tell backend to rescan files and update SQL
             await api.scanLibrary();
             bootProgress = 50;
             
-            // 2. Fetch the newly updated database
             bootStatus = "Downloading fresh tracks...";
             let data = await api.getTracks();
             bootProgress = 80;
             
-            // 3. Update the UI and Local Cache
             if (data?.length > 0) {
                 bootStatus = "Rebuilding Library...";
                 await localDB.set('psyzx_library_cache', data);
@@ -257,54 +261,114 @@
     });
 
     if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js', { scope: '/' })
-        .then(reg => {
-            console.log('SW Registered!', reg);
-            // If the SW updated, this makes it take control immediately
-            reg.onupdatefound = () => {
-                const newWorker = reg.installing;
-                newWorker.onstatechange = () => {
-                    if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                        location.reload(); 
-                    }
+        navigator.serviceWorker.register('/sw.js', { scope: '/' })
+            .then(reg => {
+                console.log('SW Registered!', reg);
+                reg.onupdatefound = () => {
+                    const newWorker = reg.installing;
+                    newWorker.onstatechange = () => {
+                        if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                            location.reload(); 
+                        }
+                    };
                 };
-            };
-        })
-        .catch(err => console.error('SW Registration Failed', err));
-}
+            })
+            .catch(err => console.error('SW Registration Failed', err));
+    }
 
     const handleScroll = (e) => { isScrolled = e.target.scrollTop > 50; };
 
+    // --- HEAVILY MODIFIED AUTH EXECUTION ---
     const executeAuth = async () => {
-        if (!loginUsername || !loginPassword) {
+        console.group(`[AUTH DEBUG] executeAuth() - Mode: ${isRegisterMode ? 'REGISTER' : 'LOGIN'}`);
+        
+        const trimmedUsername = loginUsername.trim();
+        console.log(`[AUTH DEBUG] Raw Input -> User: "${loginUsername}", Trimmed: "${trimmedUsername}", Password Length: ${loginPassword.length}`);
+
+        if (!trimmedUsername || !loginPassword) {
+            console.warn('[AUTH DEBUG] Validation failed: Empty fields detected after trim.');
             loginErrorMsg = "Fill all fields.";
+            console.groupEnd();
             return;
         }
         
         isLoggingIn = true;
         loginErrorMsg = '';
         
-        const credentials = { username: loginUsername, password: loginPassword };
+        const credentials = { username: trimmedUsername, password: loginPassword };
+        console.log('[AUTH DEBUG] Sending credentials payload to API...', { username: credentials.username, password: '***' });
 
-        if (isRegisterMode) {
-            const res = await api.register(credentials);
-            if (res.ok) {
-                isRegisterMode = false;
-                await executeAuth(); 
+        try {
+            if (isRegisterMode) {
+                console.log('[AUTH DEBUG] Calling api.register...');
+                const res = await api.register(credentials);
+                console.log('[AUTH DEBUG] api.register response received:', res);
+
+                // Handle Fetch Response natively, or raw JSON object wrappers
+                if (res && (res.ok === true || res.success === true || res.status === 200 || res.status === 201)) {
+                    console.log('[AUTH DEBUG] Registration SUCCESS. Switching to login mode to auto-auth.');
+                    isRegisterMode = false;
+                    console.groupEnd();
+                    await executeAuth(); // Recursive auto-login
+                } else {
+                    console.error('[AUTH DEBUG] Registration FAILED.');
+                    let errorText = "Username already taken or server error.";
+                    
+                    // Attempt to parse out exact server error
+                    if (res && typeof res.json === 'function') {
+                        try {
+                            const errData = await res.clone().json();
+                            console.log('[AUTH DEBUG] Extracted JSON error payload:', errData);
+                            errorText = errData.message || errData.error || errorText;
+                        } catch (e) { console.warn('[AUTH DEBUG] Could not parse error JSON'); }
+                    } else if (res && res.message) {
+                        errorText = res.message;
+                    }
+
+                    loginErrorMsg = errorText;
+                    isLoggingIn = false;
+                    console.groupEnd();
+                }
             } else {
-                loginErrorMsg = "Username already taken or server error.";
-                isLoggingIn = false;
+                console.log('[AUTH DEBUG] Calling api.login...');
+                const res = await api.login(credentials);
+                console.log('[AUTH DEBUG] api.login response received:', res);
+
+                // Handle standard auth success criteria
+                if (res && (res.ok === true || res.success === true || res.token || res.status === 200)) {
+                    console.log('[AUTH DEBUG] Login SUCCESS! Transitioning app state...');
+                    requiresLogin = false;
+                    isLoggingIn = false; // reset cleanly
+                    isLoading = true;
+                    
+                    console.log('[AUTH DEBUG] Re-triggering bootEngine()...');
+                    console.groupEnd();
+                    bootEngine();
+                } else {
+                    console.error('[AUTH DEBUG] Login FAILED. Denied by server.');
+                    let errorText = "Invalid credentials. Retry.";
+                    
+                    // Attempt to parse out exact server error
+                    if (res && typeof res.json === 'function') {
+                        try {
+                            const errData = await res.clone().json();
+                            console.log('[AUTH DEBUG] Extracted JSON error payload:', errData);
+                            errorText = errData.message || errData.error || errorText;
+                        } catch (e) { console.warn('[AUTH DEBUG] Could not parse error JSON'); }
+                    } else if (res && res.message) {
+                        errorText = res.message;
+                    }
+
+                    loginErrorMsg = errorText;
+                    isLoggingIn = false;
+                    console.groupEnd();
+                }
             }
-        } else {
-            const res = await api.login(credentials);
-            if (res && res.ok) {
-                requiresLogin = false;
-                isLoading = true;
-                bootEngine();
-            } else {
-                loginErrorMsg = "Invalid credentials. Retry.";
-                isLoggingIn = false;
-            }
+        } catch (error) {
+            console.error('[AUTH DEBUG] FATAL EXCEPTION during authentication API call:', error);
+            loginErrorMsg = "A network or server error occurred.";
+            isLoggingIn = false;
+            console.groupEnd();
         }
     };
 </script>

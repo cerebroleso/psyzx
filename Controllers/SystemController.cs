@@ -717,6 +717,22 @@ public class SystemController : ControllerBase
         // Removed .Replace(' ', '_') to prevent Old Album turning into Old_Album
         return new string(name.Where(x => !Path.GetInvalidFileNameChars().Contains(x)).ToArray()).Trim();
     }
+
+    private async Task<bool> IsSongInDbAsync(string query)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        var cleanQuery = query.ToLower().Trim();
+        
+        return await db.Tracks
+            .Include(t => t.Album)
+            .ThenInclude(al => al.Artist)
+            .AnyAsync(t => 
+                cleanQuery.Contains(t.Title.ToLower()) && 
+                (t.Album.Artist != null && cleanQuery.Contains(t.Album.Artist.Name.ToLower()))
+            );
+    }
 }
 
 public class DownloadTaskItem {
