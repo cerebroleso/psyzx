@@ -1,19 +1,56 @@
 <script>
     import { onMount } from 'svelte';
     import { fade } from 'svelte/transition';
-    import { isGlobalColorActive, isMaxGlassActive, isDesktopSwapActive, viewSize, isCacheDebugActive, isGaplessModeActive } from '../../store.js';
+    import { isGlobalColorActive, isMaxGlassActive, isDesktopSwapActive, viewSize, isCacheDebugActive, isGaplessModeActive, currentPlaylist, currentIndex } from '../../store.js';
     import { setVolumeBoost, isWebAudioMode, setWebAudioGaplessMode } from '../audio.js';
     import { api } from '../api.js';
 
     let currentBoost = '1.0';
-    let localWebAudioMode = true;
-    let isScanning = false;
     let currentScrubSound = 'vinyl';
 
+    // Visualizer Settings State
+    let visEnabled = true;
+    let visIntensity = '1.0';
+    let visShape = 'Tunnel'; // Defaulted to Tunnel
+    let visMovement = 'Hypnotic';
+    let visYPos = '11';
+    let visDimension = '1.0';
+    let visDetail = '16';
+    let visSides = 'Default';
+
+    let isScanning = false;
+
     onMount(() => {
+        // 1. Read values from localStorage (or fallback to defaults)
         currentBoost = localStorage.getItem('psyzx_boost') || '1.0';
         currentScrubSound = localStorage.getItem('psyzx_scrub_sound') || 'vinyl';
 
+        visEnabled = localStorage.getItem('psyzx_vis_enabled') !== 'false';
+        visIntensity = localStorage.getItem('psyzx_vis_intensity') || '1.0';
+        visShape = localStorage.getItem('psyzx_vis_shape') || 'Tunnel'; 
+        visMovement = localStorage.getItem('psyzx_vis_movement') || 'Hypnotic';
+        visYPos = localStorage.getItem('psyzx_vis_ypos') || '11';
+        visDimension = localStorage.getItem('psyzx_vis_dimension') || '1.0';
+        visDetail = localStorage.getItem('psyzx_vis_detail') || '16';
+        visSides = localStorage.getItem('psyzx_vis_sides') || 'Default';
+
+        // ---------------------------------------------------------
+        // 2. THE FIX: Apply these settings to the app engines NOW
+        // ---------------------------------------------------------
+        
+        // Push the volume boost to the audio engine
+        setVolumeBoost(currentBoost);
+
+        // Push the gapless mode state to the audio engine (using your timeout logic)
+        // setTimeout(() => {
+        //     setWebAudioGaplessMode($isGaplessModeActive);
+        // }, 50);
+
+        // Fire the event so the Canvas Visualizer grabs the initial parameters
+        window.dispatchEvent(new CustomEvent('visualizer-update'));
+
+
+        // 3. Apply Service Worker settings
         if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
             navigator.serviceWorker.controller.postMessage({
                 type: 'SET_DEBUG_MODE',
@@ -46,6 +83,24 @@
         localStorage.setItem('psyzx_scrub_sound', val);
     };
 
+    const updateVisSetting = (key, storeKey, val) => {
+        if (key === 'visEnabled') visEnabled = val;
+        if (key === 'visIntensity') visIntensity = val;
+        if (key === 'visShape') visShape = val;
+        if (key === 'visMovement') visMovement = val;
+        if (key === 'visYPos') visYPos = val;
+        if (key === 'visDimension') visDimension = val;
+        if (key === 'visDetail') visDetail = val;
+        if (key === 'visSides') visSides = val;
+
+        localStorage.setItem(storeKey, val);
+        window.dispatchEvent(new CustomEvent('visualizer-update'));
+    };
+
+    const toggleVisEnabled = () => {
+        updateVisSetting('visEnabled', 'psyzx_vis_enabled', !visEnabled);
+    };
+
     const toggleGlobalColor = () => isGlobalColorActive.set(!$isGlobalColorActive);
     const toggleMaxGlass = () => isMaxGlassActive.set(!$isMaxGlassActive);
     const toggleDesktopSwap = () => isDesktopSwapActive.set(!$isDesktopSwapActive);
@@ -67,14 +122,8 @@
     };
 
     const toggleGaplessMode = () => {
-        // 1. Calculate the new state
         const newState = !$isGaplessModeActive;
-        
-        // 2. Update the store (this saves it to localStorage automatically)
         isGaplessModeActive.set(newState);
-        
-        // 3. Trigger the engine change/reload ONLY on user click
-        // Using a small timeout ensures the localStorage write finishes first
         setTimeout(() => {
             setWebAudioGaplessMode(newState);
         }, 50);
@@ -118,6 +167,158 @@
     <div class="settings-header">
         <h1>Settings</h1>
     </div>
+
+    <div class="settings-section">
+        <h2>Audio Engine</h2>
+        
+        <div class="setting-item" style="margin-bottom: 24px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 24px;">
+            <div class="setting-info">
+                <span class="setting-title">True Gapless (RAM Engine)</span>
+                <span class="setting-desc">Bypasses HTML5 logic to force 0ms continuous audio using RAM buffers.</span>
+            </div>
+            <button class="toggle-btn" class:active={$isGaplessModeActive} on:click={toggleGaplessMode} aria-label="Toggle WebAudio RAM Engine">
+                <div class="toggle-knob"></div>
+            </button>
+        </div>
+
+        {#if $isGaplessModeActive}
+            <div class="setting-item" style="margin-bottom: 24px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 24px;" transition:fade={{duration: 200}}>
+                <div class="setting-info">
+                    <span class="setting-title">Gapless Scrub Sound</span>
+                    <span class="setting-desc">Effect played when dragging the progress bar.</span>
+                </div>
+                <div class="segmented-control">
+                    <button class:active={currentScrubSound === 'vinyl'} on:click={() => updateScrubSound('vinyl')}>Vinyl</button>
+                    <button class:active={currentScrubSound === 'speed'} on:click={() => updateScrubSound('speed')}>Speed</button>
+                    <button class:active={currentScrubSound === 'beep'} on:click={() => updateScrubSound('beep')}>Beep</button>
+                    <button class:active={currentScrubSound === 'none'} on:click={() => updateScrubSound('none')}>Off</button>
+                </div>
+            </div>
+        {/if}
+
+        <div class="setting-item-col">
+            <div class="setting-info w-full">
+                <div class="flex-between">
+                    <span class="setting-title">Gain Multiplier</span>
+                    <span class="highlight-val">{currentBoost}x</span>
+                </div>
+                <span class="setting-desc mb-16">Increases the gain of the local player (up to 3x).</span>
+            </div>
+            <input class="range-slider" type="range" min="0.5" max="3.0" step="0.1" value={currentBoost} on:input={updateBoost}>
+        </div>
+    </div>
+
+    {#if $isGaplessModeActive}
+        <div class="settings-section" transition:fade={{duration: 200}}>
+            <h2>Visualizer (Canvas)</h2>
+
+            <div class="setting-item">
+                <div class="setting-info">
+                    <span class="setting-title">Enable 3D Visualizer</span>
+                    <span class="setting-desc">Renders hardware-accelerated graphics responding to audio.</span>
+                </div>
+                <button class="toggle-btn" class:active={visEnabled} on:click={toggleVisEnabled} aria-label="Toggle Visualizer">
+                    <div class="toggle-knob"></div>
+                </button>
+            </div>
+            
+            <div class="setting-item" style="margin-bottom: 24px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 24px;">
+                <div class="setting-info">
+                    <span class="setting-title">Shape</span>
+                    <span class="setting-desc">The geometric form reflecting audio data.</span>
+                </div>
+                <div class="segmented-control">
+                    <button class:active={visShape === 'Icosahedron'} on:click={() => updateVisSetting('visShape', 'psyzx_vis_shape', 'Icosahedron')}>Ico</button>
+                    <button class:active={visShape === 'Dodecahedron'} on:click={() => updateVisSetting('visShape', 'psyzx_vis_shape', 'Dodecahedron')}>Dodeca</button>
+                    <button class:active={visShape === 'TorusKnot'} on:click={() => updateVisSetting('visShape', 'psyzx_vis_shape', 'TorusKnot')}>Knot</button>
+                    <button class:active={visShape === 'Tunnel'} on:click={() => updateVisSetting('visShape', 'psyzx_vis_shape', 'Tunnel')}>Tunnel</button>
+                    <button class:active={visShape === 'DNA'} on:click={() => updateVisSetting('visShape', 'psyzx_vis_shape', 'DNA')}>DNA</button>
+                    <button class:active={visShape === 'Shell'} on:click={() => updateVisSetting('visShape', 'psyzx_vis_shape', 'Shell')}>Shell</button>
+                    <button class:active={visShape === 'Synthwave'} on:click={() => updateVisSetting('visShape', 'psyzx_vis_shape', 'Synthwave')}>Synth Terrain</button>
+                    <button class:active={visShape === 'Galaxy'} on:click={() => updateVisSetting('visShape', 'psyzx_vis_shape', 'Galaxy')}>Galaxy</button>
+                    <button class:active={visShape === 'Wormhole'} on:click={() => updateVisSetting('visShape', 'psyzx_vis_shape', 'Wormhole')}>Wormhole</button>
+                    <button class:active={visShape === 'Fractal'} on:click={() => updateVisSetting('visShape', 'psyzx_vis_shape', 'Fractal')}>Fractal Spire</button>
+                </div>
+            </div>
+
+            <div class="setting-item" style="margin-bottom: 24px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 24px;">
+                <div class="setting-info">
+                    <span class="setting-title">Movement</span>
+                    <span class="setting-desc">The base animated movement pattern.</span>
+                </div>
+                <div class="segmented-control">
+                    <button class:active={visMovement === 'Hypnotic'} on:click={() => updateVisSetting('visMovement', 'psyzx_vis_movement', 'Hypnotic')}>Hypnotic</button>
+                    <button class:active={visMovement === 'Pulsate'} on:click={() => updateVisSetting('visMovement', 'psyzx_vis_movement', 'Pulsate')}>Pulsate</button>
+                    <button class:active={visMovement === 'None'} on:click={() => updateVisSetting('visMovement', 'psyzx_vis_movement', 'None')}>None</button>
+                </div>
+            </div>
+
+            <div class="setting-item" style="margin-bottom: 24px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 24px;">
+                <div class="setting-info">
+                    <span class="setting-title">Sides / Radial Segments</span>
+                    <span class="setting-desc">Adjusts structural sides for Tube/Tunnel/Wormhole forms.</span>
+                </div>
+                <div class="segmented-control">
+                    <button class:active={visSides === 'Default'} on:click={() => updateVisSetting('visSides', 'psyzx_vis_sides', 'Default')}>Auto</button>
+                    <button class:active={visSides === '3'} on:click={() => updateVisSetting('visSides', 'psyzx_vis_sides', '3')}>3</button>
+                    <button class:active={visSides === '4'} on:click={() => updateVisSetting('visSides', 'psyzx_vis_sides', '4')}>4</button>
+                    <button class:active={visSides === '6'} on:click={() => updateVisSetting('visSides', 'psyzx_vis_sides', '6')}>6</button>
+                    <button class:active={visSides === '12'} on:click={() => updateVisSetting('visSides', 'psyzx_vis_sides', '12')}>12</button>
+                </div>
+            </div>
+
+            <div class="setting-item-col">
+                <div class="setting-info w-full">
+                    <div class="flex-between">
+                        <span class="setting-title">Beat Intensity</span>
+                        <span class="highlight-val">{visIntensity}x</span>
+                    </div>
+                    <span class="setting-desc mb-16">How violently the shape reacts to the FFT frequency data. Set to 0 to disable beat reaction.</span>
+                </div>
+                <input class="range-slider" type="range" min="0.0" max="3.0" step="0.1" value={visIntensity} on:input={(e) => updateVisSetting('visIntensity', 'psyzx_vis_intensity', e.target.value)}>
+            </div>
+
+            <div class="setting-item-col">
+                <div class="setting-info w-full">
+                    <div class="flex-between">
+                        <span class="setting-title">Y-Position (Vertical Offset)</span>
+                        <span class="highlight-val">{visYPos}</span>
+                    </div>
+                    <span class="setting-desc mb-16">Height positioning within the background.</span>
+                </div>
+                <input class="range-slider" type="range" min="-30" max="30" step="1" value={visYPos} on:input={(e) => updateVisSetting('visYPos', 'psyzx_vis_ypos', e.target.value)}>
+            </div>
+
+            <div class="setting-item-col">
+                <div class="setting-info w-full">
+                    <div class="flex-between">
+                        <span class="setting-title">Dimension (Overall Scale)</span>
+                        <span class="highlight-val">{visDimension}x</span>
+                    </div>
+                    <span class="setting-desc mb-16">Multiplier for the visualizer's size.</span>
+                </div>
+                <input class="range-slider" type="range" min="0.5" max="3.0" step="0.1" value={visDimension} on:input={(e) => updateVisSetting('visDimension', 'psyzx_vis_dimension', e.target.value)}>
+            </div>
+
+            <div class="setting-item-col">
+                <div class="setting-info w-full">
+                    <div class="flex-between">
+                        <span class="setting-title">Detail Level (Geometry)</span>
+                        <span class="highlight-val">{visDetail}</span>
+                    </div>
+                    <span class="setting-desc mb-16">Complexity of the 3D mesh. Higher numbers are smoother but cost more GPU power.</span>
+                </div>
+                <select class="sleek-select" value={visDetail} on:change={(e) => updateVisSetting('visDetail', 'psyzx_vis_detail', e.target.value)}>
+                    <option value="4">4 (Lowest)</option>
+                    <option value="8">8 (Low)</option>
+                    <option value="16">16 (Normal)</option>
+                    <option value="32">32 (High)</option>
+                    <option value="64">64 (Ultra)</option>
+                    <option value="128">128 (Extreme - Warning)</option>
+                </select>
+            </div>
+        </div>
+    {/if}
 
     <div class="settings-section">
         <h2>UI & Look</h2>
@@ -199,44 +400,6 @@
         </div>
     </div>
 
-    <div class="settings-section">
-        <h2>Audio Engine</h2>
-        
-        <div class="setting-item" style="margin-bottom: 24px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 24px;">
-            <div class="setting-info">
-                <span class="setting-title">True Gapless (RAM Engine)</span>
-                <span class="setting-desc">Bypasses HTML5 logic to force 0ms continuous audio using RAM buffers.</span>
-            </div>
-            <button class="toggle-btn" class:active={$isGaplessModeActive} on:click={toggleGaplessMode} aria-label="Toggle WebAudio RAM Engine">
-                <div class="toggle-knob"></div>
-            </button>
-        </div>
-
-        <div class="setting-item" style="margin-bottom: 24px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 24px;">
-            <div class="setting-info">
-                <span class="setting-title">Gapless Scrub Sound</span>
-                <span class="setting-desc">Effect played when dragging the progress bar (True Gapless only).</span>
-            </div>
-            <div class="segmented-control">
-                <button class:active={currentScrubSound === 'vinyl'} on:click={() => updateScrubSound('vinyl')}>Vinyl</button>
-                <button class:active={currentScrubSound === 'speed'} on:click={() => updateScrubSound('speed')}>Speed</button>
-                <button class:active={currentScrubSound === 'beep'} on:click={() => updateScrubSound('beep')}>Beep</button>
-                <button class:active={currentScrubSound === 'none'} on:click={() => updateScrubSound('none')}>Off</button>
-            </div>
-        </div>
-
-        <div class="setting-item-col">
-            <div class="setting-info w-full">
-                <div class="flex-between">
-                    <span class="setting-title">Gain Multiplier</span>
-                    <span class="highlight-val">{currentBoost}x</span>
-                </div>
-                <span class="setting-desc mb-16">Increases the gain of the local player (up to 3x).</span>
-            </div>
-            <input class="range-slider" type="range" min="0.5" max="3.0" step="0.1" value={currentBoost} on:input={updateBoost}>
-        </div>
-    </div>
-
     <div class="settings-section danger-zone">
         <h2 style="color: #ef4444;">System</h2>
         
@@ -265,7 +428,16 @@
 </div>
 
 <style>
-    .view-wrapper { padding: 32px 24px; max-width: 800px; margin: 0 auto; color: white; }
+    .view-wrapper { 
+        padding: 32px 24px; 
+        max-width: 800px; 
+        margin: 0 auto; 
+        color: white; 
+        box-sizing: border-box;
+        width: 100%;
+        overflow-x: hidden; 
+    }
+    
     .settings-header { margin-bottom: 40px; }
     .settings-header h1 { font-size: 32px; font-weight: 700; margin: 0; letter-spacing: -0.5px; }
     
@@ -277,7 +449,10 @@
     .danger-zone { border-color: rgba(239, 68, 68, 0.2); }
     .settings-section h2 { font-size: 14px; color: var(--accent-color); margin: 0 0 24px 0; text-transform: uppercase; letter-spacing: 1px; font-weight: 800; }
     
-    .setting-item { display: flex; justify-content: space-between; align-items: center; padding: 16px 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
+    .setting-item { 
+        display: flex; justify-content: space-between; align-items: center; 
+        padding: 16px 0; border-bottom: 1px solid rgba(255,255,255,0.05); 
+    }
     .setting-item-col { display: flex; flex-direction: column; padding: 16px 0; }
     .setting-item:last-child, .setting-item-col:last-child { border-bottom: none; padding-bottom: 0; }
     
@@ -291,15 +466,35 @@
     .mb-16 { margin-bottom: 16px; }
     .highlight-val { font-weight: 900; font-family: monospace; color: var(--accent-color); font-size: 16px; }
     
+    .sleek-select {
+        width: 100%;
+        background: rgba(255,255,255,0.05);
+        color: white;
+        border: 1px solid rgba(255,255,255,0.2);
+        padding: 10px 12px;
+        border-radius: 8px;
+        font-size: 14px;
+        font-weight: 600;
+        outline: none;
+        cursor: pointer;
+        transition: border-color 0.2s ease, background 0.2s ease;
+    }
+    .sleek-select:hover { border-color: rgba(255,255,255,0.4); background: rgba(255,255,255,0.1); }
+    .sleek-select option { background: #1a1a1a; color: white; font-weight: 500; }
+
     .segmented-control {
         display: flex; background: rgba(255,255,255,0.15); padding: 2px; border-radius: 10px;
         border: 1px solid rgba(255,255,255,0.05);
         margin-left: 10px;
+        flex-wrap: wrap; 
+        gap: 2px;
     }
     .segmented-control button {
-        background: transparent; border: none; color: white; width: 46px; height: 32px;
+        background: transparent; border: none; color: white; padding: 0 10px; height: 32px;
         font-size: 11px; font-weight: 800; cursor: pointer; border-radius: 6px;
         transition: all 0.2s; display: flex; align-items: center; justify-content: center;
+        white-space: nowrap;
+        flex-grow: 1; 
     }
     .segmented-control button.active { background: var(--accent-color); color: black; box-shadow: 0 2px 8px rgba(0,0,0,0.3); }
 
@@ -360,4 +555,22 @@
         gap: 8px; transition: all 0.2s ease; width: fit-content;
     }
     .btn-refresh:hover, .btn-danger:hover { background: rgba(239, 68, 68, 0.2); border-color: #ef4444; }
+
+    @media (max-width: 650px) {
+        .setting-item {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 16px;
+        }
+        .setting-info:not(.w-full) {
+            max-width: 100%;
+        }
+        .segmented-control {
+            margin-left: 0;
+            width: 100%;
+        }
+        .toggle-btn {
+            align-self: flex-start;
+        }
+    }
 </style>

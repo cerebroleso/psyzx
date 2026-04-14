@@ -36,32 +36,34 @@ public class TracksController : ControllerBase
             .AsNoTracking() 
             .Include(t => t.Album)
             .ThenInclude(a => a.Artist)
-            .Select(t => new {
-                id = t.Id,
-                title = t.Title,
-                filePath = t.FilePath, 
-                durationSeconds = t.DurationSeconds,
-                bitrate = t.Bitrate,
-                trackNumber = t.TrackNumber,
-                discNumber = t.DiscNumber,
-                playCount = t.PlayCount,
-                albumId = t.AlbumId,
-                album = new {
-                    id = t.Album.Id,
-                    title = t.Album.Title,
-                    coverPath = t.Album.CoverPath,
-                    releaseYear = t.Album.ReleaseYear,
-                    playCount = t.Album.PlayCount,
-                    artist = new {
-                        id = t.Album.Artist.Id,
-                        name = t.Album.Artist.Name,
-                        imagePath = t.Album.Artist.ImagePath
-                    }
-                }
-            })
             .ToListAsync();
             
-        return Ok(tracks);
+        // Done client-side memory rather than SQL mapping to safely handle nulls
+        var safeTracks = tracks.Select(t => new {
+            id = t.Id,
+            title = t.Title,
+            filePath = t.FilePath, 
+            durationSeconds = t.DurationSeconds,
+            bitrate = t.Bitrate,
+            trackNumber = t.TrackNumber,
+            discNumber = t.DiscNumber,
+            playCount = t.PlayCount,
+            albumId = t.AlbumId,
+            album = t.Album == null ? null : new {
+                id = t.Album.Id,
+                title = t.Album.Title,
+                coverPath = t.Album.CoverPath,
+                releaseYear = t.Album.ReleaseYear,
+                playCount = t.Album.PlayCount,
+                artist = t.Album.Artist == null ? null : new {
+                    id = t.Album.Artist.Id,
+                    name = t.Album.Artist.Name,
+                    imagePath = t.Album.Artist.ImagePath
+                }
+            }
+        });
+            
+        return Ok(safeTracks);
     }
 
     [HttpGet("stream/{id}")]
@@ -78,7 +80,6 @@ public class TracksController : ControllerBase
         Response.Headers.Append("Access-Control-Allow-Origin", "*"); 
         Response.Headers.Append("Access-Control-Allow-Methods", "GET, OPTIONS");
         Response.Headers.Append("Access-Control-Allow-Headers", "Range, Authorization, Content-Type");
-        
         Response.Headers.Append("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges");
 
         return PhysicalFile(fullPath, mimeType, enableRangeProcessing: true);
@@ -178,7 +179,7 @@ public class TracksController : ControllerBase
     }
 
     [HttpGet("radio/{seedTrackId}")]
-    public async Task<IActionResult> GetRadioMix(int seedTrackId, [FromQuery] int limit = 10, [FromQuery] string excludeIds = "")
+    public async Task<IActionResult> GetRadioMix(int seedTrackId, [FromQuery] int limit = 20, [FromQuery] string excludeIds = "")
     {
         var excludeList = new HashSet<int> { seedTrackId };
         
@@ -200,42 +201,54 @@ public class TracksController : ControllerBase
 
         if (seedTrack == null) return NotFound();
 
-        int seedArtistId = seedTrack.Album.ArtistId;
+        // 1. SAFE NULL CHECK: Track might not be in an album.
+        int? seedArtistId = seedTrack.Album?.ArtistId;
+        var finalMix = new List<Track>();
 
-        var artistTracks = await _context.Tracks
-            .Include(t => t.Album).ThenInclude(a => a.Artist)
-            .Where(t => t.Album.ArtistId == seedArtistId && !excludeList.Contains(t.Id))
-            .OrderBy(t => EF.Functions.Random())
-            .Take(limit / 2)
-            .ToListAsync();
-
-        foreach(var t in artistTracks)
+        // 2. Similar Artist Tracks (40% of mix) - Only if an artist exists
+        if (seedArtistId.HasValue) 
         {
-            excludeList.Add(t.Id);
+            var artistTracks = await _context.Tracks
+                .Include(t => t.Album).ThenInclude(a => a.Artist)
+                .Where(t => t.Album != null && t.Album.ArtistId == seedArtistId.Value && !excludeList.Contains(t.Id))
+                .OrderBy(t => EF.Functions.Random())
+                .Take((int)(limit * 0.4))
+                .ToListAsync();
+
+            finalMix.AddRange(artistTracks);
+            foreach(var t in artistTracks) excludeList.Add(t.Id);
         }
 
+        // 3. Spotify-like "Discovery Favorites" (30% of mix)
+        // Fixed: We expand the pool from 50 to 300 to stop it from endlessly repeating the same songs.
         var favoriteTracks = await _context.Tracks
             .Include(t => t.Album).ThenInclude(a => a.Artist)
-            .Where(t => t.Album.ArtistId != seedArtistId && !excludeList.Contains(t.Id))
+            .Where(t => !excludeList.Contains(t.Id) && t.PlayCount > 0)
             .OrderByDescending(t => t.PlayCount)
-            .Take(50)
+            .Take(300) 
             .OrderBy(t => EF.Functions.Random())
-            .Take(limit / 3)
+            .Take((int)(limit * 0.3))
             .ToListAsync();
 
-        foreach(var t in favoriteTracks)
+        finalMix.AddRange(favoriteTracks);
+        foreach(var t in favoriteTracks) excludeList.Add(t.Id);
+
+        // 4. True Random Filler / Deep Cuts (Remaining %)
+        int remaining = limit - finalMix.Count;
+        if (remaining > 0)
         {
-            excludeList.Add(t.Id);
+            var randomTracks = await _context.Tracks
+                .Include(t => t.Album).ThenInclude(a => a.Artist)
+                .Where(t => !excludeList.Contains(t.Id))
+                .OrderBy(t => EF.Functions.Random())
+                .Take(remaining)
+                .ToListAsync();
+
+            finalMix.AddRange(randomTracks);
         }
 
-        var randomTracks = await _context.Tracks
-            .Include(t => t.Album).ThenInclude(a => a.Artist)
-            .Where(t => t.Album.ArtistId != seedArtistId && !excludeList.Contains(t.Id))
-            .OrderBy(t => EF.Functions.Random())
-            .Take(limit - artistTracks.Count - favoriteTracks.Count)
-            .ToListAsync();
-
-        var finalMix = artistTracks.Concat(favoriteTracks).Concat(randomTracks)
+        // 5. Shuffle the resulting mix to interleave the vibes, keeping null-safety intact
+        var shuffledResult = finalMix
             .OrderBy(t => Guid.NewGuid())
             .Select(t => new {
                 id = t.Id,
@@ -246,18 +259,19 @@ public class TracksController : ControllerBase
                 bitrate = t.Bitrate,
                 playCount = t.PlayCount,
                 albumId = t.AlbumId,
-                album = new {
+                // SAFE MAPPING
+                album = t.Album == null ? null : new {
                     id = t.Album.Id,
                     title = t.Album.Title,
                     coverPath = t.Album.CoverPath,
-                    artist = new {
+                    artist = t.Album.Artist == null ? null : new {
                         id = t.Album.Artist.Id,
                         name = t.Album.Artist.Name
                     }
                 }
             }).ToList();
 
-        return Ok(finalMix);
+        return Ok(shuffledResult);
     }
 
     [HttpPost("{id}/play")]
@@ -277,6 +291,6 @@ public class TracksController : ControllerBase
         }
 
         await _context.SaveChangesAsync();
-        return Ok(new { trackPlays = track.PlayCount, albumPlays = track.Album.PlayCount });
+        return Ok(new { trackPlays = track.PlayCount, albumPlays = track.Album?.PlayCount ?? 0 });
     }
 }

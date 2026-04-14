@@ -15,6 +15,7 @@ const MAX_CACHE_SIZE = 5;
 
 export let audioCtx;
 export let gainNode;
+export let analyserNode = null; // New Analyser Node
 let eqFilters = [];
 let mixerNode = null;
 let heartbeatOsc = null;
@@ -65,6 +66,19 @@ const EQ_FREQS = [60, 250, 1000, 4000, 8000, 14000];
 
 const SILENCE_B64 =
     'data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4LjEyLjEwMAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAAASW5mbwAAAA8AAAAEAAABIAD+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+AAAAAExhdmM1OC4xMzQAAAAAAAAAAAAAAAAkAAAAAAAAAAABIADZt9snAAAAAAAAAAAAAAAAAAAA//MUZAAAAAGkAAAAAAAAA0gAAAAATEFNRTMuMTAwA8EAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA//MUZAMAAAGkAAAAAAAAA0gAAAAATEFNRTMuMTAwA8EAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+
+// --- VISUALIZER FFT EXPORT ---
+const FFT_SIZE = 256;
+const dataArray = typeof window !== 'undefined' ? new Uint8Array(FFT_SIZE / 2) : null;
+
+export const getFftData = () => {
+    if (analyserNode && isWebAudioMode && audioCtx && audioCtx.state === 'running') {
+        analyserNode.getByteFrequencyData(dataArray);
+        return dataArray;
+    }
+    return null;
+};
+// -----------------------------
 
 export const activePlayer = {
     get currentTime() {
@@ -208,6 +222,13 @@ const buildWebAudioGraph = () => {
         heartbeatOsc.start();
     }
 
+    // Initialize Analyser for the visualizer BEFORE the EQ block
+    if (!analyserNode) {
+        analyserNode = audioCtx.createAnalyser();
+        analyserNode.fftSize = FFT_SIZE;
+        analyserNode.smoothingTimeConstant = 0.85; // Smooths out the mesh deformations
+    }
+
     eqFilters = EQ_FREQS.map((freq, i) => {
         const filter = audioCtx.createBiquadFilter();
         filter.type = 'peaking';
@@ -220,7 +241,9 @@ const buildWebAudioGraph = () => {
     gainNode = audioCtx.createGain();
     gainNode.gain.value = pendingBoost;
 
-    mixerNode.connect(eqFilters[0]);
+    mixerNode.connect(analyserNode);
+    analyserNode.connect(eqFilters[0]);
+    
     for (let i = 0; i < eqFilters.length - 1; i++) {
         eqFilters[i].connect(eqFilters[i + 1]);
     }
@@ -484,12 +507,17 @@ export const registerAudioElements = (elA, elB) => {
             });
 
             el.addEventListener('waiting', () => {
-                if (el === html5ActivePlayer) isBuffering.set(true);
+                if (el === html5ActivePlayer) 
+                    {
+                        isBuffering.set(true);
+                        startBufferSound();
+                    }
             });
 
             el.addEventListener('playing', () => {
                 if (el === html5ActivePlayer) {
                     isBuffering.set(false);
+                    stopBufferSound();
                     isPlaying.set(true);
                 }
                 clearTimeout(stallTimeout);
@@ -614,16 +642,21 @@ export const loadAndPlayUrl = async (url) => {
 
         isBuffering.set(true);
         isPlaying.set(false);
+        startBufferSound();
 
         const decodedBuffer = await fetchAndDecode(url);
 
-        if (currentLoadId !== pendingLoadId) return;
+        if (currentLoadId !== pendingLoadId) {
+            stopBufferSound();
+            return;
+        }
 
         currentBuffer = decodedBuffer;
         currentTrackUrl = url;
 
         if (!currentBuffer) {
             isBuffering.set(false);
+            stopBufferSound();
             if (html5ActivePlayer) html5ActivePlayer.pause();
             if (!get(isPlaying)) stopSilentKeepAlive();
             return;
@@ -636,6 +669,7 @@ export const loadAndPlayUrl = async (url) => {
 
         playWebAudio();
         isBuffering.set(false);
+        stopBufferSound();
     }
 };
 
@@ -721,7 +755,6 @@ export const setEqBand = (index, val) => {
 export const updateMediaSession = (track, album, handlers) => {
     if (!track || !('mediaSession' in navigator)) return;
 
-    // FIX 3: Force iOS to recognize square aspect ratio by providing multiple standard target sizes
     const coverUrl = album?.coverPath
         ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&size=thumb`
         : '';
@@ -772,7 +805,6 @@ export const updateMediaPositionState = (currentTime, duration) => {
         try {
             const isPlay = get(isPlaying);
             
-            // FIX 1: Explicitly tell iOS if it should show the Play or Pause icon
             navigator.mediaSession.playbackState = isPlay ? 'playing' : 'paused';
             
             const safePosition = Math.max(0, Math.min(currentTime, duration));
@@ -784,6 +816,62 @@ export const updateMediaPositionState = (currentTime, duration) => {
         } catch (e) {}
     }
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RELAXED BUFFERING SFX (ZEN-PULSE)
+// ─────────────────────────────────────────────────────────────────────────────
+let bufferOsc = null;
+let bufferGain = null;
+let bufferInterval = null;
+
+export const startBufferSound = () => {
+    if (!audioCtx || !isWebAudioMode || audioCtx.state !== 'running') return;
+    if (bufferOsc) return;
+
+    bufferGain = audioCtx.createGain();
+    bufferGain.connect(mixerNode || audioCtx.destination);
+    bufferGain.gain.value = 0;
+
+    bufferOsc = audioCtx.createOscillator();
+    bufferOsc.type = 'sine'; // Purest, least "anxious" wave
+    bufferOsc.connect(bufferGain);
+    bufferOsc.start();
+
+    bufferInterval = setInterval(() => {
+        if (!bufferOsc || !bufferGain || !audioCtx) return;
+        const now = audioCtx.currentTime;
+        
+        // Deep, warm frequency (G2 to A2 range)
+        bufferOsc.frequency.setValueAtTime(196, now); 
+        bufferOsc.frequency.exponentialRampToValueAtTime(220, now + 1.2);
+        
+        // "Breathing" envelope: 1s fade in, 0.8s fade out
+        bufferGain.gain.cancelScheduledValues(now);
+        bufferGain.gain.setValueAtTime(0, now);
+        bufferGain.gain.linearRampToValueAtTime(0.04, now + 1.0); 
+        bufferGain.gain.exponentialRampToValueAtTime(0.001, now + 1.8);
+        
+    }, 2000); // 2-second interval for a calm, slow pace
+};
+
+export const stopBufferSound = () => {
+    if (bufferInterval) {
+        clearInterval(bufferInterval);
+        bufferInterval = null;
+    }
+    if (bufferGain && audioCtx) {
+        const now = audioCtx.currentTime;
+        bufferGain.gain.cancelScheduledValues(now);
+        // Fade out gracefully rather than cutting off
+        bufferGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.5);
+    }
+    setTimeout(() => {
+        if (bufferOsc) { try { bufferOsc.stop(); } catch(e){} bufferOsc = null; }
+        if (bufferGain) { try { bufferGain.disconnect(); } catch(e){} bufferGain = null; }
+    }, 600);
+};
+
+// ________________________________________
 
 export const playSkipCue = (dir) => {
     if (!audioCtx || !isWebAudioMode) return;
@@ -991,4 +1079,18 @@ export const stopScrubEffect = () => {
             scrubGain = null;
         }, 50);
     }
+};
+
+export const setGlobalVolume = (val) => {
+    const volumeRatio = val / 100;
+    
+    // 1. Update Web Audio Gain (The main volume)
+    if (gainNode && audioCtx) {
+        // Use exponentialRamp for smoother, more natural volume changes
+        gainNode.gain.setTargetAtTime(volumeRatio, audioCtx.currentTime, 0.01);
+    }
+
+    // 2. Fallback for standard HTML5 mode
+    if (playerA) playerA.volume = volumeRatio;
+    if (playerB) playerB.volume = volumeRatio;
 };

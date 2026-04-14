@@ -173,6 +173,90 @@ public class PlaylistsController : ControllerBase
 
         return Ok(result);
     }
+
+    [HttpPost("add-by-name")]
+    public async Task<IActionResult> AddTrackByName([FromBody] AddTrackByNameDto dto)
+    {
+        if (string.IsNullOrWhiteSpace(dto.PlaylistName)) 
+            return BadRequest("Playlist name cannot be empty.");
+
+        var userId = GetCurrentUserId();
+
+        // 1. Ensure the track actually exists
+        var trackExists = await _db.Tracks.AnyAsync(t => t.Id == dto.TrackId);
+        if (!trackExists) return NotFound("Track not found.");
+
+        // 2. Find the playlist by name (Case-Insensitive) for this specific user
+        var playlist = await _db.Playlists
+            .FirstOrDefaultAsync(p => 
+                p.Name.ToLower() == dto.PlaylistName.Trim().ToLower() && 
+                p.UserId == userId);
+
+        // 3. If playlist doesn't exist, create it (Find or Create logic)
+        if (playlist == null)
+        {
+            playlist = new Playlist 
+            { 
+                Name = dto.PlaylistName.Trim(), 
+                UserId = userId 
+            };
+            _db.Playlists.Add(playlist);
+            // We save here to ensure the playlist has an ID before adding the track
+            await _db.SaveChangesAsync();
+        }
+
+        // 4. Check if the track is already in this playlist
+        var alreadyExists = await _db.PlaylistTracks
+            .AnyAsync(pt => pt.PlaylistId == playlist.Id && pt.TrackId == dto.TrackId);
+
+        if (!alreadyExists)
+        {
+            var playlistTrack = new PlaylistTrack
+            {
+                PlaylistId = playlist.Id,
+                TrackId = dto.TrackId
+            };
+
+            _db.PlaylistTracks.Add(playlistTrack);
+            await _db.SaveChangesAsync();
+        }
+
+        return Ok(new { 
+            playlistId = playlist.Id, 
+            playlistName = playlist.Name,
+            message = "Track added successfully" 
+        });
+    }
+
+    [HttpDelete("remove-by-name")]
+    public async Task<IActionResult> RemoveTrackByName([FromBody] AddTrackByNameDto dto)
+    {
+        if (string.IsNullOrWhiteSpace(dto.PlaylistName)) 
+            return BadRequest("Playlist name cannot be empty.");
+
+        var userId = GetCurrentUserId();
+
+        // 1. Find the playlist by name for this user
+        var playlist = await _db.Playlists
+            .FirstOrDefaultAsync(p => 
+                p.Name.ToLower() == dto.PlaylistName.Trim().ToLower() && 
+                p.UserId == userId);
+
+        if (playlist == null) return NotFound("Playlist not found.");
+
+        // 2. Find the link between the playlist and the track
+        var playlistTrack = await _db.PlaylistTracks
+            .FirstOrDefaultAsync(pt => pt.PlaylistId == playlist.Id && pt.TrackId == dto.TrackId);
+
+        // 3. Delete if it exists
+        if (playlistTrack != null)
+        {
+            _db.PlaylistTracks.Remove(playlistTrack);
+            await _db.SaveChangesAsync();
+        }
+
+        return Ok(new { message = "Track removed from playlist" });
+    }
 }
 
 public class CreatePlaylistDto 
@@ -183,4 +267,10 @@ public class CreatePlaylistDto
 public class AddTrackDto 
 { 
     public int TrackId { get; set; } 
+}
+
+public class AddTrackByNameDto 
+{ 
+    public int TrackId { get; set; } 
+    public string PlaylistName { get; set; } = string.Empty;
 }

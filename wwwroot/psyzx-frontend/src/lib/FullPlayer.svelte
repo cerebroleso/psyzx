@@ -24,7 +24,8 @@
         startScrubEffect,
         updateScrubEffect,
         stopScrubEffect,
-        isWebAudioMode
+        isWebAudioMode,
+        getFftData 
     } from './audio.js';
     import { api } from './api.js';
     import { quintOut, expoIn, expoOut, linear } from 'svelte/easing';
@@ -57,6 +58,515 @@
     let tapTimeout;
     let lastTapTime = 0;
 
+    // --- BUFFER BAR VARIABLES ---
+    let bufferRef;
+    let displayBufferPct = 0;
+    const lerp = (start, end, amt) => (1 - amt) * start + amt * end;
+
+
+
+    let isVisEnabled = typeof localStorage !== 'undefined' ? localStorage.getItem('psyzx_vis_enabled') !== 'false' : true;
+    
+    const handleGlobalVisUpdate = () => {
+        isVisEnabled = localStorage.getItem('psyzx_vis_enabled') !== 'false';
+    };
+
+// --- THREE.JS VISUALIZER ACTION (OPTIMIZED) ---
+    function threeVisualizer(node) {
+        let isDestroyed = false;
+        let cleanup = () => {}; 
+
+        // 1. DYNAMIC IMPORT: Only load Three.js when this element mounts
+        import('three').then((THREE) => {
+            if (isDestroyed) return;
+
+            let scene, camera, renderer, visualizerMesh;
+            let visualizerRafId;
+            
+            // 2. TYPED ARRAY: Pre-allocate memory instead of standard arrays
+            let originalPositions = new Float32Array(0); 
+            let smoothedFftData = null; 
+            let activeSpeedMultiplier = 0; 
+            let currentTunnelSpeed = 0.15;  
+            let currentDnaTwist = 0.15;    
+            let isPointsCloud = false; 
+
+            // 3. CACHE LOCAL STORAGE: Prevent reading DOM/Storage at 60fps
+            let visSpeed = 1.0;
+            let visIntensity = 1.0;
+
+            const lerp = (start, end, factor) => (1 - factor) * start + factor * end;
+
+            let visShape = localStorage.getItem('psyzx_vis_shape') || 'Icosahedron';
+            let visMovement = localStorage.getItem('psyzx_vis_movement') || 'Hypnotic';
+            
+            let rawY = parseInt(localStorage.getItem('psyzx_vis_ypos'));
+            let visYPos = isNaN(rawY) ? 11 : rawY;
+            
+            let rawDim = parseFloat(localStorage.getItem('psyzx_vis_dimension'));
+            let visDimension = isNaN(rawDim) ? 1.0 : rawDim;
+            
+            let rawDet = parseInt(localStorage.getItem('psyzx_vis_detail'));
+            let visDetail = isNaN(rawDet) ? 16 : rawDet;
+            
+            let visSides = localStorage.getItem('psyzx_vis_sides') || 'Default';
+
+            // Init cached performance variables
+            const rawSpd = parseFloat(localStorage.getItem('psyzx_vis_speed'));
+            visSpeed = isNaN(rawSpd) ? 1.0 : rawSpd;
+            const rawInt = parseFloat(localStorage.getItem('psyzx_vis_intensity'));
+            visIntensity = isNaN(rawInt) ? 1.0 : rawInt;
+
+            const getRadialSegments = () => {
+                if (visSides !== 'Default') return parseInt(visSides);
+                if (visShape === 'Tunnel') return 16; 
+                return 32; 
+            };
+            
+            scene = new THREE.Scene();
+            scene.fog = new THREE.Fog(0x000000, 10, 120); 
+            
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+
+            renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+            renderer.setSize(node.clientWidth || window.innerWidth, node.clientHeight || window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            node.appendChild(renderer.domElement);
+
+            const buildVisualizerMesh = () => {
+                if (visualizerMesh) {
+                    scene.remove(visualizerMesh);
+                    visualizerMesh.geometry.dispose();
+                    visualizerMesh.material.dispose();
+                    visualizerMesh = null;
+                }
+
+                let geometry;
+                isPointsCloud = false; 
+
+                switch (visShape) {
+                    case 'Dodecahedron':
+                        geometry = new THREE.DodecahedronGeometry(12, Math.min(visDetail, 5)); 
+                        break;
+                    case 'Tunnel':
+                        geometry = new THREE.CylinderGeometry(15, 15, 300, getRadialSegments(), visDetail * 3, true); 
+                        geometry.rotateX(Math.PI / 2); 
+                        break;
+                    case 'TorusKnot':
+                        geometry = new THREE.TorusKnotGeometry(10, 3, visDetail * 2, visDetail, 2, 3);
+                        break;
+                    case 'DNA':
+                        geometry = new THREE.CylinderGeometry(2.0, 2.0, 220, 3, visDetail * 5, true);
+                        geometry.rotateZ(Math.PI / 2); 
+                        break;
+                    case 'Shell':
+                        geometry = new THREE.CylinderGeometry(0.1, 15, 40, getRadialSegments(), visDetail * 2, true);
+                        const shellPos = geometry.attributes.position;
+                        const shellVec = new THREE.Vector3();
+                        for (let i = 0; i < shellPos.count; i++) {
+                            shellVec.fromBufferAttribute(shellPos, i);
+                            const twist = shellVec.y * 0.2;
+                            const x = shellVec.x * Math.cos(twist) - shellVec.z * Math.sin(twist);
+                            const z = shellVec.x * Math.sin(twist) + shellVec.z * Math.cos(twist);
+                            const asymmetry = (shellVec.y + 20) * 0.1;
+                            shellPos.setXYZ(i, x + asymmetry, shellVec.y, z);
+                        }
+                        geometry.computeVertexNormals();
+                        break;
+                    case 'Synthwave':
+                        geometry = new THREE.PlaneGeometry(200, 200, Math.min(visDetail*2, 64), Math.min(visDetail*2, 64));
+                        geometry.rotateX(-Math.PI / 2);
+                        break;
+                    case 'Galaxy':
+                        geometry = new THREE.BufferGeometry();
+                        const particleCount = visDetail * 200;
+                        const points = new Float32Array(particleCount * 3);
+                        for (let i = 0; i < particleCount; i++) {
+                            const angle = i * 0.1;
+                            const radius = (i / particleCount) * 40;
+                            points[i*3] = Math.cos(angle) * radius;
+                            points[i*3+1] = (Math.random() - 0.5) * 4; 
+                            points[i*3+2] = Math.sin(angle) * radius;
+                        }
+                        geometry.setAttribute('position', new THREE.BufferAttribute(points, 3));
+                        isPointsCloud = true;
+                        break;
+                    case 'Wormhole':
+                        geometry = new THREE.CylinderGeometry(40, 1, 150, getRadialSegments(), visDetail * 2, true);
+                        geometry.rotateX(Math.PI / 2);
+                        break;
+                    case 'Fractal':
+                        geometry = new THREE.CylinderGeometry(0.1, 10, 40, getRadialSegments(), visDetail * 2, false);
+                        const fracPos = geometry.attributes.position;
+                        const fracVec = new THREE.Vector3();
+                        for (let i = 0; i < fracPos.count; i++) {
+                            fracVec.fromBufferAttribute(fracPos, i);
+                            if (Math.sin(fracVec.y * 10) > 0.6) {
+                                fracVec.x *= 1.8;
+                                fracVec.z *= 1.8;
+                            }
+                            fracPos.setXYZ(i, fracVec.x, fracVec.y, fracVec.z);
+                        }
+                        geometry.computeVertexNormals();
+                        break;
+                    case 'Icosahedron':
+                    default:
+                        geometry = new THREE.IcosahedronGeometry(12, Math.min(visDetail, 32)); 
+                        visShape = 'Icosahedron'; 
+                        break;
+                }
+
+                if (isPointsCloud) {
+                    const material = new THREE.PointsMaterial({
+                        color: 0xffffff,
+                        size: 0.2,
+                        transparent: true,
+                        opacity: 0.8
+                    });
+                    visualizerMesh = new THREE.Points(geometry, material);
+                } else {
+                    const material = new THREE.MeshBasicMaterial({
+                        color: 0xffffff,
+                        wireframe: true,
+                        transparent: true,
+                        opacity: visShape === 'Tunnel' || visShape === 'Wormhole' ? 0.25 : 0.15,
+                        side: THREE.DoubleSide
+                    });
+                    visualizerMesh = new THREE.Mesh(geometry, material);
+                }
+                
+                scene.add(visualizerMesh);
+
+                camera.rotation.set(0, 0, 0); 
+
+                if (visShape === 'Tunnel') {
+                    camera.position.set(0, 0, 50); 
+                    visualizerMesh.position.set(0, 0, 0); 
+                } else if (visShape === 'Synthwave') {
+                    camera.position.set(0, 15, 80); 
+                    camera.lookAt(0, 0, 0);
+                    visualizerMesh.position.set(0, -10, 0); 
+                } else if (visShape === 'Wormhole') {
+                    camera.position.set(0, 0, 60); 
+                    visualizerMesh.position.set(0, 0, 0);
+                } else {
+                    camera.position.set(0, 0, 35);
+                    camera.fov = 75; 
+                    camera.updateProjectionMatrix();
+                    visualizerMesh.position.y = visYPos;
+                }
+
+                visualizerMesh.scale.set(visDimension, visDimension, visDimension);
+
+                const positionAttribute = geometry.attributes.position;
+                
+                // USE FLOAT32ARRAY FOR OPTIMIZED MEMORY
+                originalPositions = new Float32Array(positionAttribute.count * 3);
+                for (let i = 0; i < positionAttribute.count; i++) {
+                    originalPositions[i*3] = positionAttribute.getX(i);
+                    originalPositions[i*3+1] = positionAttribute.getY(i);
+                    originalPositions[i*3+2] = positionAttribute.getZ(i);
+                }
+            };
+
+            buildVisualizerMesh(); 
+
+            const handleSettingsUpdate = () => {
+                const newShape = localStorage.getItem('psyzx_vis_shape') || 'Icosahedron';
+                let nDet = parseInt(localStorage.getItem('psyzx_vis_detail'));
+                const newDetail = isNaN(nDet) ? 16 : nDet;
+                const newSides = localStorage.getItem('psyzx_vis_sides') || 'Default';
+
+                visMovement = localStorage.getItem('psyzx_vis_movement') || 'Hypnotic';
+                
+                let nY = parseInt(localStorage.getItem('psyzx_vis_ypos'));
+                visYPos = isNaN(nY) ? 11 : nY;
+                
+                let nDim = parseFloat(localStorage.getItem('psyzx_vis_dimension'));
+                visDimension = isNaN(nDim) ? 1.0 : nDim;
+
+                // Update cached loop variables
+                const nSpeed = parseFloat(localStorage.getItem('psyzx_vis_speed'));
+                visSpeed = isNaN(nSpeed) ? 1.0 : nSpeed;
+                const nInt = parseFloat(localStorage.getItem('psyzx_vis_intensity'));
+                visIntensity = isNaN(nInt) ? 1.0 : nInt;
+
+                if (visualizerMesh) {
+                    if (!['Tunnel', 'Synthwave', 'Wormhole'].includes(visShape)) {
+                        visualizerMesh.position.y = visYPos;
+                    }
+                    visualizerMesh.scale.set(visDimension, visDimension, visDimension);
+                }
+
+                if (newShape !== visShape || newDetail !== visDetail || newSides !== visSides) {
+                    visShape = newShape;
+                    visDetail = newDetail;
+                    visSides = newSides;
+                    buildVisualizerMesh();
+                }
+            };
+
+            window.addEventListener('visualizer-update', handleSettingsUpdate);
+
+            const vertex = new THREE.Vector3();
+
+            const handleResize = () => {
+                if (!node || node.clientWidth === 0 || node.clientHeight === 0) return;
+                camera.aspect = node.clientWidth / node.clientHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(node.clientWidth, node.clientHeight);
+            };
+            
+            window.addEventListener('resize', handleResize);
+            const resizeObserver = new ResizeObserver(() => handleResize());
+            resizeObserver.observe(node);
+
+            let time = 0; 
+
+            // Render Loop
+            const animate = () => {
+                visualizerRafId = requestAnimationFrame(animate);
+                time += 0.01;
+                
+                // Using cached memory values instead of localStorage lookups
+                activeSpeedMultiplier = lerp(activeSpeedMultiplier, $isPlaying ? visSpeed : 0.05, 0.05);
+
+                if (visualizerMesh) {
+                    const rawFftData = getFftData();
+                    
+                    if (rawFftData && (!smoothedFftData || smoothedFftData.length !== rawFftData.length)) {
+                        smoothedFftData = new Float32Array(rawFftData.length);
+                    }
+
+                    if (rawFftData && smoothedFftData) {
+                        let totalSum = 0;
+                        let bassSum = 0;
+                        let trebleSum = 0;
+                        const bassCutoff = Math.floor(rawFftData.length * 0.10); 
+                        const trebleStart = Math.floor(rawFftData.length * 0.60); 
+
+                        let rawBassSum = 0;
+                        for (let i = 0; i < bassCutoff; i++) rawBassSum += rawFftData[i];
+                        const rawBass = (rawBassSum / bassCutoff) / 255.0;
+                        const dynamicBass = Math.max(0, rawBass - 0.35) * 1.6;
+
+                        for (let i = 0; i < rawFftData.length; i++) {
+                            const target = $isPlaying ? rawFftData[i] : 0;
+                            const smoothingFactor = $isPlaying ? 0.4 : 0.05; 
+                            smoothedFftData[i] = lerp(smoothedFftData[i], target, smoothingFactor);
+                            
+                            totalSum += smoothedFftData[i];
+                            if (i < bassCutoff) bassSum += smoothedFftData[i];
+                            if (i > trebleStart) trebleSum += smoothedFftData[i];
+                        }
+
+                        const audioIntensity = (totalSum / smoothedFftData.length) / 255.0; 
+                        const trebleIntensity = (trebleSum / (rawFftData.length - trebleStart)) / 255.0;
+
+                        const positions = visualizerMesh.geometry.attributes.position;
+                        
+                        if (visShape === 'Tunnel') {
+                            const targetTunnelSpeed = 0.15 + (dynamicBass * 1.1 * visIntensity);
+                            
+                            if (targetTunnelSpeed > currentTunnelSpeed) {
+                                currentTunnelSpeed = lerp(currentTunnelSpeed, targetTunnelSpeed, 0.8); 
+                            } else {
+                                currentTunnelSpeed = lerp(currentTunnelSpeed, targetTunnelSpeed, 0.05); 
+                            }
+
+                            camera.position.z -= (currentTunnelSpeed * activeSpeedMultiplier);
+                            if (camera.position.z <= -50) camera.position.z += 50; 
+
+                            const targetFov = 75 + (dynamicBass * 45 * visIntensity);
+                            camera.fov = lerp(camera.fov, targetFov, targetFov > camera.fov ? 0.9 : 0.1);
+                            camera.updateProjectionMatrix();
+
+                            for (let i = 0; i < positions.count; i++) {
+                                vertex.set(originalPositions[i*3], originalPositions[i*3+1], originalPositions[i*3+2]);
+                                const binIndex = (i * 2) % smoothedFftData.length; 
+                                const audioValue = (smoothedFftData[binIndex] / 255.0) * visIntensity * 0.1; 
+                                const expand = 1.0 + audioValue; 
+                                positions.setXYZ(i, vertex.x * expand, vertex.y * expand, vertex.z);
+                            }
+                            visualizerMesh.rotation.z += (0.002 * activeSpeedMultiplier);
+
+                        } 
+                        else if (visShape === 'DNA') {
+                            const targetTwist = 0.15 + (dynamicBass * 0.12 * visIntensity);
+                            currentDnaTwist = lerp(currentDnaTwist, targetTwist, targetTwist > currentDnaTwist ? 0.7 : 0.05);
+
+                            for (let i = 0; i < positions.count; i++) {
+                                vertex.set(originalPositions[i*3], originalPositions[i*3+1], originalPositions[i*3+2]);
+                                const theta = vertex.x * currentDnaTwist;
+                                const y = vertex.y * Math.cos(theta) - vertex.z * Math.sin(theta);
+                                const z = vertex.y * Math.sin(theta) + vertex.z * Math.cos(theta);
+
+                                const binIndex = (i * 2) % smoothedFftData.length; 
+                                const audioValue = (smoothedFftData[binIndex] / 255.0) * visIntensity * 0.2; 
+                                const expand = 1.0 + audioValue; 
+                                positions.setXYZ(i, vertex.x, y * expand, z * expand);
+                            }
+                            visualizerMesh.rotation.x += (0.005 * activeSpeedMultiplier);
+
+                        }
+                        else if (visShape === 'Synthwave') {
+                            for (let i = 0; i < positions.count; i++) {
+                                vertex.set(originalPositions[i*3], originalPositions[i*3+1], originalPositions[i*3+2]);
+                                
+                                let movingZ = vertex.z + (time * 50 * activeSpeedMultiplier);
+                                movingZ = movingZ % 200; 
+                                
+                                const binIndex = Math.floor((Math.abs(vertex.x) / 100) * smoothedFftData.length) % smoothedFftData.length;
+                                const audioValue = (smoothedFftData[binIndex] / 255.0) * visIntensity;
+                                
+                                const elevation = audioValue * 20.0;
+                                positions.setXYZ(i, vertex.x, vertex.y, movingZ - 100); 
+                                positions.setY(i, elevation); 
+                            }
+                            
+                            if (visMovement === 'Pulsate') {
+                               visualizerMesh.position.y = -10 + (Math.sin(time*2) * audioIntensity * 5 * visDimension);
+                            }
+
+                        }
+                        else if (visShape === 'Galaxy') {
+                            for (let i = 0; i < positions.count; i++) {
+                                vertex.set(originalPositions[i*3], originalPositions[i*3+1], originalPositions[i*3+2]);
+                                const binIndex = (i * 3) % smoothedFftData.length; 
+                                const audioValue = (smoothedFftData[binIndex] / 255.0) * visIntensity; 
+                                
+                                vertex.multiplyScalar(1.0 + (audioValue * 0.6));
+                                positions.setXYZ(i, vertex.x, vertex.y, vertex.z);
+                            }
+                            visualizerMesh.rotation.y += (0.003 * activeSpeedMultiplier);
+                            if (visMovement === 'Pulsate') {
+                                visualizerMesh.scale.setScalar(visDimension + (audioIntensity * 0.2));
+                            } else {
+                                visualizerMesh.scale.setScalar(visDimension);
+                            }
+                        }
+                        else if (visShape === 'Wormhole') {
+                            const targetFov = 75 + (dynamicBass * 30 * visIntensity);
+                            camera.fov = lerp(camera.fov, targetFov, targetFov > camera.fov ? 0.9 : 0.1);
+                            camera.updateProjectionMatrix();
+
+                            for (let i = 0; i < positions.count; i++) {
+                                vertex.set(originalPositions[i*3], originalPositions[i*3+1], originalPositions[i*3+2]);
+                                const binIndex = (i * 2) % smoothedFftData.length; 
+                                const audioValue = (smoothedFftData[binIndex] / 255.0) * visIntensity * 0.3; 
+                                const expand = 1.0 + audioValue; 
+                                positions.setXYZ(i, vertex.x * expand, vertex.y * expand, vertex.z);
+                            }
+                            visualizerMesh.rotation.z += (0.005 * activeSpeedMultiplier);
+                        }
+                        else if (visShape === 'Fractal') {
+                            for (let i = 0; i < positions.count; i++) {
+                                vertex.set(originalPositions[i*3], originalPositions[i*3+1], originalPositions[i*3+2]);
+                                const len = vertex.length();
+                                vertex.normalize(); 
+                                
+                                const spike = trebleIntensity * visIntensity * 12.0; 
+                                vertex.multiplyScalar(len + spike);
+                                positions.setXYZ(i, vertex.x, vertex.y, vertex.z);
+                            }
+                            visualizerMesh.rotation.y += (0.004 * activeSpeedMultiplier);
+                            if (visMovement === 'Pulsate') visualizerMesh.scale.setScalar(visDimension + (audioIntensity * 0.1));
+                        }
+                        else if (visShape === 'Shell') {
+                            for (let i = 0; i < positions.count; i++) {
+                                vertex.set(originalPositions[i*3], originalPositions[i*3+1], originalPositions[i*3+2]);
+                                const len = vertex.length();
+                                vertex.normalize(); 
+                                
+                                const binIndex = (i * 2) % smoothedFftData.length; 
+                                const audioValue = (smoothedFftData[binIndex] / 255.0) * visIntensity; 
+                                
+                                vertex.x *= (1.0 + audioValue * 0.5);
+                                vertex.z *= (1.0 + audioValue * 0.5);
+                                vertex.multiplyScalar(len);
+
+                                positions.setXYZ(i, vertex.x, vertex.y, vertex.z);
+                            }
+                            visualizerMesh.rotation.y += (0.002 * activeSpeedMultiplier);
+                            visualizerMesh.rotation.x = Math.sin(time) * 0.1; 
+                        }
+                        else {
+                            if (Math.abs(camera.fov - 75) > 0.1) {
+                                camera.fov = lerp(camera.fov, 75, 0.1);
+                                camera.updateProjectionMatrix();
+                            }
+
+                            for (let i = 0; i < positions.count; i++) {
+                                vertex.set(originalPositions[i*3], originalPositions[i*3+1], originalPositions[i*3+2]);
+                                const len = vertex.length();
+                                vertex.normalize(); 
+                                
+                                const binIndex = (i * 2) % smoothedFftData.length; 
+                                const audioValue = (smoothedFftData[binIndex] / 255.0) * visIntensity; 
+                                const displacement = audioValue * 6.0; 
+                                
+                                vertex.multiplyScalar(len + displacement);
+                                positions.setXYZ(i, vertex.x, vertex.y, vertex.z);
+                            }
+
+                            switch (visMovement) {
+                                case 'Hypnotic':
+                                    visualizerMesh.rotation.x += (0.001 * activeSpeedMultiplier);
+                                    visualizerMesh.rotation.y += (0.002 * activeSpeedMultiplier);
+                                    break;
+                                case 'Pulsate':
+                                    const standardScale = 12 * visDimension; 
+                                    const scaleOffset = Math.sin(time * 2) * audioIntensity * standardScale * 0.2; 
+                                    visualizerMesh.scale.setScalar(visDimension + scaleOffset / 12); 
+                                    break;
+                                case 'None':
+                                    visualizerMesh.scale.setScalar(visDimension);
+                                    break;
+                            }
+                        }
+                        
+                        positions.needsUpdate = true;
+
+                    } else if (!$isPlaying && visualizerMesh) {
+                       if (visMovement === 'Pulsate' && !['Tunnel','Wormhole','Synthwave','Galaxy'].includes(visShape)) {
+                           visualizerMesh.scale.setScalar(visDimension);
+                       }
+                       if (camera.fov > 75) {
+                           camera.fov -= 1.0;
+                           camera.updateProjectionMatrix();
+                       }
+                    }
+                }
+
+                renderer.render(scene, camera);
+            };
+            animate();
+
+            cleanup = () => {
+                cancelAnimationFrame(visualizerRafId);
+                window.removeEventListener('resize', handleResize);
+                resizeObserver.disconnect();
+                window.removeEventListener('visualizer-update', handleSettingsUpdate);
+                if (renderer) {
+                    node.removeChild(renderer.domElement);
+                    renderer.dispose();
+                }
+                if (visualizerMesh) {
+                    visualizerMesh.geometry.dispose();
+                    if (visualizerMesh.material) visualizerMesh.material.dispose();
+                }
+            };
+        });
+
+        return {
+            destroy() {
+                isDestroyed = true;
+                cleanup();
+            }
+        };
+    }
+    // ----------------------------------
+
     function handleCoverClick(e) {
         const currentTime = new Date().getTime();
         const tapLength = currentTime - lastTapTime;
@@ -64,12 +574,10 @@
         clearTimeout(tapTimeout);
 
         if (tapLength < 300 && tapLength > 0) {
-            // Double Tap
             lastTapTime = 0; 
             toggleFavorite();
             e.preventDefault();
         } else {
-            // Single Tap
             tapTimeout = setTimeout(() => {
                 coverClick = !coverClick;
             }, 300);
@@ -80,18 +588,13 @@
     async function toggleFavorite() {
         if (!track || !track.id) return;
 
-        // Optimistic UI Update
         isFavorite = !isFavorite;
         showHeartAnim = true;
-        setTimeout(() => {
-            showHeartAnim = false;
-        }, 800);
+        setTimeout(() => { showHeartAnim = false; }, 800);
 
-        // API Call
         if (api.toggleFavorite) {
             const success = await api.toggleFavorite(track.id, isFavorite);
             if (!success) {
-                // Revert if the network request fails
                 isFavorite = !isFavorite;
                 console.error("[API] Failed to toggle favorite status");
             }
@@ -103,9 +606,7 @@
     }
 
     const DEFAULT_PLACEHOLDER = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxIDEiPjxyZWN0IHdpZHRoPSIxIiBoZWlnaHQ9IjEiIGZpbGw9IiMzMzMiLz48L3N2Zz4=';
-    const handleImageError = (ev) => {
-        ev.target.src = DEFAULT_PLACEHOLDER;
-    };
+    const handleImageError = (ev) => { ev.target.src = DEFAULT_PLACEHOLDER; };
 
     $: isMobile = innerWidth <= 768;
 
@@ -138,11 +639,8 @@
         const currentY = e.touches[0].clientY;
         const deltaY = currentY - startY;
         
-        if (deltaY > 0) {
-            dragY = deltaY;
-        } else {
-            dragY = deltaY * 0.25;
-        }
+        if (deltaY > 0) { dragY = deltaY; } 
+        else { dragY = deltaY * 0.25; }
     };
 
     const onTouchEnd = () => {
@@ -182,11 +680,8 @@
     };
 
     $: if (typeof document !== 'undefined') {
-        if (isOpen && isMobile) {
-            document.body.classList.add('modal-open');
-        } else {
-            document.body.classList.remove('modal-open');
-        }
+        if (isOpen && isMobile) { document.body.classList.add('modal-open'); } 
+        else { document.body.classList.remove('modal-open'); }
     }
 
     let wasPlayerElPresent = false;
@@ -207,6 +702,30 @@
                 }
             }
         }
+
+        // --- NEW BUTTERY SMOOTH LOADING BAR LOGIC ---
+        let targetBuffer = 0;
+        
+        if ($isBuffering) {
+            // Organic creeping effect while waiting for audio chunk
+            targetBuffer = Math.min(displayBufferPct + 1.5, 95); 
+        } else if (track && activeDownloads[track] !== undefined) {
+            // Hook into service worker download exact percentage
+            targetBuffer = activeDownloads[track];
+        } else {
+            // Snap to current playtime percentage at minimum
+            targetBuffer = (($playerCurrentTime || 0) / ($playerDuration || 1)) * 100;
+            targetBuffer = Math.max(targetBuffer, displayBufferPct); // Prevent backward jumps
+            if (targetBuffer >= 98.5) targetBuffer = 100; 
+        }
+
+        // Chases 'targetBuffer' with snappy but smooth easing (0.06 like requested)
+        displayBufferPct = lerp(displayBufferPct, targetBuffer, 0.06);
+
+        if (bufferRef) {
+            bufferRef.style.transform = `scaleX(${displayBufferPct / 100})`;
+        }
+        // ---------------------------------------------
 
         if (typeof document !== 'undefined') {
             const appLayout = document.getElementById('app-layout');
@@ -491,6 +1010,10 @@
     $: coverUrl = (album && album.coverPath) 
         ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&v=${$appSessionVersion}` 
         : DEFAULT_PLACEHOLDER;
+    
+    // --- ADDED FOR ARTIST PROFILE CARD ---
+    $: artistImageUrl = (album && album.coverPath) ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&v=${$appSessionVersion}` 
+        : DEFAULT_PLACEHOLDER;  
 </script>
 
 <svelte:window
@@ -500,6 +1023,7 @@
     on:touchmove|nonpassive={onSeekMove}
     on:touchend={onSeekEnd}
     on:keydown={handleGlobalKeyDown}
+    on:visualizer-update={handleGlobalVisUpdate}
 />
 
 {#if isOpen}
@@ -518,6 +1042,11 @@
             class:is-closing={isClosing}
             style="transform: translate3d(0, {dragY}px, 0); pointer-events: auto;"
         >
+            
+            {#if isVisEnabled}
+                <div class="visualizer-bg" use:threeVisualizer></div>
+            {/if}
+
             <div 
                 class="drag-zone" 
                 role="presentation" 
@@ -617,6 +1146,7 @@
                         on:touchstart|nonpassive={onSeekStart}
                     >
                         <div class="fp-progress-track" class:is-buffering={$isBuffering}>
+                            <div class="fp-buffer-bar" bind:this={bufferRef}></div>
                             <div class="fp-progress-bar" bind:this={progressRef}></div>
                         </div>
                     </div>
@@ -698,7 +1228,24 @@
                         {/each}
                     </div>
                 </div>
-            </div>
+
+                <div class="artist-profile-card" on:click={goArtist} role="button" tabindex="0">
+                    {#key artistImageUrl}
+                        <img class="artist-bg-img" src={artistImageUrl} alt="Artist" on:error={handleImageError} />
+                    {/key}
+                    <div class="artist-frosted-overlay">
+                        <span class="artist-name">{album ? album.artistName : 'Unknown Artist'}</span>
+                        <div class="artist-stats-row">
+                            <div class="stats-left">
+                                <span class="artist-stats-text">1,234,567 monthly listeners</span>
+                                <span class="dot">•</span>
+                                <span class="artist-stats-text">{track?.playCount || 0} listens</span>
+                            </div>
+                            <span class="kbps-badge">{track?.bitrate || "???"} kbps</span>
+                        </div>
+                    </div>
+                </div>
+                </div>
 
             {#if showQueue}
             <div class="queue-modal" in:fly={{y: '100%', duration: 400, easing: expoOut}} out:fly={{y: '100%', duration: 300, easing: expoIn}}>
@@ -711,7 +1258,7 @@
                 
                 <div class="queue-list">
                     {#each $currentPlaylist as t, i}
-                        <div class="queue-item" class:active={i === $currentIndex} role="button" tabindex="0" on:click={() => { currentIndex.set(i); /*showQueue = false;*/ }}>
+                        <div class="queue-item" class:active={i === $currentIndex} role="button" tabindex="0" on:click={() => { currentIndex.set(i); }}>
                             <div class="queue-index-col">
                                 {#if i === $currentIndex}
                                     <svg width="16" height="16" viewBox="0 0 24 24" fill="white" stroke="white" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
@@ -773,6 +1320,154 @@
 {/if}
 
 <style>
+   /* --- NEW VISUALIZER STYLES --- */
+    .visualizer-bg {
+        position: absolute;
+        inset: 0;
+        width: 100%; /* Safety fallback for sizing issues */
+        height: 100%;
+        z-index: -1; 
+        pointer-events: none;
+        opacity: 0.6;
+        mix-blend-mode: screen; 
+        border-radius: inherit; 
+        overflow: hidden; 
+        /* Smooth fade out on all edges so it seamlessly blends into the app */
+        -webkit-mask-image: radial-gradient(ellipse at center, rgba(0,0,0,1) 35%, rgba(0,0,0,0) 85%);
+        mask-image: radial-gradient(ellipse at center, rgba(0,0,0,1) 35%, rgba(0,0,0,0) 85%);
+    }
+
+    .drag-zone, .fp-scroll-content {
+        position: relative;
+        z-index: 1; /* Elevate UI above the Three.js canvas */
+    }
+    /* ----------------------------- */
+
+    /* --- ARTIST PROFILE CARD (FIXED FROST & HEIGHT) --- */
+    .artist-profile-card {
+        position: relative;
+        overflow: hidden;    /* Required to clip the -1px overhang */
+        /* 1. INCREASE HEIGHT: Changed from 280px to 350px (adjust as needed) */
+        height: 350px; 
+        border-radius: 28px;
+        overflow: hidden;
+        margin-top: 24px;
+        flex-shrink: 0;
+        cursor: pointer;
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4), inset 0 1px 1px rgba(255, 255, 255, 0.1);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        background: #111;
+        transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+        -webkit-transform: translateZ(0);
+        isolation: isolate;
+        
+        /* 2. OPTIONAL: Ensure the card itself stretches to its container width */
+        width: 100%; 
+    }
+
+    .artist-bg-img {
+        /* 3. FULL COVERAGE: This ensures the image fills 100% of the card 
+        regardless of the image's original aspect ratio */
+        width: 100%;
+        height: 100%;
+        object-fit: cover; 
+        
+        position: absolute;
+        top: 0; 
+        left: 0;
+        z-index: 0;
+        
+        /* Keeping your zoom effect */
+        transform: scale(1.05);
+        /* Ensure the transform centers properly */
+        transform-origin: center; 
+    }
+
+    .artist-frosted-overlay {
+        position: absolute;
+        /* 1. THE OVERHANG: Move it 1px outside the left and bottom edges */
+        left: -1px;
+        bottom: -1px;
+        /* 2. CALC WIDTH: Make it 2px wider to cover both left and right edges */
+        width: calc(100% + 2px);
+        height: 35%; 
+        
+        box-sizing: border-box; 
+        
+        background: linear-gradient(
+            to bottom, 
+            rgba(255, 255, 255, 0.15) 0%, 
+            rgba(0, 0, 0, 0.85) 100%
+        );
+
+        /* 3. RADIUS MATCH: Match the parent card's radius exactly */
+        border-bottom-left-radius: 26px;
+        border-bottom-right-radius: 26px;
+
+        /* 4. REMOVE ALL BORDERS: Explicitly stripping them */
+        border: none !important;
+
+        /* 5. BLUR EFFECT */
+        backdrop-filter: blur(15px) saturate(160%);
+        -webkit-backdrop-filter: blur(15px) saturate(160%);
+        
+        z-index: 1;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        padding: 0 24px;
+        overflow: hidden; 
+    }
+
+    .artist-name {
+        font-size: 26px;
+        font-weight: 900;
+        color: white;
+        margin-bottom: 6px;
+        text-shadow: 0 2px 15px rgba(0,0,0,0.5);
+        letter-spacing: -0.5px;
+    }
+
+    .artist-stats-row {
+        display: flex;
+        justify-content: space-between; /* Pushes kbps to the right */
+        align-items: center;
+        width: 100%;
+    }
+
+    .stats-left {
+        display: flex;
+        align-items: center;
+        gap: 2px;
+    }
+
+    .artist-stats-text {
+        font-size: 10px;
+        color: rgba(255, 255, 255, 0.8);
+        font-weight: 600;
+        white-space: nowrap;
+    }
+
+    .dot {
+        margin: 0 6px;
+        color: rgba(255, 255, 255, 0.4);
+        font-size: 14px;
+    }
+
+    .kbps-badge {
+        background: rgba(255, 255, 255, 0.5);
+        padding: 4px 10px;
+        margin-left: 10px;
+        border-radius: 8px;
+        font-size: 8px;
+        font-family: 'JetBrains Mono', monospace; /* Modern tech look */
+        font-weight: 800;
+        color: var(--accent-color, #fff);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        text-transform: uppercase;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+    }
+
     .heart-anim-overlay {
         position: absolute;
         display: flex;
@@ -819,6 +1514,12 @@
                     var(--accent-color) !important;
         backdrop-filter: blur(50px) saturate(210%) brightness(1.1) !important;
         -webkit-backdrop-filter: blur(50px) saturate(210%) brightness(1.1) !important;
+
+        /* FIX: Prevents text and UI highlighting on repeated fast clicks */
+        user-select: none;
+        -webkit-user-select: none;
+        -moz-user-select: none;
+        -ms-user-select: none;
     }
 
     #full-player.is-dragging { transition: none !important; }
@@ -902,6 +1603,7 @@
         background: rgba(15, 15, 15, 0.95);
         backdrop-filter: blur(40px); -webkit-backdrop-filter: blur(40px);
         display: flex; flex-direction: column; border-radius: inherit;
+        width: 100%;
     }
     .queue-header { padding: 32px 24px 16px 24px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.05); }
     .queue-title { margin: 0; font-size: 18px; color: white; font-weight: 800; letter-spacing: -0.5px; }
@@ -1056,6 +1758,27 @@
         transition: height 0.3s cubic-bezier(0.32, 0.72, 0, 1), background 0.2s !important; transform: translateZ(0); 
     }
     .fp-progress-container:hover .fp-progress-track { height: 40% !important; background: rgba(255,255,255,0.2) !important; }
+    
+    /* NEW: Styled smooth buffer bar */
+    .fp-buffer-bar {
+        position: absolute;
+        top: 0; left: 0;
+        height: 100%; width: 100%;
+        background: rgba(255, 255, 255, 0.35); /* Visible under the main progress bar */
+        transform-origin: left;
+        will-change: transform;
+        transform: scaleX(0);
+        z-index: 0;
+    }
+
+    .fp-progress-bar {
+        position: relative; /* Elevated above buffer bar */
+        z-index: 1;
+        height: 100%; width: 100% !important; background: white !important;
+        transform-origin: left; will-change: transform; transform: translateZ(0) scaleX(0);
+        transition: background 0.2s;
+    }
+
     .fp-progress-bar {
         height: 100%; width: 100% !important; background: white !important;
         transform-origin: left; will-change: transform; transform: translateZ(0) scaleX(0);

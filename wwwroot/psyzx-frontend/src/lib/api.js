@@ -197,13 +197,18 @@ export const api = {
     },
 
     async toggleFavorite(trackId, isFavorite) {
-        try {
+    try {
+            // Use the new endpoints we just created
+            const endpoint = isFavorite ? '/Playlists/add-by-name' : '/Playlists/remove-by-name';
             const method = isFavorite ? 'POST' : 'DELETE';
-            const res = await this.fetchWithTimeout(`/Playlists/1/tracks`, {
+
+            const res = await this.fetchWithTimeout(endpoint, {
                 method: method,
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ trackId })
+                // Pass "Favorites" as the name here
+                body: JSON.stringify({ trackId, playlistName: 'Favorites' })
             });
+            
             return res.ok;
         } catch (err) {
             console.error("[API] Failed to update favorite status", err);

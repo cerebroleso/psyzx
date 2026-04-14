@@ -4,13 +4,13 @@
     currentPlaylist, currentIndex, isPlaying, isShuffle, isRepeat,
     shuffleHistory, albumsMap, playerCurrentTime, playerDuration,
     accentColor, isMaxGlassActive, isDesktopSwapActive, appSessionVersion,
-    isBuffering, globalBitrate, globalFileExt,
+    isBuffering, globalBitrate, globalFileExt
   } from '../store.js';
   import {
     audioCtx, updateMediaSession, registerAudioElements, setVolumeBoost,
     unlockAudioContext, updateMediaPositionState, isEngineInitialized,
     togglePlayGlobal, playNextGlobal, playPrevGlobal,
-    loadAndPlayUrl, activePlayer, preloadNextUrl
+    loadAndPlayUrl, activePlayer, preloadNextUrl, setGlobalVolume
   } from './audio.js';
   
   // NEW IMPORTS FOR AUDIO ROUTING
@@ -55,9 +55,8 @@
   $: globalBitrate.set(bitrate);
   $: globalFileExt.set(fileExt);
 
-  $: {
-    if (audioElA) audioElA.volume = volume / 100;
-    if (audioElB) audioElB.volume = volume / 100;
+  $: if (isEngineInitialized) {
+      setGlobalVolume(volume);
   }
 
   $: if (track && album) {
@@ -573,7 +572,7 @@
   }
 
   .volume-slider {
-    -webkit-appearance: none; appearance: none; width: 100%; height: 100%;
+    -webkit-appearance: none; appearance: none; width: 100%; height: 100%; 
     background: linear-gradient(to right, var(--accent-color) 0%, var(--accent-color) var(--val), rgba(255, 255, 255, 0.05) var(--val));
     border-radius: 20px; outline: none; cursor: pointer; position: relative; z-index: 2;
   }
@@ -582,8 +581,18 @@
     -webkit-appearance: none; appearance: none; width: 16px; height: 16px; border-radius: 50%;
     background: radial-gradient(circle at center, #000 24%, transparent 25%), radial-gradient(circle at center, #333 26%, transparent 32%), var(--metal-shine), linear-gradient(135deg, #fff 0%, #666 100%);
     background-position: center; background-repeat: no-repeat; border: 1px solid #111;
-    box-shadow: 0 4px 8px rgba(0,0,0,0.7), inset 0 1px 1px rgba(255,255,255,0.8); transition: transform 0.1s ease;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.7), inset 0 1px 1px rgba(255,255,255,0.8);
+    transition: transform 0.1s ease; z-index: 20;
   }
+
+  .volume-slider::-moz-range-thumb {
+    width: 16px; height: 16px; border-radius: 50%;
+    background: var(--metal-shine); border: 1px solid #111;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.7);
+  }
+
+  .volume-slider:active::-webkit-slider-thumb { transform: scale(1.1); filter: brightness(1.1); }
+  .volume-slider:hover { height: 8px; }
 
   .btn-icon-main {
     width: 44px; height: 44px; border-radius: 50%; border: none; background: white; color: black; display: flex; align-items: center; justify-content: center; cursor: pointer; margin: 0 8px; flex-shrink: 0; position: relative; z-index: 1;
