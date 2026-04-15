@@ -2,7 +2,7 @@
     import { onMount } from 'svelte';
     import { fade } from 'svelte/transition';
     import { api } from '../api.js';
-    import { currentPlaylist, currentIndex, isPlaying, isShuffle, isRepeat, shuffleHistory, isGlobalColorActive, isMaxGlassActive } from '../../store.js';
+    import { currentPlaylist, currentIndex, isPlaying, isShuffle, isRepeat, shuffleHistory, isGlobalColorActive, isMaxGlassActive, isLowQualityImages } from '../../store.js';
     import { formatTime } from '../utils.js';
 
     export let playlistId;
@@ -168,7 +168,11 @@
                     <div class="list-item-content" role="button" tabindex="0" use:swipeToQueue={track} on:click={() => playSpecificTrack(index)} on:keydown={(e) => e.key === 'Enter' && playSpecificTrack(index)}>
                         <div class="list-item-num">{index + 1}</div>
                         <div style="min-width: 0; display: flex; align-items: center; gap: 16px; flex-grow: 1;">
-                            <img src={`/api/Tracks/image?path=${encodeURIComponent(track.album?.coverPath || '')}`} alt="cover" class="tiny-cover" />
+                            <img 
+                                src={`/api/Tracks/image?path=${encodeURIComponent(track.album?.coverPath)}&quality=${$isLowQualityImages ? 'low' : 'high'}`} 
+                                alt="Cover" 
+                                loading="lazy" 
+                            />
                             <div style="min-width: 0;">
                                 <div class="list-item-title">{track.title}</div>
                                 <div class="list-item-artist">{track.album?.artist?.name || 'Unknown Artist'}</div>

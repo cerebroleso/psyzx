@@ -1,7 +1,7 @@
 <script>
     import { get } from 'svelte/store';
     import { fade, scale } from 'svelte/transition';
-    import { albumsMap, currentPlaylist, currentIndex, isPlaying, isShuffle, isRepeat, shuffleHistory, accentColor, isGlobalColorActive, isMaxGlassActive, appSessionVersion } from '../../store.js';
+    import { albumsMap, currentPlaylist, currentIndex, isPlaying, isShuffle, isRepeat, shuffleHistory, accentColor, isGlobalColorActive, isMaxGlassActive, appSessionVersion, isLowQualityImages } from '../../store.js';
     import { formatTime } from '../utils.js';
     import { api } from '../api.js';
     
@@ -33,8 +33,10 @@
     $: totalAlbumPlays = tracks.reduce((sum, t) => sum + (t.playCount || 0), 0);
     $: maxPlay = Math.max(...tracks.map(t => t.playCount || 0));
     
-    $: coverUrl = (album && album.coverPath) ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&v=${$appSessionVersion}` 
+    $: coverUrl = (album && album.coverPath) 
+    ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&v=${$appSessionVersion}&quality=${$isLowQualityImages ? 'low' : 'high'}` 
     : DEFAULT_PLACEHOLDER;    
+    
     $: avgBitrate = tracks.length > 0 ? Math.round(tracks.reduce((s, t) => s + (t.bitrate||0), 0) / tracks.length) : 0;
     
     $: isPlayingAlbum = $isPlaying && $currentPlaylist.some(t => tracks.find(pt => pt.id === t.id));
@@ -320,8 +322,11 @@
     <div class="album-header-block">
         <div class="album-hero">
             <div class="cover-wrapper">
-                <img src={coverUrl} alt="Album Cover" style="width: 232px; height: 232px; object-fit: cover;"
-                on:error={handleImageError}
+                <img 
+                    src={coverUrl} 
+                    alt="Cover" 
+                    loading="lazy" 
+                    on:error={handleImageError}
                 />
             </div>
             <div class="album-info">
@@ -518,6 +523,23 @@
 </div>
 
 <style>
+    /* Base Desktop Styles for the Cover */
+    .cover-wrapper {
+        width: 232px; /* Matches your Artist wrapper size for consistency */
+        height: 232px;
+        flex-shrink: 0; /* Prevents the image from being squeezed by text */
+        border-radius: 12px;
+        overflow: hidden;
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+        background: #222; /* Placeholder color while loading */
+    }
+
+    .cover-wrapper img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover; /* Ensures the image fills the square without stretching */
+        display: block;
+    }
     .view-wrapper { position: relative; min-height: 100%; }
     .fade-bg-dynamic { position: absolute; top: 0; left: 0; width: 100%; height: 400px; -webkit-mask-image: linear-gradient(to bottom, rgba(0,0,0,1) 0%, rgba(0,0,0,0) 100%); mask-image: linear-gradient(to bottom, rgba(0,0,0,1) 0%, rgba(0,0,0,0) 100%); opacity: 0.35; z-index: 0; pointer-events: none; transition: background-color 0.8s ease-in-out; border-top-left-radius: 24px; border-top-right-radius: 24px;}
     .album-header-block { display: flex; flex-direction: column; gap: 0; margin-bottom: 24px; background: rgba(255, 255, 255, 0.03); backdrop-filter: blur(32px) saturate(150%); -webkit-backdrop-filter: blur(32px) saturate(150%); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 24px; padding: 20px; box-shadow: 0 8px 32px rgba(0,0,0,0.2), inset 1px 1px 0 rgba(255,255,255,0.05); will-change: transform, backdrop-filter;}
@@ -559,62 +581,67 @@
     }
 
     @media (max-width: 768px) {
-    /* 1. Tighten the main card padding (Bottom is now 8px instead of 20px) */
+        /* 1. Tighten the main card padding */
         .album-header-block {
-            padding: 16px 12px 8px 12px !important;
+            padding: 16px 12px 12px 12px !important;
             margin-bottom: 16px !important;
         }
 
         .album-hero { 
             flex-direction: column; 
             align-items: center; 
-            gap: 16px; /* Reduced from 16px */
+            gap: 20px; 
             text-align: center; 
         } 
 
-        /* 2. Reduce the gap between text info and action buttons */
-        .header-separator {
-            margin: 0px 0 !important; /* Reduced from 16px */
+        /* FIX: Resize the WRAPPER, not just the image */
+        .cover-wrapper {
+            width: 200px !important;  /* Increased from 180 for better visibility */
+            height: 200px !important;
+            margin: 0 auto;           /* Forces horizontal centering */
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.5); /* Slightly smaller shadow for mobile */
         }
 
-        /* 3. Ensure the action bar itself doesn't push the bottom away */
-        .action-bar { 
-            justify-content: left; 
-            flex-wrap: wrap; 
-            gap: 24px !important; /* Tighter button spacing */
-            margin-bottom: 4px !important; 
-        } 
-
-        /* Optional: Shrink the cover size slightly to give text more room */
-        .album-hero .cover-wrapper img {
-            width: 180px !important;
-            height: 180px !important;
+        /* Ensure image fills the new wrapper size */
+        .cover-wrapper img {
+            width: 100% !important;
+            height: 100% !important;
         }
 
         .album-info { 
+            width: 100%;
+            display: flex;
+            flex-direction: column;
             align-items: center; 
             text-align: center; 
         } 
 
-        /* Existing font size fixes */
-        .album-info-text, .duration-highlight, .kbps-badge-inline {
-            font-size: 7px;
+        /* 2. Fix the separator and meta text */
+        .header-separator {
+            margin: 12px 0 !important; 
         }
+
+        /* Boost font size slightly - 7px was likely too small to read */
+        .album-info-text, .duration-highlight {
+            font-size: 12px;
+        }
+        
+        .album-title {
+            font-size: 24px;
+            margin-bottom: 4px;
+        }
+
+        /* 3. Action bar alignment */
+        .action-bar { 
+            justify-content: center; /* Center buttons on mobile */
+            gap: 20px !important; 
+            margin-top: 8px;
+        } 
 
         .list-item-title {
             padding-right: 12px;
-            font-size: 12px;
+            font-size: 14px;
         }
-
-        .list-item-time {
-            font-size: 10px;
-        }
-
-        .btn-add-playlist {
-            margin-left: -16px;
-            margin-right: -2px;
-        }
-
     }
 
     .modal-backdrop {

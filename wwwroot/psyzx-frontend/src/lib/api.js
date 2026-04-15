@@ -14,6 +14,191 @@ const triggerMetadataSweep = (tracks) => {
     }
 };
 
+const LYRICS_CACHE_KEY = 'psyzx_lyrics_cache';
+const MAX_LYRICS_CACHE = 200;
+
+const getCachedLyrics = (trackId) => {
+    try {
+        const cache = JSON.parse(localStorage.getItem(LYRICS_CACHE_KEY)) || {};
+        if (cache[trackId]) {
+            cache[trackId].ts = Date.now(); // Update timestamp on use (LRU logic)
+            localStorage.setItem(LYRICS_CACHE_KEY, JSON.stringify(cache));
+            return cache[trackId].data;
+        }
+    } catch (e) { console.warn("Lyrics cache read error", e); }
+    return null;
+};
+
+const setCachedLyrics = (trackId, lyricsData) => {
+    try {
+        let cache = JSON.parse(localStorage.getItem(LYRICS_CACHE_KEY)) || {};
+        cache[trackId] = { ts: Date.now(), data: lyricsData };
+
+        let keys = Object.keys(cache);
+        if (keys.length > MAX_LYRICS_CACHE) {
+            // Sort by oldest timestamp
+            keys.sort((a, b) => cache[a].ts - cache[b].ts);
+            // Evict oldest until we hit the max limit
+            while (keys.length > MAX_LYRICS_CACHE) {
+                delete cache[keys.shift()];
+            }
+        }
+        localStorage.setItem(LYRICS_CACHE_KEY, JSON.stringify(cache));
+    } catch (e) { console.warn("Lyrics cache write error", e); }
+};
+
+// Helper to clean song titles for better search results
+const cleanSongString = (input) => {
+    if (!input) return "";
+    return input.replace(/(\s-\sremastered.*|\s-\sradio edit|\s\(feat\..*|\s\[.*\]|\s\(.*version\))/gi, "").trim();
+};
+
+// LRC Parser logic to convert raw text into your { t: 0, text: "Lyric" } format
+const parseLRC = (lrcText) => {
+    if (!lrcText) return null;
+    const lines = lrcText.split('\n');
+    const parsedLyrics = [];
+    const timeRegex = /\[(\d+):(\d+(?:\.\d+)?)\]/;
+
+    for (const line of lines) {
+        const match = timeRegex.exec(line);
+        if (match) {
+            const minutes = parseFloat(match[1]);
+            const seconds = parseFloat(match[2]);
+            const cleanText = line.replace(timeRegex, "").trim();
+            if (cleanText) {
+                parsedLyrics.push({ t: (minutes * 60) + seconds, text: cleanText });
+            }
+        }
+    }
+    return parsedLyrics.length > 0 ? parsedLyrics : null;
+};
+
+/**
+ * Helper to fetch with a strict timeout.
+ * Prevents dead/hanging APIs from stalling the waterfall.
+ */
+const fetchWithTimeout = async (url, options = {}, timeoutMs = 4000) => {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const response = await fetch(url, { ...options, signal: controller.signal });
+        clearTimeout(id);
+        return response;
+    } catch (error) {
+        clearTimeout(id);
+        throw error;
+    }
+};
+
+export const fetchLyricsOnFrontend = async (trackId, artist, title) => {
+    if (!trackId || !artist || !title) throw new Error("Missing required track metadata.");
+
+    // 1. Check Cache First
+    const cached = getCachedLyrics(trackId);
+    if (cached) return cached;
+
+    const cleanArtist = cleanSongString(artist);
+    const cleanTitle = cleanSongString(title);
+    const query = encodeURIComponent(`${cleanArtist} ${cleanTitle}`);
+    
+    let lyricsText = null;
+    let isSynced = false;
+
+    // --- The Waterfall Array ---
+    // Ranked from most reliable/useful to least.
+    const mirrors = [
+        // 1. LRCLIB (The Gold Standard)
+        // Why it's #1: Lightning fast, open, and provides perfectly synced LRC data.
+        async () => {
+            const res = await fetchWithTimeout(`https://lrclib.net/api/search?q=${query}`);
+            if (!res.ok) return null;
+            const data = await res.json();
+            const track = data.find(i => i.syncedLyrics) || data.find(i => i.plainLyrics);
+            if (track?.syncedLyrics) isSynced = true;
+            return track?.syncedLyrics || track?.plainLyrics || null;
+        },
+
+        // 2. Genius (via some-random-api proxy)
+        // Why it's #2: Genius has the largest catalog of plain lyrics on earth. 
+        // Note: We use a scraper proxy because official Genius API blocks frontend CORS and lacks raw text.
+        async () => {
+            const res = await fetchWithTimeout(`https://some-random-api.com/lyrics?title=${query}`);
+            if (!res.ok) return null;
+            const data = await res.json();
+            return data?.lyrics || null;
+        },
+
+        // 3. Lyrics.ovh 
+        // Why it's #3: The oldest reliable fallback for plain lyrics. Strict URL structure.
+        async () => {
+            const res = await fetchWithTimeout(`https://api.lyrics.ovh/v1/${encodeURIComponent(cleanArtist)}/${encodeURIComponent(cleanTitle)}`);
+            if (!res.ok) return null;
+            const data = await res.json();
+            return data?.lyrics || null;
+        },
+
+        // 4. Lyrist
+        // Why it's #4: A modern Vercel-hosted wrapper that scrapes multiple smaller sources.
+        async () => {
+            const res = await fetchWithTimeout(`https://lyrist.vercel.app/api/${query}`);
+            if (!res.ok) return null;
+            const data = await res.json();
+            return data?.lyrics || null;
+        },
+
+        // 5. Popcat API
+        // Why it's #5: Often goes down or rate-limits heavily, but good as a last resort.
+        async () => {
+            const res = await fetchWithTimeout(`https://api.popcat.xyz/lyrics?song=${query}`);
+            if (!res.ok) return null;
+            const data = await res.json();
+            return data?.lyrics || null;
+        }
+    ];
+
+    // --- Execute Waterfall ---
+    for (const fetchMirror of mirrors) {
+        try {
+            lyricsText = await fetchMirror();
+            // If we found valid text, break out of the loop immediately
+            if (lyricsText && typeof lyricsText === 'string' && lyricsText.trim().length > 0) {
+                break;
+            }
+        } catch (e) {
+            // Silently swallow fetch timeouts, CORS errors, or JSON parse errors 
+            // and seamlessly move to the next mirror.
+            console.warn("Lyrics mirror failed, trying next...");
+        }
+    }
+
+    // --- Parse and Format ---
+    if (lyricsText) {
+        let finalLyrics = null;
+
+        // Only try to parse as LRC if it actually came from LRCLIB as synced
+        if (isSynced && typeof parseLRC === 'function') {
+            finalLyrics = parseLRC(lyricsText);
+        }
+
+        // Fallback for Plain Lyrics (Genius, OVH, Lyrist, Popcat)
+        if (!finalLyrics || finalLyrics.length === 0) {
+            const lines = lyricsText.split('\n').filter(l => l.trim().length > 0);
+            // Simulating timestamps for plain text (3 seconds per line)
+            finalLyrics = lines.map((l, i) => ({ t: i * 3, text: l.trim() }));
+        }
+        
+        // 2. Save result to Cache
+        if (typeof setCachedLyrics === 'function') {
+            setCachedLyrics(trackId, finalLyrics);
+        }
+        
+        return finalLyrics;
+    }
+
+    throw new Error("Lyrics not found across all mirrors.");
+};
+
 export const api = {
     baseUrl: '/api',
 

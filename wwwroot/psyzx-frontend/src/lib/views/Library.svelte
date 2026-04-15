@@ -301,7 +301,7 @@
 </div>
 
 <div class="controls-bar">
-    <div class="search-wrapper">
+    <!-- <div class="search-wrapper">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="11" cy="11" r="8"></circle>
             <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
@@ -311,7 +311,7 @@
             bind:value={searchQuery} 
             placeholder="Filter library..." 
         />
-    </div>
+    </div> -->
     
     <div class="sort-wrapper">
         <select class="sort-select" bind:value={activeSort}>

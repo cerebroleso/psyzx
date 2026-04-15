@@ -72,7 +72,6 @@ Properties/
 Services/
   LibraryScanner.cs
   LoudnessNormalization.cs
-  LyricsDownloader.cs
 wwwroot/
   psyzx-frontend/
     public/
@@ -1485,154 +1484,6 @@ public class User
 //         return null;
 //     }
 // }
-</file>
-
-<file path="Services/LyricsDownloader.cs">
-namespace psyzx.Services;
-
-using System;
-using System.IO;
-using System.Net.Http;
-using System.Text.Json;
-using System.Text.RegularExpressions;
-using System.Threading.Tasks;
-using Microsoft.Extensions.Configuration;
-using psyzx.Models;
-
-public class LyricsDownloader
-{
-    private readonly HttpClient _httpClient;
-    private readonly string _basePath;
-
-    public LyricsDownloader(IConfiguration config)
-    {
-        _httpClient = new HttpClient();
-        _httpClient.DefaultRequestHeaders.Add("User-Agent", "psyzx-server/3.0");
-        _basePath = config["MusicSettings:BasePath"] ?? "";
-    }
-
-    public async Task DownloadLyricsForTrackAsync(Track track)
-    {
-        if (string.IsNullOrWhiteSpace(_basePath) || string.IsNullOrWhiteSpace(track.FilePath)) return;
-
-        var relativeAudioDir = Path.GetDirectoryName(track.FilePath) ?? "";
-        var fileNameWithoutExt = Path.GetFileNameWithoutExtension(track.FilePath);
-        
-        var lrcDir = Path.Combine(_basePath, "lrc", relativeAudioDir);
-        var lrcPath = Path.Combine(lrcDir, $"{fileNameWithoutExt}.lrc");
-
-        if (File.Exists(lrcPath))
-        {
-            Console.WriteLine($"[Lyrics] SKIPPED (Already exists) -> {fileNameWithoutExt}");
-            return;
-        }
-
-        var cleanTrackName = CleanTitle(track.Title ?? "");
-        var artistName = track.Album?.Artist?.Name ?? "";
-
-        Console.WriteLine($"[Lyrics] SEARCHING -> {artistName} - {cleanTrackName}");
-
-        string? fetchedLyrics = null;
-
-        fetchedLyrics = await FetchFromLrcLibSearch(artistName, cleanTrackName);
-
-        if (string.IsNullOrEmpty(fetchedLyrics))
-        {
-            fetchedLyrics = await FetchFromLyricsOvh(artistName, cleanTrackName);
-        }
-
-        if (!string.IsNullOrEmpty(fetchedLyrics))
-        {
-            if (!Directory.Exists(lrcDir))
-            {
-                Directory.CreateDirectory(lrcDir);
-            }
-            await File.WriteAllTextAsync(lrcPath, fetchedLyrics);
-            Console.WriteLine($"[Lyrics] SUCCESS! Saved -> {lrcPath}");
-        }
-        else
-        {
-            Console.WriteLine($"[Lyrics] FAILED (Not found anywhere) -> {fileNameWithoutExt}");
-        }
-    }
-
-    private string CleanTitle(string title)
-    {
-        if (string.IsNullOrWhiteSpace(title)) return "";
-        string clean = Regex.Replace(title, @"^\d+[\.\-\s]+", "");
-        clean = Regex.Replace(clean, @"\s*[\(\[].*?(feat|ft\.|remaster|mix|edit).*?[\)\]]", "", RegexOptions.IgnoreCase);
-        return clean.Trim();
-    }
-
-    private async Task<string?> FetchFromLrcLibSearch(string artistName, string trackName)
-    {
-        try
-        {
-            Console.WriteLine("  -> Querying LRCLIB Search API...");
-            var query = Uri.EscapeDataString($"{artistName} {trackName}");
-            var url = $"https://lrclib.net/api/search?q={query}";
-            
-            var response = await _httpClient.GetAsync(url);
-            if (response.IsSuccessStatusCode)
-            {
-                var json = await response.Content.ReadAsStringAsync();
-                using var doc = JsonDocument.Parse(json);
-                
-                if (doc.RootElement.ValueKind == JsonValueKind.Array && doc.RootElement.GetArrayLength() > 0)
-                {
-                    foreach (var item in doc.RootElement.EnumerateArray())
-                    {
-                        if (item.TryGetProperty("syncedLyrics", out var synced) && 
-                            synced.ValueKind == JsonValueKind.String && 
-                            !string.IsNullOrWhiteSpace(synced.GetString()))
-                        {
-                            return synced.GetString();
-                        }
-                    }
-
-                    foreach (var item in doc.RootElement.EnumerateArray())
-                    {
-                        if (item.TryGetProperty("plainLyrics", out var plain) && 
-                            plain.ValueKind == JsonValueKind.String && 
-                            !string.IsNullOrWhiteSpace(plain.GetString()))
-                        {
-                            return plain.GetString();
-                        }
-                    }
-                }
-            }
-        }
-        catch { }
-        return null;
-    }
-
-    private async Task<string?> FetchFromLyricsOvh(string artistName, string trackName)
-    {
-        try
-        {
-            Console.WriteLine("  -> Querying Lyrics.ovh API...");
-            var artist = Uri.EscapeDataString(artistName);
-            var title = Uri.EscapeDataString(trackName);
-
-            var url = $"https://api.lyrics.ovh/v1/{artist}/{title}";
-            
-            var response = await _httpClient.GetAsync(url);
-            if (response.IsSuccessStatusCode)
-            {
-                var json = await response.Content.ReadAsStringAsync();
-                using var doc = JsonDocument.Parse(json);
-                
-                if (doc.RootElement.TryGetProperty("lyrics", out var lyricsEl) && lyricsEl.ValueKind == JsonValueKind.String)
-                {
-                    var text = lyricsEl.GetString();
-                    if (!string.IsNullOrWhiteSpace(text)) return text; 
-                }
-            }
-        }
-        catch { }
-        return null;
-    }
-}
 </file>
 
 <file path="wwwroot/psyzx-frontend/public/favicon.svg">
@@ -4933,30 +4784,6 @@ export const stopScrubEffect = () => {
 </html>
 </file>
 
-<file path="wwwroot/psyzx-frontend/package.json">
-{
-  "name": "psyzx-frontend",
-  "private": true,
-  "version": "0.0.0",
-  "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
-  },
-  "devDependencies": {
-    "@sveltejs/vite-plugin-svelte": "^7.0.0",
-    "@vitejs/plugin-basic-ssl": "^2.3.0",
-    "svelte": "^5.53.12",
-    "vite": "^8.0.1"
-  },
-  "dependencies": {
-    "@microsoft/signalr": "^10.0.0",
-    "three": "^0.183.2"
-  }
-}
-</file>
-
 <file path=".gitignore">
 bin/
 obj/
@@ -5527,285 +5354,6 @@ public class MergeAlbumRequest
 {
     public int SourceAlbumId { get; set; }
     public int TargetAlbumId { get; set; }
-}
-</file>
-
-<file path="Controllers/PlaylistController.cs">
-using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
-using psyzx.Data;
-using psyzx.Models;
-using System.Security.Claims;
-using System.Linq;
-
-namespace psyzx.Controllers;
-
-[Authorize]
-[ApiController]
-[Route("api/[controller]")]
-public class PlaylistsController : ControllerBase
-{
-    private readonly AppDbContext _db;
-
-    public PlaylistsController(AppDbContext db)
-    {
-        _db = db;
-    }
-
-    private int GetCurrentUserId()
-    {
-        var idClaim = User.FindFirstValue(ClaimTypes.NameIdentifier);
-        return int.Parse(idClaim ?? "0");
-    }
-
-    [HttpGet]
-    public async Task<IActionResult> GetMyPlaylists()
-    {
-        var userId = GetCurrentUserId();
-
-        var playlistData = await _db.Playlists
-            .AsNoTracking()
-            .Where(p => p.UserId == userId)
-            .Select(p => new {
-                id = p.Id,
-                name = p.Name,
-                trackCount = p.PlaylistTracks.Count,
-                allCovers = p.PlaylistTracks.Select(pt => pt.Track.Album.CoverPath)
-            })
-            .ToListAsync();
-
-        var result = playlistData.Select(p => new {
-            id = p.id,
-            name = p.name,
-            trackCount = p.trackCount,
-            covers = p.allCovers
-                .Where(c => !string.IsNullOrEmpty(c))
-                .Distinct()
-                .Take(4)
-                .ToList()
-        });
-
-        return Ok(result);
-    }
-
-    [HttpPost]
-    public async Task<IActionResult> CreatePlaylist([FromBody] CreatePlaylistDto dto)
-    {
-        if (string.IsNullOrWhiteSpace(dto.Name)) return BadRequest();
-
-        var userId = GetCurrentUserId();
-        var playlist = new Playlist 
-        { 
-            Name = dto.Name.Trim(), 
-            UserId = userId 
-        };
-
-        _db.Playlists.Add(playlist);
-        await _db.SaveChangesAsync();
-
-        return Ok(new { id = playlist.Id, name = playlist.Name, trackCount = 0, covers = new List<string>() });
-    }
-
-    [HttpPost("{id}/tracks")]
-    public async Task<IActionResult> AddTrack(int id, [FromBody] AddTrackDto dto)
-    {
-        var userId = GetCurrentUserId();
-        
-        var playlist = await _db.Playlists.FirstOrDefaultAsync(p => p.Id == id && p.UserId == userId);
-        if (playlist == null) return NotFound();
-
-        var trackExists = await _db.Tracks.AnyAsync(t => t.Id == dto.TrackId);
-        if (!trackExists) return NotFound();
-
-        // --- ADD THIS CHECK ---
-        var alreadyExists = await _db.PlaylistTracks
-            .AnyAsync(pt => pt.PlaylistId == id && pt.TrackId == dto.TrackId);
-
-        if (alreadyExists) 
-        {
-            // It's already in the playlist, so we just return success.
-            return Ok(); 
-        }
-        // ----------------------
-
-        var playlistTrack = new PlaylistTrack
-        {
-            PlaylistId = id,
-            TrackId = dto.TrackId
-        };
-
-        _db.PlaylistTracks.Add(playlistTrack);
-        await _db.SaveChangesAsync();
-
-        return Ok();
-    }
-
-    [HttpDelete("{id}/tracks")]
-    public async Task<IActionResult> RemoveTrack(int id, [FromBody] AddTrackDto dto)
-    {
-        var userId = GetCurrentUserId();
-        
-        // Ensure the playlist belongs to the user
-        var playlist = await _db.Playlists.FirstOrDefaultAsync(p => p.Id == id && p.UserId == userId);
-        if (playlist == null) return NotFound();
-
-        // Find the link between the playlist and the track
-        var playlistTrack = await _db.PlaylistTracks
-            .FirstOrDefaultAsync(pt => pt.PlaylistId == id && pt.TrackId == dto.TrackId);
-
-        // If it exists, delete it
-        if (playlistTrack != null)
-        {
-            _db.PlaylistTracks.Remove(playlistTrack);
-            await _db.SaveChangesAsync();
-        }
-        return Ok();
-    }
-
-    [HttpGet("{id}")]
-    public async Task<IActionResult> GetPlaylist(int id)
-    {
-        var userId = GetCurrentUserId();
-        
-        var playlist = await _db.Playlists
-            .Include(p => p.PlaylistTracks)
-                .ThenInclude(pt => pt.Track)
-                    .ThenInclude(t => t.Album)
-                        .ThenInclude(a => a.Artist)
-            .FirstOrDefaultAsync(p => p.Id == id && p.UserId == userId);
-
-        if (playlist == null) return NotFound();
-
-        var result = new
-        {
-            id = playlist.Id,
-            name = playlist.Name,
-            tracks = playlist.PlaylistTracks.OrderBy(pt => pt.AddedAt).Select(pt => new
-            {
-                id = pt.Track.Id,
-                title = pt.Track.Title,
-                durationSeconds = pt.Track.DurationSeconds,
-                trackNumber = pt.Track.TrackNumber,
-                filePath = pt.Track.FilePath,
-                bitrate = pt.Track.Bitrate,
-                playCount = pt.Track.PlayCount,
-                album = new
-                {
-                    id = pt.Track.Album.Id,
-                    title = pt.Track.Album.Title,
-                    coverPath = pt.Track.Album.CoverPath,
-                    artist = new
-                    {
-                        id = pt.Track.Album.Artist.Id,
-                        name = pt.Track.Album.Artist.Name
-                    }
-                }
-            })
-        };
-
-        return Ok(result);
-    }
-
-    [HttpPost("add-by-name")]
-    public async Task<IActionResult> AddTrackByName([FromBody] AddTrackByNameDto dto)
-    {
-        if (string.IsNullOrWhiteSpace(dto.PlaylistName)) 
-            return BadRequest("Playlist name cannot be empty.");
-
-        var userId = GetCurrentUserId();
-
-        // 1. Ensure the track actually exists
-        var trackExists = await _db.Tracks.AnyAsync(t => t.Id == dto.TrackId);
-        if (!trackExists) return NotFound("Track not found.");
-
-        // 2. Find the playlist by name (Case-Insensitive) for this specific user
-        var playlist = await _db.Playlists
-            .FirstOrDefaultAsync(p => 
-                p.Name.ToLower() == dto.PlaylistName.Trim().ToLower() && 
-                p.UserId == userId);
-
-        // 3. If playlist doesn't exist, create it (Find or Create logic)
-        if (playlist == null)
-        {
-            playlist = new Playlist 
-            { 
-                Name = dto.PlaylistName.Trim(), 
-                UserId = userId 
-            };
-            _db.Playlists.Add(playlist);
-            // We save here to ensure the playlist has an ID before adding the track
-            await _db.SaveChangesAsync();
-        }
-
-        // 4. Check if the track is already in this playlist
-        var alreadyExists = await _db.PlaylistTracks
-            .AnyAsync(pt => pt.PlaylistId == playlist.Id && pt.TrackId == dto.TrackId);
-
-        if (!alreadyExists)
-        {
-            var playlistTrack = new PlaylistTrack
-            {
-                PlaylistId = playlist.Id,
-                TrackId = dto.TrackId
-            };
-
-            _db.PlaylistTracks.Add(playlistTrack);
-            await _db.SaveChangesAsync();
-        }
-
-        return Ok(new { 
-            playlistId = playlist.Id, 
-            playlistName = playlist.Name,
-            message = "Track added successfully" 
-        });
-    }
-
-    [HttpDelete("remove-by-name")]
-    public async Task<IActionResult> RemoveTrackByName([FromBody] AddTrackByNameDto dto)
-    {
-        if (string.IsNullOrWhiteSpace(dto.PlaylistName)) 
-            return BadRequest("Playlist name cannot be empty.");
-
-        var userId = GetCurrentUserId();
-
-        // 1. Find the playlist by name for this user
-        var playlist = await _db.Playlists
-            .FirstOrDefaultAsync(p => 
-                p.Name.ToLower() == dto.PlaylistName.Trim().ToLower() && 
-                p.UserId == userId);
-
-        if (playlist == null) return NotFound("Playlist not found.");
-
-        // 2. Find the link between the playlist and the track
-        var playlistTrack = await _db.PlaylistTracks
-            .FirstOrDefaultAsync(pt => pt.PlaylistId == playlist.Id && pt.TrackId == dto.TrackId);
-
-        // 3. Delete if it exists
-        if (playlistTrack != null)
-        {
-            _db.PlaylistTracks.Remove(playlistTrack);
-            await _db.SaveChangesAsync();
-        }
-
-        return Ok(new { message = "Track removed from playlist" });
-    }
-}
-
-public class CreatePlaylistDto 
-{ 
-    public string Name { get; set; } = string.Empty; 
-}
-
-public class AddTrackDto 
-{ 
-    public int TrackId { get; set; } 
-}
-
-public class AddTrackByNameDto 
-{ 
-    public int TrackId { get; set; } 
-    public string PlaylistName { get; set; } = string.Empty;
 }
 </file>
 
@@ -7026,6 +6574,30 @@ public class LibraryScanner
 </style>
 </file>
 
+<file path="wwwroot/psyzx-frontend/package.json">
+{
+  "name": "psyzx-frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7.0.0",
+    "@vitejs/plugin-basic-ssl": "^2.3.0",
+    "svelte": "^5.53.12",
+    "vite": "^8.0.1"
+  },
+  "dependencies": {
+    "@microsoft/signalr": "^10.0.0",
+    "three": "^0.183.2"
+  }
+}
+</file>
+
 <file path="wwwroot/psyzx-frontend/vite.config.js">
 import { defineConfig } from 'vite'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
@@ -7092,6 +6664,285 @@ export default defineConfig({
     proxy: proxyConfig,
   },
 });
+</file>
+
+<file path="Controllers/PlaylistController.cs">
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using psyzx.Data;
+using psyzx.Models;
+using System.Security.Claims;
+using System.Linq;
+
+namespace psyzx.Controllers;
+
+[Authorize]
+[ApiController]
+[Route("api/[controller]")]
+public class PlaylistsController : ControllerBase
+{
+    private readonly AppDbContext _db;
+
+    public PlaylistsController(AppDbContext db)
+    {
+        _db = db;
+    }
+
+    private int GetCurrentUserId()
+    {
+        var idClaim = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        return int.Parse(idClaim ?? "0");
+    }
+
+    [HttpGet]
+    public async Task<IActionResult> GetMyPlaylists()
+    {
+        var userId = GetCurrentUserId();
+
+        var playlistData = await _db.Playlists
+            .AsNoTracking()
+            .Where(p => p.UserId == userId)
+            .Select(p => new {
+                id = p.Id,
+                name = p.Name,
+                trackCount = p.PlaylistTracks.Count,
+                allCovers = p.PlaylistTracks.Select(pt => pt.Track.Album.CoverPath)
+            })
+            .ToListAsync();
+
+        var result = playlistData.Select(p => new {
+            id = p.id,
+            name = p.name,
+            trackCount = p.trackCount,
+            covers = p.allCovers
+                .Where(c => !string.IsNullOrEmpty(c))
+                .Distinct()
+                .Take(4)
+                .ToList()
+        });
+
+        return Ok(result);
+    }
+
+    [HttpPost]
+    public async Task<IActionResult> CreatePlaylist([FromBody] CreatePlaylistDto dto)
+    {
+        if (string.IsNullOrWhiteSpace(dto.Name)) return BadRequest();
+
+        var userId = GetCurrentUserId();
+        var playlist = new Playlist 
+        { 
+            Name = dto.Name.Trim(), 
+            UserId = userId 
+        };
+
+        _db.Playlists.Add(playlist);
+        await _db.SaveChangesAsync();
+
+        return Ok(new { id = playlist.Id, name = playlist.Name, trackCount = 0, covers = new List<string>() });
+    }
+
+    [HttpPost("{id}/tracks")]
+    public async Task<IActionResult> AddTrack(int id, [FromBody] AddTrackDto dto)
+    {
+        var userId = GetCurrentUserId();
+        
+        var playlist = await _db.Playlists.FirstOrDefaultAsync(p => p.Id == id && p.UserId == userId);
+        if (playlist == null) return NotFound();
+
+        var trackExists = await _db.Tracks.AnyAsync(t => t.Id == dto.TrackId);
+        if (!trackExists) return NotFound();
+
+        // --- ADD THIS CHECK ---
+        var alreadyExists = await _db.PlaylistTracks
+            .AnyAsync(pt => pt.PlaylistId == id && pt.TrackId == dto.TrackId);
+
+        if (alreadyExists) 
+        {
+            // It's already in the playlist, so we just return success.
+            return Ok(); 
+        }
+        // ----------------------
+
+        var playlistTrack = new PlaylistTrack
+        {
+            PlaylistId = id,
+            TrackId = dto.TrackId
+        };
+
+        _db.PlaylistTracks.Add(playlistTrack);
+        await _db.SaveChangesAsync();
+
+        return Ok();
+    }
+
+    [HttpDelete("{id}/tracks")]
+    public async Task<IActionResult> RemoveTrack(int id, [FromBody] AddTrackDto dto)
+    {
+        var userId = GetCurrentUserId();
+        
+        // Ensure the playlist belongs to the user
+        var playlist = await _db.Playlists.FirstOrDefaultAsync(p => p.Id == id && p.UserId == userId);
+        if (playlist == null) return NotFound();
+
+        // Find the link between the playlist and the track
+        var playlistTrack = await _db.PlaylistTracks
+            .FirstOrDefaultAsync(pt => pt.PlaylistId == id && pt.TrackId == dto.TrackId);
+
+        // If it exists, delete it
+        if (playlistTrack != null)
+        {
+            _db.PlaylistTracks.Remove(playlistTrack);
+            await _db.SaveChangesAsync();
+        }
+        return Ok();
+    }
+
+    [HttpGet("{id}")]
+    public async Task<IActionResult> GetPlaylist(int id)
+    {
+        var userId = GetCurrentUserId();
+        
+        var playlist = await _db.Playlists
+            .Include(p => p.PlaylistTracks)
+                .ThenInclude(pt => pt.Track)
+                    .ThenInclude(t => t.Album)
+                        .ThenInclude(a => a.Artist)
+            .FirstOrDefaultAsync(p => p.Id == id && p.UserId == userId);
+
+        if (playlist == null) return NotFound();
+
+        var result = new
+        {
+            id = playlist.Id,
+            name = playlist.Name,
+            tracks = playlist.PlaylistTracks.OrderBy(pt => pt.AddedAt).Select(pt => new
+            {
+                id = pt.Track.Id,
+                title = pt.Track.Title,
+                durationSeconds = pt.Track.DurationSeconds,
+                trackNumber = pt.Track.TrackNumber,
+                filePath = pt.Track.FilePath,
+                bitrate = pt.Track.Bitrate,
+                playCount = pt.Track.PlayCount,
+                album = new
+                {
+                    id = pt.Track.Album.Id,
+                    title = pt.Track.Album.Title,
+                    coverPath = pt.Track.Album.CoverPath,
+                    artist = new
+                    {
+                        id = pt.Track.Album.Artist.Id,
+                        name = pt.Track.Album.Artist.Name
+                    }
+                }
+            })
+        };
+
+        return Ok(result);
+    }
+
+    [HttpPost("add-by-name")]
+    public async Task<IActionResult> AddTrackByName([FromBody] AddTrackByNameDto dto)
+    {
+        if (string.IsNullOrWhiteSpace(dto.PlaylistName)) 
+            return BadRequest("Playlist name cannot be empty.");
+
+        var userId = GetCurrentUserId();
+
+        // 1. Ensure the track actually exists
+        var trackExists = await _db.Tracks.AnyAsync(t => t.Id == dto.TrackId);
+        if (!trackExists) return NotFound("Track not found.");
+
+        // 2. Find the playlist by name (Case-Insensitive) for this specific user
+        var playlist = await _db.Playlists
+            .FirstOrDefaultAsync(p => 
+                p.Name.ToLower() == dto.PlaylistName.Trim().ToLower() && 
+                p.UserId == userId);
+
+        // 3. If playlist doesn't exist, create it (Find or Create logic)
+        if (playlist == null)
+        {
+            playlist = new Playlist 
+            { 
+                Name = dto.PlaylistName.Trim(), 
+                UserId = userId 
+            };
+            _db.Playlists.Add(playlist);
+            // We save here to ensure the playlist has an ID before adding the track
+            await _db.SaveChangesAsync();
+        }
+
+        // 4. Check if the track is already in this playlist
+        var alreadyExists = await _db.PlaylistTracks
+            .AnyAsync(pt => pt.PlaylistId == playlist.Id && pt.TrackId == dto.TrackId);
+
+        if (!alreadyExists)
+        {
+            var playlistTrack = new PlaylistTrack
+            {
+                PlaylistId = playlist.Id,
+                TrackId = dto.TrackId
+            };
+
+            _db.PlaylistTracks.Add(playlistTrack);
+            await _db.SaveChangesAsync();
+        }
+
+        return Ok(new { 
+            playlistId = playlist.Id, 
+            playlistName = playlist.Name,
+            message = "Track added successfully" 
+        });
+    }
+
+    [HttpDelete("remove-by-name")]
+    public async Task<IActionResult> RemoveTrackByName([FromBody] AddTrackByNameDto dto)
+    {
+        if (string.IsNullOrWhiteSpace(dto.PlaylistName)) 
+            return BadRequest("Playlist name cannot be empty.");
+
+        var userId = GetCurrentUserId();
+
+        // 1. Find the playlist by name for this user
+        var playlist = await _db.Playlists
+            .FirstOrDefaultAsync(p => 
+                p.Name.ToLower() == dto.PlaylistName.Trim().ToLower() && 
+                p.UserId == userId);
+
+        if (playlist == null) return NotFound("Playlist not found.");
+
+        // 2. Find the link between the playlist and the track
+        var playlistTrack = await _db.PlaylistTracks
+            .FirstOrDefaultAsync(pt => pt.PlaylistId == playlist.Id && pt.TrackId == dto.TrackId);
+
+        // 3. Delete if it exists
+        if (playlistTrack != null)
+        {
+            _db.PlaylistTracks.Remove(playlistTrack);
+            await _db.SaveChangesAsync();
+        }
+
+        return Ok(new { message = "Track removed from playlist" });
+    }
+}
+
+public class CreatePlaylistDto 
+{ 
+    public string Name { get; set; } = string.Empty; 
+}
+
+public class AddTrackDto 
+{ 
+    public int TrackId { get; set; } 
+}
+
+public class AddTrackByNameDto 
+{ 
+    public int TrackId { get; set; } 
+    public string PlaylistName { get; set; } = string.Empty;
+}
 </file>
 
 <file path="wwwroot/psyzx-frontend/src/lib/Sidebar.svelte">
@@ -7621,7 +7472,6 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 builder.Services.AddHttpClient();
 
 builder.Services.AddScoped<LibraryScanner>();
-builder.Services.AddSingleton<LyricsDownloader>();
 
 builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
     .AddCookie(options =>
@@ -9165,305 +9015,6 @@ isDesktopSwapActive.subscribe(val => {
 </style>
 </file>
 
-<file path="Controllers/TracksController.cs">
-namespace psyzx.Controllers;
-
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
-using psyzx.Data;
-using psyzx.Models;
-using psyzx.Services; 
-using System.IO;
-using System.Collections.Generic;
-using System.Threading.Tasks;
-using System.Linq;
-using Microsoft.Extensions.Configuration;
-using System;
-using Microsoft.AspNetCore.Authorization;
-
-[Authorize]
-[ApiController]
-[Route("api/[controller]")]
-public class TracksController : ControllerBase
-{
-    private readonly AppDbContext _context;
-    private readonly string _basePath;
-    private readonly LyricsDownloader _lyricsDownloader;
-
-    public TracksController(AppDbContext context, IConfiguration config, LyricsDownloader lyricsDownloader)
-    {
-        _context = context;
-        _basePath = Path.GetFullPath(config["MusicSettings:BasePath"] ?? "");
-        _lyricsDownloader = lyricsDownloader;
-    }
-
-    [HttpGet]
-    public async Task<IActionResult> GetAllTracks()
-    {
-        var tracks = await _context.Tracks
-            .AsNoTracking() 
-            .Include(t => t.Album)
-            .ThenInclude(a => a.Artist)
-            .ToListAsync();
-            
-        // Done client-side memory rather than SQL mapping to safely handle nulls
-        var safeTracks = tracks.Select(t => new {
-            id = t.Id,
-            title = t.Title,
-            filePath = t.FilePath, 
-            durationSeconds = t.DurationSeconds,
-            bitrate = t.Bitrate,
-            trackNumber = t.TrackNumber,
-            discNumber = t.DiscNumber,
-            playCount = t.PlayCount,
-            albumId = t.AlbumId,
-            album = t.Album == null ? null : new {
-                id = t.Album.Id,
-                title = t.Album.Title,
-                coverPath = t.Album.CoverPath,
-                releaseYear = t.Album.ReleaseYear,
-                playCount = t.Album.PlayCount,
-                artist = t.Album.Artist == null ? null : new {
-                    id = t.Album.Artist.Id,
-                    name = t.Album.Artist.Name,
-                    imagePath = t.Album.Artist.ImagePath
-                }
-            }
-        });
-            
-        return Ok(safeTracks);
-    }
-
-    [HttpGet("stream/{id}")]
-    public async Task<IActionResult> StreamTrack(int id)
-    {
-        var track = await _context.Tracks.FindAsync(id);
-        if (track == null || string.IsNullOrEmpty(track.FilePath)) return NotFound();
-
-        var fullPath = Path.Combine(_basePath, track.FilePath);
-        if (!System.IO.File.Exists(fullPath)) return NotFound();
-
-        var mimeType = track.FilePath.EndsWith(".flac", StringComparison.OrdinalIgnoreCase) ? "audio/flac" : "audio/mpeg";
-        
-        Response.Headers.Append("Access-Control-Allow-Origin", "*"); 
-        Response.Headers.Append("Access-Control-Allow-Methods", "GET, OPTIONS");
-        Response.Headers.Append("Access-Control-Allow-Headers", "Range, Authorization, Content-Type");
-        Response.Headers.Append("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges");
-
-        return PhysicalFile(fullPath, mimeType, enableRangeProcessing: true);
-    }
-
-    [HttpGet("image")]
-    public IActionResult GetImage([FromQuery] string path)
-    {
-        if (string.IsNullOrEmpty(path)) return NotFound();
-        
-        var fullPath = Path.Combine(_basePath, path);
-        if (!System.IO.File.Exists(fullPath)) return NotFound();
-        
-        return PhysicalFile(fullPath, "image/jpeg");
-    }
-
-    public class LyricLine
-    {
-        public double t { get; set; }
-        public string text { get; set; } = string.Empty;
-    }
-
-    [HttpGet("lyrics/{id}")]
-    public async Task<IActionResult> GetLyrics(int id)
-    {
-        var track = await _context.Tracks
-            .Include(t => t.Album)
-                .ThenInclude(a => a.Artist)
-            .FirstOrDefaultAsync(t => t.Id == id); 
-
-        if (track == null || string.IsNullOrEmpty(track.FilePath)) return NotFound();
-
-        var relativeAudioDir = Path.GetDirectoryName(track.FilePath) ?? "";
-        var fileNameWithoutExt = Path.GetFileNameWithoutExtension(track.FilePath);
-        
-        var lrcDir = Path.Combine(_basePath, "lrc", relativeAudioDir);
-        var lyricPath = Path.Combine(lrcDir, $"{fileNameWithoutExt}.lrc");
-
-        if (!System.IO.File.Exists(lyricPath))
-        {
-            await _lyricsDownloader.DownloadLyricsForTrackAsync(track);
-        }
-
-        if (!System.IO.File.Exists(lyricPath))
-        {
-            return Ok(new List<LyricLine>()); 
-        }
-
-        var lines = await System.IO.File.ReadAllLinesAsync(lyricPath);
-        var parsedLyrics = new List<LyricLine>();
-        bool isSynced = false;
-
-        var timeRegex = new System.Text.RegularExpressions.Regex(@"\[(\d+):(\d+(?:\.\d+)?)\]");
-
-        foreach (var line in lines)
-        {
-            var matches = timeRegex.Matches(line);
-            if (matches.Count > 0)
-            {
-                var cleanText = timeRegex.Replace(line, "").Trim();
-
-                foreach (System.Text.RegularExpressions.Match match in matches)
-                {
-                    try
-                    {
-                        double minutes = double.Parse(match.Groups[1].Value);
-                        double seconds = double.Parse(match.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture); 
-                        
-                        parsedLyrics.Add(new LyricLine { 
-                            t = (minutes * 60) + seconds, 
-                            text = cleanText 
-                        });
-                        isSynced = true;
-                    }
-                    catch { continue; }
-                }
-            }
-        }
-
-        if (isSynced)
-        {
-            parsedLyrics = parsedLyrics.OrderBy(l => l.t).ToList();
-        }
-        else if (lines.Length > 0)
-        {
-            parsedLyrics.Add(new LyricLine { t = 0, text = "◆ LYRICS SYNC NOT AVAILABLE ◆" });
-            foreach (var line in lines)
-            {
-                if (!string.IsNullOrWhiteSpace(line))
-                {
-                    parsedLyrics.Add(new LyricLine { t = 9999, text = line.Trim() });
-                }
-            }
-        }
-
-        return Ok(parsedLyrics);
-    }
-
-    [HttpGet("radio/{seedTrackId}")]
-    public async Task<IActionResult> GetRadioMix(int seedTrackId, [FromQuery] int limit = 20, [FromQuery] string excludeIds = "")
-    {
-        var excludeList = new HashSet<int> { seedTrackId };
-        
-        if (!string.IsNullOrEmpty(excludeIds))
-        {
-            var parsedIds = excludeIds.Split(',', StringSplitOptions.RemoveEmptyEntries)
-                .Select(id => int.TryParse(id, out var parsed) ? parsed : -1)
-                .Where(id => id != -1);
-            
-            foreach (var id in parsedIds)
-            {
-                excludeList.Add(id);
-            }
-        }
-
-        var seedTrack = await _context.Tracks
-            .Include(t => t.Album)
-            .FirstOrDefaultAsync(t => t.Id == seedTrackId);
-
-        if (seedTrack == null) return NotFound();
-
-        // 1. SAFE NULL CHECK: Track might not be in an album.
-        int? seedArtistId = seedTrack.Album?.ArtistId;
-        var finalMix = new List<Track>();
-
-        // 2. Similar Artist Tracks (40% of mix) - Only if an artist exists
-        if (seedArtistId.HasValue) 
-        {
-            var artistTracks = await _context.Tracks
-                .Include(t => t.Album).ThenInclude(a => a.Artist)
-                .Where(t => t.Album != null && t.Album.ArtistId == seedArtistId.Value && !excludeList.Contains(t.Id))
-                .OrderBy(t => EF.Functions.Random())
-                .Take((int)(limit * 0.4))
-                .ToListAsync();
-
-            finalMix.AddRange(artistTracks);
-            foreach(var t in artistTracks) excludeList.Add(t.Id);
-        }
-
-        // 3. Spotify-like "Discovery Favorites" (30% of mix)
-        // Fixed: We expand the pool from 50 to 300 to stop it from endlessly repeating the same songs.
-        var favoriteTracks = await _context.Tracks
-            .Include(t => t.Album).ThenInclude(a => a.Artist)
-            .Where(t => !excludeList.Contains(t.Id) && t.PlayCount > 0)
-            .OrderByDescending(t => t.PlayCount)
-            .Take(300) 
-            .OrderBy(t => EF.Functions.Random())
-            .Take((int)(limit * 0.3))
-            .ToListAsync();
-
-        finalMix.AddRange(favoriteTracks);
-        foreach(var t in favoriteTracks) excludeList.Add(t.Id);
-
-        // 4. True Random Filler / Deep Cuts (Remaining %)
-        int remaining = limit - finalMix.Count;
-        if (remaining > 0)
-        {
-            var randomTracks = await _context.Tracks
-                .Include(t => t.Album).ThenInclude(a => a.Artist)
-                .Where(t => !excludeList.Contains(t.Id))
-                .OrderBy(t => EF.Functions.Random())
-                .Take(remaining)
-                .ToListAsync();
-
-            finalMix.AddRange(randomTracks);
-        }
-
-        // 5. Shuffle the resulting mix to interleave the vibes, keeping null-safety intact
-        var shuffledResult = finalMix
-            .OrderBy(t => Guid.NewGuid())
-            .Select(t => new {
-                id = t.Id,
-                title = t.Title,
-                filePath = t.FilePath,
-                durationSeconds = t.DurationSeconds,
-                trackNumber = t.TrackNumber,
-                bitrate = t.Bitrate,
-                playCount = t.PlayCount,
-                albumId = t.AlbumId,
-                // SAFE MAPPING
-                album = t.Album == null ? null : new {
-                    id = t.Album.Id,
-                    title = t.Album.Title,
-                    coverPath = t.Album.CoverPath,
-                    artist = t.Album.Artist == null ? null : new {
-                        id = t.Album.Artist.Id,
-                        name = t.Album.Artist.Name
-                    }
-                }
-            }).ToList();
-
-        return Ok(shuffledResult);
-    }
-
-    [HttpPost("{id}/play")]
-    public async Task<IActionResult> RecordPlay(int id)
-    {
-        var track = await _context.Tracks
-            .Include(t => t.Album)
-            .FirstOrDefaultAsync(t => t.Id == id);
-
-        if (track == null) return NotFound();
-
-        track.PlayCount++;
-
-        if (track.Album != null)
-        {
-            track.Album.PlayCount++;
-        }
-
-        await _context.SaveChangesAsync();
-        return Ok(new { trackPlays = track.PlayCount, albumPlays = track.Album?.PlayCount ?? 0 });
-    }
-}
-</file>
-
 <file path="wwwroot/psyzx-frontend/public/sw.js">
 const CACHE_NAME = 'psyzx-core-v10';
 const DATA_CACHE = 'psyzx-data-v10';
@@ -9730,8 +9281,8 @@ self.addEventListener('message', async event => {
 });
 
 function queueMetadata(id) {
-    const lyricsUrl = `/api/Tracks/lyrics/${id}`;
-    downloadQueue.push({ type: 'DATA', cacheKey: getCleanApiRequest(lyricsUrl), url: lyricsUrl, trackId: id });
+    // const lyricsUrl = `/api/Tracks/lyrics/${id}`;
+    // downloadQueue.push({ type: 'DATA', cacheKey: getCleanApiRequest(lyricsUrl), url: lyricsUrl, trackId: id });
 }
 
 // ── LIFECYCLE ──
@@ -10074,27 +9625,6 @@ public class SystemController : ControllerBase
         _http.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
         _scopeFactory = scopeFactory;
         _config = config;
-    }
-
-    [HttpGet("lyrics")]
-    public async Task<IActionResult> GetLyrics([FromQuery] string artist, [FromQuery] string title)
-    {
-        Console.WriteLine($"[DEBUG-LYRICS] Request received for Artist: '{artist}', Title: '{title}'");
-        var cleanArtist = CleanSongString(artist);
-        var cleanTitle = CleanSongString(title);
-
-        string? fetchedLyrics = await FetchFromLrcLib(cleanArtist, cleanTitle);
-        if (string.IsNullOrEmpty(fetchedLyrics)) fetchedLyrics = await FetchFromLyricsOvh(cleanArtist, cleanTitle);
-        if (string.IsNullOrEmpty(fetchedLyrics)) fetchedLyrics = await FetchFromPopCat(cleanArtist, cleanTitle);
-        if (string.IsNullOrEmpty(fetchedLyrics)) fetchedLyrics = await FetchFromLyrist(cleanArtist, cleanTitle);
-        if (string.IsNullOrEmpty(fetchedLyrics)) fetchedLyrics = await FetchFromSomeRandomApi(cleanArtist, cleanTitle);
-
-        if (!string.IsNullOrEmpty(fetchedLyrics))
-        {
-            return Ok(new { lrc = fetchedLyrics });
-        }
-
-        return NotFound(new { message = "Lyrics not found across all mirrors." });
     }
 
     private string CleanSongString(string input)
@@ -10761,6 +10291,227 @@ public class YtDlpRequest {
 
 public class ArtistUpdateDto { public string name { get; set; } = string.Empty; public string imagePath { get; set; } = string.Empty; }
 public class AlbumUpdateDto { public string title { get; set; } = string.Empty; public string coverPath { get; set; } = string.Empty; }
+</file>
+
+<file path="Controllers/TracksController.cs">
+namespace psyzx.Controllers;
+
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using psyzx.Data;
+using psyzx.Models;
+using psyzx.Services; 
+using System.IO;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using System.Linq;
+using Microsoft.Extensions.Configuration;
+using System;
+using Microsoft.AspNetCore.Authorization;
+
+[Authorize]
+[ApiController]
+[Route("api/[controller]")]
+public class TracksController : ControllerBase
+{
+    private readonly AppDbContext _context;
+    private readonly string _basePath;
+
+    public TracksController(AppDbContext context, IConfiguration config)
+    {
+        _context = context;
+        _basePath = Path.GetFullPath(config["MusicSettings:BasePath"] ?? "");
+    }
+
+    [HttpGet]
+    public async Task<IActionResult> GetAllTracks()
+    {
+        var tracks = await _context.Tracks
+            .AsNoTracking() 
+            .Include(t => t.Album)
+            .ThenInclude(a => a.Artist)
+            .ToListAsync();
+            
+        // Done client-side memory rather than SQL mapping to safely handle nulls
+        var safeTracks = tracks.Select(t => new {
+            id = t.Id,
+            title = t.Title,
+            filePath = t.FilePath, 
+            durationSeconds = t.DurationSeconds,
+            bitrate = t.Bitrate,
+            trackNumber = t.TrackNumber,
+            discNumber = t.DiscNumber,
+            playCount = t.PlayCount,
+            albumId = t.AlbumId,
+            album = t.Album == null ? null : new {
+                id = t.Album.Id,
+                title = t.Album.Title,
+                coverPath = t.Album.CoverPath,
+                releaseYear = t.Album.ReleaseYear,
+                playCount = t.Album.PlayCount,
+                artist = t.Album.Artist == null ? null : new {
+                    id = t.Album.Artist.Id,
+                    name = t.Album.Artist.Name,
+                    imagePath = t.Album.Artist.ImagePath
+                }
+            }
+        });
+            
+        return Ok(safeTracks);
+    }
+
+    [HttpGet("stream/{id}")]
+    public async Task<IActionResult> StreamTrack(int id)
+    {
+        var track = await _context.Tracks.FindAsync(id);
+        if (track == null || string.IsNullOrEmpty(track.FilePath)) return NotFound();
+
+        var fullPath = Path.Combine(_basePath, track.FilePath);
+        if (!System.IO.File.Exists(fullPath)) return NotFound();
+
+        var mimeType = track.FilePath.EndsWith(".flac", StringComparison.OrdinalIgnoreCase) ? "audio/flac" : "audio/mpeg";
+        
+        Response.Headers.Append("Access-Control-Allow-Origin", "*"); 
+        Response.Headers.Append("Access-Control-Allow-Methods", "GET, OPTIONS");
+        Response.Headers.Append("Access-Control-Allow-Headers", "Range, Authorization, Content-Type");
+        Response.Headers.Append("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges");
+
+        return PhysicalFile(fullPath, mimeType, enableRangeProcessing: true);
+    }
+
+    [HttpGet("image")]
+    public IActionResult GetImage([FromQuery] string path)
+    {
+        if (string.IsNullOrEmpty(path)) return NotFound();
+        
+        var fullPath = Path.Combine(_basePath, path);
+        if (!System.IO.File.Exists(fullPath)) return NotFound();
+        
+        return PhysicalFile(fullPath, "image/jpeg");
+    }
+
+    public class LyricLine
+    {
+        public double t { get; set; }
+        public string text { get; set; } = string.Empty;
+    }
+
+    [HttpGet("radio/{seedTrackId}")]
+    public async Task<IActionResult> GetRadioMix(int seedTrackId, [FromQuery] int limit = 20, [FromQuery] string excludeIds = "")
+    {
+        var excludeList = new HashSet<int> { seedTrackId };
+        
+        if (!string.IsNullOrEmpty(excludeIds))
+        {
+            var parsedIds = excludeIds.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                .Select(id => int.TryParse(id, out var parsed) ? parsed : -1)
+                .Where(id => id != -1);
+            
+            foreach (var id in parsedIds)
+            {
+                excludeList.Add(id);
+            }
+        }
+
+        var seedTrack = await _context.Tracks
+            .Include(t => t.Album)
+            .FirstOrDefaultAsync(t => t.Id == seedTrackId);
+
+        if (seedTrack == null) return NotFound();
+
+        // 1. SAFE NULL CHECK: Track might not be in an album.
+        int? seedArtistId = seedTrack.Album?.ArtistId;
+        var finalMix = new List<Track>();
+
+        // 2. Similar Artist Tracks (40% of mix) - Only if an artist exists
+        if (seedArtistId.HasValue) 
+        {
+            var artistTracks = await _context.Tracks
+                .Include(t => t.Album).ThenInclude(a => a.Artist)
+                .Where(t => t.Album != null && t.Album.ArtistId == seedArtistId.Value && !excludeList.Contains(t.Id))
+                .OrderBy(t => EF.Functions.Random())
+                .Take((int)(limit * 0.4))
+                .ToListAsync();
+
+            finalMix.AddRange(artistTracks);
+            foreach(var t in artistTracks) excludeList.Add(t.Id);
+        }
+
+        // 3. Spotify-like "Discovery Favorites" (30% of mix)
+        // Fixed: We expand the pool from 50 to 300 to stop it from endlessly repeating the same songs.
+        var favoriteTracks = await _context.Tracks
+            .Include(t => t.Album).ThenInclude(a => a.Artist)
+            .Where(t => !excludeList.Contains(t.Id) && t.PlayCount > 0)
+            .OrderByDescending(t => t.PlayCount)
+            .Take(300) 
+            .OrderBy(t => EF.Functions.Random())
+            .Take((int)(limit * 0.3))
+            .ToListAsync();
+
+        finalMix.AddRange(favoriteTracks);
+        foreach(var t in favoriteTracks) excludeList.Add(t.Id);
+
+        // 4. True Random Filler / Deep Cuts (Remaining %)
+        int remaining = limit - finalMix.Count;
+        if (remaining > 0)
+        {
+            var randomTracks = await _context.Tracks
+                .Include(t => t.Album).ThenInclude(a => a.Artist)
+                .Where(t => !excludeList.Contains(t.Id))
+                .OrderBy(t => EF.Functions.Random())
+                .Take(remaining)
+                .ToListAsync();
+
+            finalMix.AddRange(randomTracks);
+        }
+
+        // 5. Shuffle the resulting mix to interleave the vibes, keeping null-safety intact
+        var shuffledResult = finalMix
+            .OrderBy(t => Guid.NewGuid())
+            .Select(t => new {
+                id = t.Id,
+                title = t.Title,
+                filePath = t.FilePath,
+                durationSeconds = t.DurationSeconds,
+                trackNumber = t.TrackNumber,
+                bitrate = t.Bitrate,
+                playCount = t.PlayCount,
+                albumId = t.AlbumId,
+                // SAFE MAPPING
+                album = t.Album == null ? null : new {
+                    id = t.Album.Id,
+                    title = t.Album.Title,
+                    coverPath = t.Album.CoverPath,
+                    artist = t.Album.Artist == null ? null : new {
+                        id = t.Album.Artist.Id,
+                        name = t.Album.Artist.Name
+                    }
+                }
+            }).ToList();
+
+        return Ok(shuffledResult);
+    }
+
+    [HttpPost("{id}/play")]
+    public async Task<IActionResult> RecordPlay(int id)
+    {
+        var track = await _context.Tracks
+            .Include(t => t.Album)
+            .FirstOrDefaultAsync(t => t.Id == id);
+
+        if (track == null) return NotFound();
+
+        track.PlayCount++;
+
+        if (track.Album != null)
+        {
+            track.Album.PlayCount++;
+        }
+
+        await _context.SaveChangesAsync();
+        return Ok(new { trackPlays = track.PlayCount, albumPlays = track.Album?.PlayCount ?? 0 });
+    }
+}
 </file>
 
 <file path="wwwroot/psyzx-frontend/src/lib/views/Album.svelte">
@@ -12104,6 +11855,119 @@ const triggerMetadataSweep = (tracks) => {
     }
 };
 
+const LYRICS_CACHE_KEY = 'psyzx_lyrics_cache';
+const MAX_LYRICS_CACHE = 200;
+
+const getCachedLyrics = (trackId) => {
+    try {
+        const cache = JSON.parse(localStorage.getItem(LYRICS_CACHE_KEY)) || {};
+        if (cache[trackId]) {
+            cache[trackId].ts = Date.now(); // Update timestamp on use (LRU logic)
+            localStorage.setItem(LYRICS_CACHE_KEY, JSON.stringify(cache));
+            return cache[trackId].data;
+        }
+    } catch (e) { console.warn("Lyrics cache read error", e); }
+    return null;
+};
+
+const setCachedLyrics = (trackId, lyricsData) => {
+    try {
+        let cache = JSON.parse(localStorage.getItem(LYRICS_CACHE_KEY)) || {};
+        cache[trackId] = { ts: Date.now(), data: lyricsData };
+
+        let keys = Object.keys(cache);
+        if (keys.length > MAX_LYRICS_CACHE) {
+            // Sort by oldest timestamp
+            keys.sort((a, b) => cache[a].ts - cache[b].ts);
+            // Evict oldest until we hit the max limit
+            while (keys.length > MAX_LYRICS_CACHE) {
+                delete cache[keys.shift()];
+            }
+        }
+        localStorage.setItem(LYRICS_CACHE_KEY, JSON.stringify(cache));
+    } catch (e) { console.warn("Lyrics cache write error", e); }
+};
+
+// Helper to clean song titles for better search results
+const cleanSongString = (input) => {
+    if (!input) return "";
+    return input.replace(/(\s-\sremastered.*|\s-\sradio edit|\s\(feat\..*|\s\[.*\]|\s\(.*version\))/gi, "").trim();
+};
+
+// LRC Parser logic to convert raw text into your { t: 0, text: "Lyric" } format
+const parseLRC = (lrcText) => {
+    if (!lrcText) return null;
+    const lines = lrcText.split('\n');
+    const parsedLyrics = [];
+    const timeRegex = /\[(\d+):(\d+(?:\.\d+)?)\]/;
+
+    for (const line of lines) {
+        const match = timeRegex.exec(line);
+        if (match) {
+            const minutes = parseFloat(match[1]);
+            const seconds = parseFloat(match[2]);
+            const cleanText = line.replace(timeRegex, "").trim();
+            if (cleanText) {
+                parsedLyrics.push({ t: (minutes * 60) + seconds, text: cleanText });
+            }
+        }
+    }
+    return parsedLyrics.length > 0 ? parsedLyrics : null;
+};
+
+// Fallback sequence for lyrics
+export const fetchLyricsOnFrontend = async (trackId, artist, title) => {
+    // 1. Check Cache First
+    const cached = getCachedLyrics(trackId);
+    if (cached) return cached;
+
+    const cleanArtist = cleanSongString(artist);
+    const cleanTitle = cleanSongString(title);
+    let lyricsText = null;
+
+    // --- Start Waterfall ---
+    try {
+        const res = await fetch(`https://lrclib.net/api/search?q=${encodeURIComponent(cleanArtist + ' ' + cleanTitle)}`);
+        if (res.ok) { const data = await res.json(); lyricsText = data.find(i => i.syncedLyrics)?.syncedLyrics || data.find(i => i.plainLyrics)?.plainLyrics; }
+    } catch (e) {}
+
+    if (!lyricsText) {
+        try { const res = await fetch(`https://api.lyrics.ovh/v1/${encodeURIComponent(cleanArtist)}/${encodeURIComponent(cleanTitle)}`);
+        if (res.ok) lyricsText = (await res.json()).lyrics; } catch (e) {}
+    }
+
+    if (!lyricsText) {
+        try { const res = await fetch(`https://api.popcat.xyz/lyrics?song=${encodeURIComponent(cleanTitle + ' ' + cleanArtist)}`);
+        if (res.ok) lyricsText = (await res.json()).lyrics; } catch (e) {}
+    }
+
+    if (!lyricsText) {
+        try { const res = await fetch(`https://lyrist.vercel.app/api/${encodeURIComponent(cleanTitle + ' ' + cleanArtist)}`);
+        if (res.ok) lyricsText = (await res.json()).lyrics; } catch (e) {}
+    }
+
+    if (!lyricsText) {
+        try { const res = await fetch(`https://some-random-api.com/lyrics?title=${encodeURIComponent(cleanTitle + ' ' + cleanArtist)}`);
+        if (res.ok) lyricsText = (await res.json()).lyrics; } catch (e) {}
+    }
+    // --- End Waterfall ---
+
+    if (lyricsText) {
+        let finalLyrics = parseLRC(lyricsText);
+        if (!finalLyrics) {
+            // Unsynced fallback
+            const lines = lyricsText.split('\n').filter(l => l.trim().length > 0);
+            finalLyrics = lines.map((l, i) => ({ t: i * 3, text: l.trim() }));
+        }
+        
+        // 2. Save result to Cache
+        setCachedLyrics(trackId, finalLyrics);
+        return finalLyrics;
+    }
+
+    throw new Error("Lyrics not found across all mirrors.");
+};
+
 export const api = {
     baseUrl: '/api',
 
@@ -12438,6 +12302,888 @@ export const api = {
 };
 </file>
 
+<file path="wwwroot/psyzx-frontend/src/App.svelte">
+<script>
+    import { onMount } from 'svelte';
+    import { fade, scale } from 'svelte/transition';
+    import Sidebar from './lib/Sidebar.svelte';
+    import Topbar from './lib/Topbar.svelte';
+    import Player from './lib/Player.svelte';
+    import FullPlayer from './lib/FullPlayer.svelte';
+    import RightSidebar from './lib/RightSidebar.svelte';
+    import Footer from './lib/Footer.svelte';
+    import InitialLoader from './lib/InitialLoader.svelte';
+    
+    import Library from './lib/views/Library.svelte';
+    import Artist from './lib/views/Artist.svelte';
+    import Album from './lib/views/Album.svelte';
+    import Settings from './lib/views/Settings.svelte';
+    import TopPlayed from './lib/views/TopPlayed.svelte';
+    import Search from './lib/views/Search.svelte';
+    import ThePool from './lib/views/ThePool.svelte';
+    import Offline from './lib/views/Offline.svelte';
+    import Downloader from './lib/views/Downloader.svelte';
+    import Account from './lib/views/Account.svelte';
+    import Playlists from './lib/views/Playlists.svelte';
+    import Playlist from './lib/views/Playlist.svelte';
+    
+    import { api } from './lib/api.js';
+    import { allTracks, artistsMap, albumsMap, accentColor, isGlobalColorActive, isMaxGlassActive } from './store.js';
+    
+    let currentHash = '';
+    let isMobileSidebarOpen = false;
+    let isScrolled = false;
+    let isLoading = true;
+    let isFirstLoad = false;
+    let isFullPlayerOpen = false;
+    let apiError = null;
+    
+    let requiresLogin = false;
+    let isRegisterMode = false;
+    let loginUsername = '';
+    let loginPassword = '';
+    let loginErrorMsg = '';
+    let isLoggingIn = false;
+
+    $: navContextTitle = currentHash.startsWith('#album/') ? 'Album' 
+                       : currentHash.startsWith('#artist/') ? 'Artist'
+                       : currentHash.startsWith('#search/') ? 'Search'
+                       : currentHash.startsWith('#playlist/') ? 'Playlist'
+                       : currentHash === '#playlists' ? 'Playlists'
+                       : currentHash === '#account' ? 'My Account'
+                       : currentHash === '#settings' ? 'Settings' 
+                       : currentHash === '#top' ? 'Top Played'
+                       : currentHash === '#all' ? 'The Pool'
+                       : currentHash === '#offline' ? 'Available Offline'
+                       : currentHash === '#downloader' ? 'Downloader'
+                       : 'Library';
+
+    const localDB = {
+        init() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open('PsyZxStorage', 1);
+                request.onupgradeneeded = (e) => e.target.result.createObjectStore('cache');
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+        },
+        async set(key, val) {
+            const db = await this.init();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction('cache', 'readwrite');
+                tx.objectStore('cache').put(val, key);
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => reject(tx.error);
+            });
+        },
+        async get(key) {
+            const db = await this.init();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction('cache', 'readonly');
+                const req = tx.objectStore('cache').get(key);
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error);
+            });
+        }
+    };
+
+    const buildLibrary = (data, statsData) => {
+        const statsMap = new Map();
+        if (statsData) {
+            if (Array.isArray(statsData)) {
+                statsData.forEach(s => statsMap.set(s.trackId || s.id, s.playCount || s.plays || 0));
+            } else if (typeof statsData === 'object') {
+                Object.entries(statsData).forEach(([k, v]) => statsMap.set(parseInt(k), typeof v === 'number' ? v : (v.playCount || v.plays || 0)));
+            }
+        }
+
+        const newArtists = new Map();
+        const newAlbums = new Map();
+
+        data.forEach(track => {
+            if (!track) return;
+            track.playCount = statsMap.get(track.id) || track.playCount || 0;
+            
+            const album = track.album || { id: 9999, title: 'Unknown Album', coverPath: '' };
+            const artist = album.artist || { id: 9999, name: 'Unknown Artist', imagePath: '' };
+            
+            if (!newArtists.has(artist.id)) newArtists.set(artist.id, { id: artist.id, name: artist.name, imagePath: artist.imagePath, albums: new Set() });
+            newArtists.get(artist.id).albums.add(album.id);
+            
+            if (!newAlbums.has(album.id)) newAlbums.set(album.id, { id: album.id, title: album.title, coverPath: album.coverPath, releaseYear: album.releaseYear, playCount: album.playCount || 0, artistId: artist.id, artistName: artist.name, tracks: [] });
+            
+            const currentAlbum = newAlbums.get(album.id);
+            if (!currentAlbum.tracks.some(t => t.id === track.id)) {
+                currentAlbum.tracks.push(track);
+                currentAlbum.playCount += track.playCount;
+            }
+        });
+
+        allTracks.set(data);
+        artistsMap.set(newArtists);
+        albumsMap.set(newAlbums);
+    };
+
+    let bootProgress = 0;
+    let bootStatus = "Waking up...";
+
+    const bootEngine = async () => {
+        isLoading = true;
+        isFirstLoad = !sessionStorage.getItem('psyzx_booted');
+
+        const trickle = setInterval(() => {
+            if (bootProgress < 95) bootProgress += 0.2;
+        }, 100);
+
+        bootStatus = "Verifying Identity...";
+        console.group('[AUTH DEBUG] bootEngine() Initialization');
+        console.log('[AUTH DEBUG] Calling api.checkAuth()...');
+        
+        let isAuth = false;
+        try {
+            isAuth = await api.checkAuth();
+            console.log('[AUTH DEBUG] api.checkAuth() returned:', isAuth);
+        } catch (e) {
+            console.error('[AUTH DEBUG] Exception during api.checkAuth():', e);
+        }
+
+        if (!isAuth) { 
+            console.warn('[AUTH DEBUG] Not authenticated. Triggering login screen.');
+            console.groupEnd();
+            clearInterval(trickle);
+            requiresLogin = true; 
+            isLoading = false; 
+            return; 
+        }
+        console.log('[AUTH DEBUG] Authentication confirmed. Booting core...');
+        console.groupEnd();
+        
+        bootProgress = 25; 
+
+        try {
+            bootStatus = "Checking core playlists...";
+            const playlists = await api.getPlaylists();
+            if (!playlists.some(p => p.name === 'Favorites')) {
+                await api.createPlaylist('Favorites');
+            }
+        } catch (e) { console.warn("Could not check favorites", e); }
+
+        bootProgress = 35;
+
+        try {
+            bootStatus = "Checking local storage...";
+            const cachedLocal = await localDB.get('psyzx_library_cache');
+            if (cachedLocal?.length > 0) {
+                buildLibrary(cachedLocal, null);
+                bootProgress = 45; 
+            }
+
+            bootStatus = "Syncing tracks from server...";
+            let data = await api.getTracks();
+            bootProgress = 85; 
+
+            if (data?.length > 0) {
+                bootStatus = "Optimizing library...";
+                localDB.set('psyzx_library_cache', data);
+                bootProgress = 95; 
+                
+                let statsData = null;
+                try { statsData = await api.getStats(); } catch(e) {}
+                buildLibrary(data, statsData);
+            }
+        } catch (e) {
+            console.error(e);
+        } finally {
+            clearInterval(trickle);
+            bootProgress = 100; 
+            bootStatus = "Ready.";
+            setTimeout(() => {
+                isLoading = false;
+                sessionStorage.setItem('psyzx_booted', 'true');
+            }, 800);
+        }
+    };
+
+    const handleRefresh = async () => {
+        isLoading = true;
+        isFirstLoad = true; 
+        bootProgress = 10;
+        bootStatus = "Commanding C# to scan /Music...";
+        
+        try {
+            await api.scanLibrary();
+            bootProgress = 50;
+            
+            bootStatus = "Downloading fresh tracks...";
+            let data = await api.getTracks();
+            bootProgress = 80;
+            
+            if (data?.length > 0) {
+                bootStatus = "Rebuilding Library...";
+                await localDB.set('psyzx_library_cache', data);
+                
+                let statsData = null;
+                try { statsData = await api.getStats(); } catch(e) {}
+                
+                buildLibrary(data, statsData);
+            }
+        } catch (error) {
+            console.error("Refresh failed:", error);
+            apiError = "Library Sync Failed (Server Offline?)";
+            setTimeout(() => apiError = null, 4000);
+        } finally {
+            bootProgress = 100;
+            bootStatus = "Done.";
+            setTimeout(() => {
+                isLoading = false;
+                isFirstLoad = false;
+            }, 600);
+        }
+    };
+
+    let showDeadlockWarning = false;
+    
+    onMount(() => {
+        currentHash = window.location.hash;
+        const handleHashChange = () => { 
+            currentHash = window.location.hash; 
+            isMobileSidebarOpen = false; 
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        };
+        window.addEventListener('hashchange', handleHashChange);
+        bootEngine();
+
+        const triggerWarning = () => {
+            showDeadlockWarning = true;
+        };
+
+        window.addEventListener('ios-hardware-deadlock', triggerWarning);
+
+        return () => {
+            window.removeEventListener('hashchange', handleHashChange);
+            window.removeEventListener('ios-hardware-deadlock', triggerWarning);
+        };
+    });
+
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/sw.js', { scope: '/' })
+            .then(reg => {
+                console.log('SW Registered!', reg);
+                reg.onupdatefound = () => {
+                    const newWorker = reg.installing;
+                    newWorker.onstatechange = () => {
+                        if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                            location.reload(); 
+                        }
+                    };
+                };
+            })
+            .catch(err => console.error('SW Registration Failed', err));
+    }
+
+    const handleScroll = (e) => { isScrolled = e.target.scrollTop > 50; };
+
+    // --- HEAVILY MODIFIED AUTH EXECUTION ---
+    const executeAuth = async () => {
+        console.group(`[AUTH DEBUG] executeAuth() - Mode: ${isRegisterMode ? 'REGISTER' : 'LOGIN'}`);
+        
+        const trimmedUsername = loginUsername.trim();
+        console.log(`[AUTH DEBUG] Raw Input -> User: "${loginUsername}", Trimmed: "${trimmedUsername}", Password Length: ${loginPassword.length}`);
+
+        if (!trimmedUsername || !loginPassword) {
+            console.warn('[AUTH DEBUG] Validation failed: Empty fields detected after trim.');
+            loginErrorMsg = "Fill all fields.";
+            console.groupEnd();
+            return;
+        }
+        
+        isLoggingIn = true;
+        loginErrorMsg = '';
+        
+        const credentials = { username: trimmedUsername, password: loginPassword };
+        console.log('[AUTH DEBUG] Sending credentials payload to API...', { username: credentials.username, password: '***' });
+
+        try {
+            if (isRegisterMode) {
+                console.log('[AUTH DEBUG] Calling api.register...');
+                const res = await api.register(credentials);
+                console.log('[AUTH DEBUG] api.register response received:', res);
+
+                // Handle Fetch Response natively, or raw JSON object wrappers
+                if (res && (res.ok === true || res.success === true || res.status === 200 || res.status === 201)) {
+                    console.log('[AUTH DEBUG] Registration SUCCESS. Switching to login mode to auto-auth.');
+                    isRegisterMode = false;
+                    console.groupEnd();
+                    await executeAuth(); // Recursive auto-login
+                } else {
+                    console.error('[AUTH DEBUG] Registration FAILED.');
+                    let errorText = "Username already taken or server error.";
+                    
+                    // Attempt to parse out exact server error
+                    if (res && typeof res.json === 'function') {
+                        try {
+                            const errData = await res.clone().json();
+                            console.log('[AUTH DEBUG] Extracted JSON error payload:', errData);
+                            errorText = errData.message || errData.error || errorText;
+                        } catch (e) { console.warn('[AUTH DEBUG] Could not parse error JSON'); }
+                    } else if (res && res.message) {
+                        errorText = res.message;
+                    }
+
+                    loginErrorMsg = errorText;
+                    isLoggingIn = false;
+                    console.groupEnd();
+                }
+            } else {
+                console.log('[AUTH DEBUG] Calling api.login...');
+                const res = await api.login(credentials);
+                console.log('[AUTH DEBUG] api.login response received:', res);
+
+                // Handle standard auth success criteria
+                if (res && (res.ok === true || res.success === true || res.token || res.status === 200)) {
+                    console.log('[AUTH DEBUG] Login SUCCESS! Transitioning app state...');
+                    requiresLogin = false;
+                    isLoggingIn = false; // reset cleanly
+                    isLoading = true;
+                    
+                    console.log('[AUTH DEBUG] Re-triggering bootEngine()...');
+                    console.groupEnd();
+                    bootEngine();
+                } else {
+                    console.error('[AUTH DEBUG] Login FAILED. Denied by server.');
+                    let errorText = "Invalid credentials. Retry.";
+                    
+                    // Attempt to parse out exact server error
+                    if (res && typeof res.json === 'function') {
+                        try {
+                            const errData = await res.clone().json();
+                            console.log('[AUTH DEBUG] Extracted JSON error payload:', errData);
+                            errorText = errData.message || errData.error || errorText;
+                        } catch (e) { console.warn('[AUTH DEBUG] Could not parse error JSON'); }
+                    } else if (res && res.message) {
+                        errorText = res.message;
+                    }
+
+                    loginErrorMsg = errorText;
+                    isLoggingIn = false;
+                    console.groupEnd();
+                }
+            }
+        } catch (error) {
+            console.error('[AUTH DEBUG] FATAL EXCEPTION during authentication API call:', error);
+            loginErrorMsg = "A network or server error occurred.";
+            isLoggingIn = false;
+            console.groupEnd();
+        }
+    };
+</script>
+
+{#if isLoading}
+    {#if isFirstLoad}
+        <InitialLoader progress={bootProgress} status={bootStatus} />
+    {:else}
+        <div id="loader-overlay" class="active" out:fade={{duration: 300}}>
+            <div class="ios-spinner">
+                {#each Array(12) as _, i}
+                    <div style="transform: rotate({i * 30}deg); animation-delay: {-(1.1 - (i * 0.083))}s;"></div>
+                {/each}
+            </div>
+        </div>
+    {/if}
+{/if}
+
+{#if requiresLogin}
+    <div class="auth-overlay" in:fade={{duration: 300}}>
+        <div class="auth-card">
+            <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="var(--accent-color)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom: 16px;">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+            </svg>
+            <h2>{isRegisterMode ? 'Create Account' : 'Access Required'}</h2>
+            
+            <form on:submit|preventDefault={executeAuth} class="auth-form">
+                <input type="text" bind:value={loginUsername} placeholder="Username" required disabled={isLoggingIn} autocomplete="username">
+                <input type="password" bind:value={loginPassword} placeholder="Password" required disabled={isLoggingIn} autocomplete={isRegisterMode ? "new-password" : "current-password"}>
+                
+                {#if loginErrorMsg}
+                    <div class="auth-error">{loginErrorMsg}</div>
+                {/if}
+                
+                <button type="submit" class="btn-auth" disabled={isLoggingIn}>
+                    {#if isLoggingIn}
+                        Working...
+                    {:else}
+                        {isRegisterMode ? 'Sign Up' : 'Enter'}
+                    {/if}
+                </button>
+            </form>
+
+            <button class="btn-toggle-auth" on:click={() => { isRegisterMode = !isRegisterMode; loginErrorMsg = ''; }} disabled={isLoggingIn}>
+                {isRegisterMode ? 'Already have an account? Login' : 'No account? Register here'}
+            </button>
+        </div>
+    </div>
+{/if}
+
+{#if apiError && !requiresLogin}
+    <div id="toast-msg" class="show" style="background: #ef4444;">{apiError}</div>
+{/if}
+
+<div class="global-dynamic-bg" style="background-color: {$isGlobalColorActive ? $accentColor : '#1a0524'};"></div>
+<div class="global-gradient-overlay"></div>
+
+{#if !requiresLogin && !isLoading}
+    <div id="app-layout" style="position: relative; z-index: 1;">
+        <div class="app-row" class:max-glass-layout={$isMaxGlassActive}>
+            <Sidebar bind:isMobileOpen={isMobileSidebarOpen} {currentHash} />
+
+            <main id="main-view" on:scroll={handleScroll}>
+                <Topbar 
+                    {isScrolled} 
+                    navContext={navContextTitle} 
+                    currentHash={currentHash} 
+                    on:toggleSidebar={() => isMobileSidebarOpen = !isMobileSidebarOpen} 
+                    on:refresh={handleRefresh} 
+                />                
+                <div id="main-content" style="flex: 1; display: grid;">
+                    {#key currentHash}
+                    <div in:fade={{duration: 250, delay: 100}} out:fade={{duration: 100}} style="grid-area: 1 / 1; display: flex; flex-direction: column; min-height: 100%;">
+                        
+                        <div style="flex-grow: 1;">
+                            {#if currentHash === '' || currentHash === '#' || currentHash === '#/'}
+                                <Library />
+                            {:else if currentHash.startsWith('#artist/')}
+                                <Artist artistId={currentHash.split('/')[1]} />
+                            {:else if currentHash.startsWith('#album/')}
+                                <Album albumId={currentHash.split('/')[1]} />
+                            {:else if currentHash.startsWith('#search/')}
+                                <Search query={decodeURIComponent(currentHash.substring(8))} />
+                            {:else if currentHash === '#playlists'}
+                                <Playlists />
+                            {:else if currentHash.startsWith('#playlist/')} 
+                                <Playlist playlistId={currentHash.split('/')[1]} />
+                            {:else if currentHash === '#account'}
+                                <Account />
+                            {:else if currentHash === '#top'}
+                                <TopPlayed />
+                            {:else if currentHash === '#all'}
+                                <ThePool />
+                            {:else if currentHash === '#offline'}
+                                <Offline />
+                            {:else if currentHash === '#downloader'}
+                                <Downloader />
+                            {:else if currentHash === '#settings'}
+                                <Settings />
+                            {:else}
+                                <div style="padding: 24px; color: var(--text-secondary);">Route not found.</div>
+                            {/if}
+                        </div>
+
+                        <Footer />
+                        
+                    </div>
+                    {/key}
+                </div>
+            </main>
+
+            <aside id="right-sidebar">
+                <RightSidebar />
+            </aside>
+        </div>
+
+        <Player on:toggleFull={() => isFullPlayerOpen = !isFullPlayerOpen} />
+    </div>
+
+    <FullPlayer isOpen={isFullPlayerOpen} on:close={() => isFullPlayerOpen = false} />
+{/if}
+
+<!-- {#if showDeadlockWarning}
+    <div 
+        class="system-modal-backdrop" 
+        transition:fade={{duration: 200}} 
+        style="position: fixed; inset: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(8px); z-index: 999999; display: flex; align-items: center; justify-content: center; padding: 24px;"
+    >
+        <div 
+            class="system-modal-card" 
+            transition:scale={{start: 0.9, duration: 250, opacity: 0}}
+            style="background: #1c1c1e; border: 1px solid rgba(255,255,255,0.1); border-radius: 20px; padding: 24px; text-align: center; max-width: 320px; box-shadow: 0 25px 50px rgba(0,0,0,0.5);"
+        >
+            <div style="background: rgba(255,59,48,0.15); width: 64px; height: 64px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px;">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#ff3b30" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                    <line x1="12" y1="9" x2="12" y2="13"></line>
+                    <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                </svg>
+            </div>
+            
+            <h3 style="margin: 0 0 8px; font-size: 18px; color: white;">Audio System Locked</h3>
+            
+            <p style="margin: 0 0 16px; font-size: 14px; color: rgba(255,255,255,0.7); line-height: 1.4;">
+                Apple's iOS has locked your device's audio hardware. This is a known WebKit bug that prevents playback.
+            </p>
+            <p style="margin: 0 0 24px; font-size: 15px; color: white; font-weight: 600;">
+                Please reboot your iPhone to clear the hardware cache.
+            </p>
+            
+            <button 
+                on:click={() => showDeadlockWarning = false}
+                style="background: white; color: black; border: none; border-radius: 12px; padding: 12px 24px; font-weight: 600; font-size: 16px; width: 100%; cursor: pointer;"
+            >
+                Dismiss
+            </button>
+        </div>
+    </div>
+{/if} -->
+
+<style>
+    :global(body), :global(html) {
+        background-color: #050505 !important;
+        margin: 0; padding: 0;
+        overflow: hidden;
+    }
+
+    :global(#app-layout) {
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+        width: 100vw;
+        overflow: hidden;
+        background: transparent !important;
+    }
+
+    .app-row {
+        display: flex;
+        flex-direction: row;
+        flex: 1;
+        width: 100%;
+        height: calc(100vh - 80px);
+        overflow: hidden;
+        position: relative;
+        transition: padding 0.3s ease, gap 0.3s ease;
+    }
+
+    .app-row.max-glass-layout {
+        padding: 16px 16px 0 16px;
+        gap: 16px;
+        align-items: flex-start;
+    }
+
+    :global(.app-row > aside) {
+        background: rgba(0, 0, 0, 0.02) !important;
+        backdrop-filter: blur(28px);
+        -webkit-backdrop-filter: blur(28px);
+        border-right: 1px solid rgba(255,255,255,0.05);
+    }
+
+    :global(.app-row.max-glass-layout > aside), 
+    :global(.app-row.max-glass-layout > main#main-view) {
+        border-radius: 24px !important;
+        background: rgba(255, 255, 255, 0.05) !important;
+        backdrop-filter: blur(32px) saturate(120%) !important;
+        -webkit-backdrop-filter: blur(32px) saturate(120%) !important;
+        border: 1px solid rgba(255, 255, 255, 0.1) !important;
+        box-shadow: 0 16px 40px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.1) !important;
+        overflow-x: hidden;
+        height: 100% !important;
+        will-change: transform;
+    }
+
+    @supports (-moz-appearance:none) {
+        :global(.app-row.max-glass-layout > aside), :global(.app-row.max-glass-layout > main#main-view) {
+            backdrop-filter: blur(16px) !important;
+            background: rgba(255, 255, 255, 0.08) !important;
+        }
+    }
+
+    :global(main#main-view) { flex: 1; overflow-y: auto; position: relative; }
+    :global(#topbar) { 
+        position: sticky !important; 
+        top: 0 !important; 
+        z-index: 10000 !important; 
+        transition: background 0.3s ease, border-bottom 0.3s ease, backdrop-filter 0.3s ease, box-shadow 0.3s ease !important;
+    }
+
+    :global(#topbar.scrolled) {
+        background: rgba(5, 5, 5, 0.40) !important;
+        backdrop-filter: blur(32px) saturate(150%) !important;
+        -webkit-backdrop-filter: blur(32px) saturate(150%) !important;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05) !important;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5) !important;
+    }
+
+    :global(#right-sidebar) {
+        width: 420px !important;
+        min-width: 420px !important;
+        flex-shrink: 0 !important;
+        border-left: 1px solid rgba(255,255,255,0.05);
+    }
+
+    /* SFONDI DINAMICI E OVERLAY */
+    .global-dynamic-bg {
+        position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+        z-index: -2; pointer-events: none;
+        -webkit-mask-image: linear-gradient(to bottom, rgba(0,0,0,1) 0%, rgba(0,0,0,0) 100%);
+        mask-image: linear-gradient(to bottom, rgba(0,0,0,1) 0%, rgba(0,0,0,0) 100%);
+        opacity: 0.35;
+        transition: background-color 0.8s ease;
+    }
+
+    .global-gradient-overlay {
+        position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+        background: linear-gradient(to bottom, transparent 0%, #050505 100%);
+        z-index: -1; pointer-events: none;
+    }
+
+    /* OVERLAY SCURO E BLURRATO PER IL LOGIN */
+    .auth-overlay {
+        position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+        background: rgba(0, 0, 0, 0.6); 
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        display: flex; align-items: center; justify-content: center;
+        z-index: 999999;
+        perspective: 1000px;
+    }
+
+    /* CARD LOGIN ULTRA-GLASS */
+    .auth-card {
+        background: rgba(255, 255, 255, 0.03);
+        backdrop-filter: blur(40px) saturate(150%);
+        -webkit-backdrop-filter: blur(40px) saturate(150%);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-top: 1px solid rgba(255, 255, 255, 0.25); /* Glossy top edge */
+        padding: 48px 40px; 
+        border-radius: 28px; 
+        text-align: center; 
+        width: 90%;
+        max-width: 420px;
+        box-shadow: 
+            0 32px 64px rgba(0, 0, 0, 0.5), 
+            inset 0 1px 0 rgba(255, 255, 255, 0.1);
+        transform: translateY(0);
+        animation: cardFloatUp 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+    }
+
+    @keyframes cardFloatUp {
+        0% { opacity: 0; transform: translateY(30px) scale(0.95); }
+        100% { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    .auth-card h2 { 
+        margin: 0 0 32px 0; 
+        font-size: 28px; 
+        color: white; 
+        font-weight: 800;
+        letter-spacing: -1px;
+    }
+
+    .auth-form { 
+        display: flex; 
+        flex-direction: column; 
+        gap: 16px; 
+    }
+
+    /* INPUT CAMPI INCASSATI E LUMINOSI */
+    .auth-form input {
+        width: 100%; 
+        padding: 16px 20px; 
+        background: rgba(0, 0, 0, 0.3); 
+        color: white;
+        border: 1px solid rgba(255, 255, 255, 0.05); 
+        border-radius: 16px; 
+        font-size: 15px;
+        box-sizing: border-box; 
+        outline: none; 
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
+    }
+
+    .auth-form input::placeholder {
+        color: rgba(255, 255, 255, 0.3);
+    }
+
+    .auth-form input:focus { 
+        border-color: var(--accent-color); 
+        background: rgba(0, 0, 0, 0.5);
+        box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.1), inset 0 2px 4px rgba(0,0,0,0.2); 
+    }
+    
+    .auth-form input:disabled { 
+        opacity: 0.5; 
+        cursor: not-allowed; 
+    }
+
+    .auth-error { 
+        color: #ef4444; 
+        font-size: 13px; 
+        font-weight: 700; 
+        margin-top: -4px; 
+        background: rgba(239, 68, 68, 0.1);
+        padding: 10px;
+        border-radius: 10px;
+        border: 1px solid rgba(239, 68, 68, 0.2);
+    }
+
+    /* BOTTONE CALL TO ACTION */
+    .btn-auth {
+        background: var(--accent-color); 
+        color: black; 
+        border: none; 
+        padding: 16px;
+        font-size: 16px; 
+        font-weight: 800; 
+        border-radius: 16px; 
+        cursor: pointer;
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); 
+        width: 100%; 
+        margin-top: 8px;
+    }
+
+    .btn-auth:hover:not(:disabled) { 
+        transform: translateY(-2px); 
+        box-shadow: 0 8px 24px rgba(255, 255, 255, 0.2);
+        filter: brightness(1.15);
+    }
+    
+    .btn-auth:active:not(:disabled) {
+        transform: translateY(1px);
+        box-shadow: 0 2px 8px rgba(255, 255, 255, 0.1);
+    }
+
+    .btn-auth:disabled { 
+        opacity: 0.7; 
+        cursor: wait; 
+        filter: grayscale(0.5);
+    }
+
+    /* BOTTONE TOGGLE SECONDARIO */
+    .btn-toggle-auth {
+        background: none; 
+        border: none; 
+        color: rgba(255, 255, 255, 0.4);
+        margin-top: 24px; 
+        cursor: pointer; 
+        font-size: 14px; 
+        font-weight: 600;
+        transition: all 0.2s;
+    }
+
+    .btn-toggle-auth:hover { 
+        color: white; 
+        text-shadow: 0 0 12px rgba(255,255,255,0.4);
+    }
+
+    #loader-overlay {
+        position: fixed; 
+        inset: 0; 
+        background: rgba(5, 5, 5, 0.8);
+        backdrop-filter: blur(20px); 
+        -webkit-backdrop-filter: blur(20px);
+        display: flex; 
+        align-items: center; 
+        justify-content: center; 
+        z-index: 999999;
+    }
+
+    .ios-spinner {
+        position: relative; 
+        width: 36px; 
+        height: 36px;
+        display: inline-block;
+    }
+
+    .ios-spinner div {
+        position: absolute; 
+        left: 46%; 
+        top: 10%;
+        width: 8%; 
+        height: 26%;
+        background: rgba(255, 255, 255, 0.9);
+        border-radius: 50px; 
+        opacity: 0;
+        animation: ios-fade 1s linear infinite;
+        transform-origin: 50% 150%;
+        will-change: opacity;
+    }
+
+    @keyframes ios-fade {
+        from { opacity: 1; }
+        to { opacity: 0.15; }
+    }
+
+    /* MEDIA QUERIES (FIX MOBILE ANTI-GLITCH) */
+    @media (max-width: 768px) {
+        .app-row.max-glass-layout { padding: 12px 12px 0 12px; gap: 12px; }
+
+        :global(.app-row > aside:first-child) {
+            position: fixed !important;
+            top: 0 !important;
+            left: 0 !important;
+            height: 100dvh !important;
+            z-index: 100005 !important;
+            padding-bottom: 140px !important;
+        }
+
+        :global(.app-row.max-glass-layout > aside:first-child) {
+            top: 12px !important;
+            left: 12px !important;
+            height: calc(100dvh - 24px) !important;
+            width: calc(100vw - 24px) !important;
+            border-radius: 20px !important;
+            
+            pointer-events: none;
+            transition: pointer-events 0s linear 0.3s; 
+        }
+
+        :global(.app-row.max-glass-layout > aside:first-child.open) {
+            pointer-events: auto !important;
+            transition: pointer-events 0s linear 0s;
+        }
+
+        :global(.app-row.max-glass-layout > main#main-view) {
+            border-radius: 20px !important;
+        }
+    }
+
+    :global(.max-glass-layout) {
+        --surface-color: rgba(255, 255, 255, 0.05) !important;
+    }
+
+    :global(.max-glass-layout .card),
+    :global(.max-glass-layout .album-card), 
+    :global(.max-glass-layout .artist-card), 
+    :global(.max-glass-layout .playlist-card), 
+    :global(.max-glass-layout .grid-item) {
+        background: var(--surface-color) !important;
+        backdrop-filter: blur(24px) saturate(120%) !important;
+        -webkit-backdrop-filter: blur(24px) saturate(120%) !important;
+        border: 1px solid rgba(255, 255, 255, 0.1) !important;
+        border-radius: 12px !important;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.2), inset 1px 1px 0 rgba(255,255,255,0.1) !important;
+        overflow: hidden;
+        transition: transform 0.3s ease, background-color 0.3s ease;
+    }
+
+    :global(.max-glass-layout .card:hover) {
+        background: rgba(255, 255, 255, 0.1) !important;
+    }
+
+    :global(body.modal-open #app-layout) {
+        transform: scale(var(--modal-scale, 0.93)) translateY(10px) !important;
+        border-radius: 32px !important;
+        overflow: hidden !important;
+        pointer-events: none !important; /* Prevents clicking background while player is open */
+        filter: brightness(0.6) !important;
+        transition: transform 0.8s cubic-bezier(0.32, 0.72, 0, 1), 
+                    filter 0.8s ease, 
+                    border-radius 0.8s ease !important;
+    }
+
+    :global(body) {
+        background-color: #000 !important; /* Background must be black for the 'gap' to look right */
+    }
+</style>
+</file>
+
 <file path="wwwroot/psyzx-frontend/src/lib/FullPlayer.svelte">
 <script>
     import { createEventDispatcher, onMount, onDestroy, afterUpdate } from 'svelte';
@@ -12468,9 +13214,10 @@ export const api = {
         isWebAudioMode,
         getFftData 
     } from './audio.js';
-    import { api } from './api.js';
+    import { api, fetchLyricsOnFrontend } from './api.js';
     import { quintOut, expoIn, expoOut, linear } from 'svelte/easing';
     import { spring } from 'svelte/motion';
+
 
     export let isOpen = false;
     const dispatch = createEventDispatcher();
@@ -13270,15 +14017,21 @@ export const api = {
 
     let lyrics = [{ t: 0, text: "♪ (Music) ♪" }];
 
-    $: if (track && track.id && isOpen) {
-        if (api && api.getLyrics) {
-            api.getLyrics(track.id)
-                .then(data => {
-                    if (data && data.length > 0) { lyrics = data; }
-                    else { lyrics = [{ t: 0, text: "♪ (Instrumental) ♪" }]; }
-                })
-                .catch(() => { lyrics = [{ t: 0, text: "♪ (Lyrics Unavailable) ♪" }]; });
-        }
+    $: if (track && track.title && isOpen) {
+        const artistName = track.album?.artist?.name || album?.artistName || 'Unknown Artist';
+        
+        // Added track.id as the first parameter
+        fetchLyricsOnFrontend(track.id, artistName, track.title)
+            .then(data => {
+                if (data && data.length > 0) {
+                    lyrics = data;
+                } else {
+                    lyrics = [{ t: 0, text: "♪ (Instrumental) ♪" }];
+                }
+            })
+            .catch(() => {
+                lyrics = [{ t: 0, text: "♪ (Lyrics Unavailable) ♪" }];
+            });
     }
 
     $: hasSyncLyrics = lyrics.length > 0 &&
@@ -14441,888 +15194,6 @@ export const api = {
         animation: buffer-wave 1.2s infinite linear;
         z-index: 5;
         pointer-events: none;
-    }
-</style>
-</file>
-
-<file path="wwwroot/psyzx-frontend/src/App.svelte">
-<script>
-    import { onMount } from 'svelte';
-    import { fade, scale } from 'svelte/transition';
-    import Sidebar from './lib/Sidebar.svelte';
-    import Topbar from './lib/Topbar.svelte';
-    import Player from './lib/Player.svelte';
-    import FullPlayer from './lib/FullPlayer.svelte';
-    import RightSidebar from './lib/RightSidebar.svelte';
-    import Footer from './lib/Footer.svelte';
-    import InitialLoader from './lib/InitialLoader.svelte';
-    
-    import Library from './lib/views/Library.svelte';
-    import Artist from './lib/views/Artist.svelte';
-    import Album from './lib/views/Album.svelte';
-    import Settings from './lib/views/Settings.svelte';
-    import TopPlayed from './lib/views/TopPlayed.svelte';
-    import Search from './lib/views/Search.svelte';
-    import ThePool from './lib/views/ThePool.svelte';
-    import Offline from './lib/views/Offline.svelte';
-    import Downloader from './lib/views/Downloader.svelte';
-    import Account from './lib/views/Account.svelte';
-    import Playlists from './lib/views/Playlists.svelte';
-    import Playlist from './lib/views/Playlist.svelte';
-    
-    import { api } from './lib/api.js';
-    import { allTracks, artistsMap, albumsMap, accentColor, isGlobalColorActive, isMaxGlassActive } from './store.js';
-    
-    let currentHash = '';
-    let isMobileSidebarOpen = false;
-    let isScrolled = false;
-    let isLoading = true;
-    let isFirstLoad = false;
-    let isFullPlayerOpen = false;
-    let apiError = null;
-    
-    let requiresLogin = false;
-    let isRegisterMode = false;
-    let loginUsername = '';
-    let loginPassword = '';
-    let loginErrorMsg = '';
-    let isLoggingIn = false;
-
-    $: navContextTitle = currentHash.startsWith('#album/') ? 'Album' 
-                       : currentHash.startsWith('#artist/') ? 'Artist'
-                       : currentHash.startsWith('#search/') ? 'Search'
-                       : currentHash.startsWith('#playlist/') ? 'Playlist'
-                       : currentHash === '#playlists' ? 'Playlists'
-                       : currentHash === '#account' ? 'My Account'
-                       : currentHash === '#settings' ? 'Settings' 
-                       : currentHash === '#top' ? 'Top Played'
-                       : currentHash === '#all' ? 'The Pool'
-                       : currentHash === '#offline' ? 'Available Offline'
-                       : currentHash === '#downloader' ? 'Downloader'
-                       : 'Library';
-
-    const localDB = {
-        init() {
-            return new Promise((resolve, reject) => {
-                const request = indexedDB.open('PsyZxStorage', 1);
-                request.onupgradeneeded = (e) => e.target.result.createObjectStore('cache');
-                request.onsuccess = () => resolve(request.result);
-                request.onerror = () => reject(request.error);
-            });
-        },
-        async set(key, val) {
-            const db = await this.init();
-            return new Promise((resolve, reject) => {
-                const tx = db.transaction('cache', 'readwrite');
-                tx.objectStore('cache').put(val, key);
-                tx.oncomplete = () => resolve();
-                tx.onerror = () => reject(tx.error);
-            });
-        },
-        async get(key) {
-            const db = await this.init();
-            return new Promise((resolve, reject) => {
-                const tx = db.transaction('cache', 'readonly');
-                const req = tx.objectStore('cache').get(key);
-                req.onsuccess = () => resolve(req.result);
-                req.onerror = () => reject(req.error);
-            });
-        }
-    };
-
-    const buildLibrary = (data, statsData) => {
-        const statsMap = new Map();
-        if (statsData) {
-            if (Array.isArray(statsData)) {
-                statsData.forEach(s => statsMap.set(s.trackId || s.id, s.playCount || s.plays || 0));
-            } else if (typeof statsData === 'object') {
-                Object.entries(statsData).forEach(([k, v]) => statsMap.set(parseInt(k), typeof v === 'number' ? v : (v.playCount || v.plays || 0)));
-            }
-        }
-
-        const newArtists = new Map();
-        const newAlbums = new Map();
-
-        data.forEach(track => {
-            if (!track) return;
-            track.playCount = statsMap.get(track.id) || track.playCount || 0;
-            
-            const album = track.album || { id: 9999, title: 'Unknown Album', coverPath: '' };
-            const artist = album.artist || { id: 9999, name: 'Unknown Artist', imagePath: '' };
-            
-            if (!newArtists.has(artist.id)) newArtists.set(artist.id, { id: artist.id, name: artist.name, imagePath: artist.imagePath, albums: new Set() });
-            newArtists.get(artist.id).albums.add(album.id);
-            
-            if (!newAlbums.has(album.id)) newAlbums.set(album.id, { id: album.id, title: album.title, coverPath: album.coverPath, releaseYear: album.releaseYear, playCount: album.playCount || 0, artistId: artist.id, artistName: artist.name, tracks: [] });
-            
-            const currentAlbum = newAlbums.get(album.id);
-            if (!currentAlbum.tracks.some(t => t.id === track.id)) {
-                currentAlbum.tracks.push(track);
-                currentAlbum.playCount += track.playCount;
-            }
-        });
-
-        allTracks.set(data);
-        artistsMap.set(newArtists);
-        albumsMap.set(newAlbums);
-    };
-
-    let bootProgress = 0;
-    let bootStatus = "Waking up...";
-
-    const bootEngine = async () => {
-        isLoading = true;
-        isFirstLoad = !sessionStorage.getItem('psyzx_booted');
-
-        const trickle = setInterval(() => {
-            if (bootProgress < 95) bootProgress += 0.2;
-        }, 100);
-
-        bootStatus = "Verifying Identity...";
-        console.group('[AUTH DEBUG] bootEngine() Initialization');
-        console.log('[AUTH DEBUG] Calling api.checkAuth()...');
-        
-        let isAuth = false;
-        try {
-            isAuth = await api.checkAuth();
-            console.log('[AUTH DEBUG] api.checkAuth() returned:', isAuth);
-        } catch (e) {
-            console.error('[AUTH DEBUG] Exception during api.checkAuth():', e);
-        }
-
-        if (!isAuth) { 
-            console.warn('[AUTH DEBUG] Not authenticated. Triggering login screen.');
-            console.groupEnd();
-            clearInterval(trickle);
-            requiresLogin = true; 
-            isLoading = false; 
-            return; 
-        }
-        console.log('[AUTH DEBUG] Authentication confirmed. Booting core...');
-        console.groupEnd();
-        
-        bootProgress = 25; 
-
-        try {
-            bootStatus = "Checking core playlists...";
-            const playlists = await api.getPlaylists();
-            if (!playlists.some(p => p.name === 'Favorites')) {
-                await api.createPlaylist('Favorites');
-            }
-        } catch (e) { console.warn("Could not check favorites", e); }
-
-        bootProgress = 35;
-
-        try {
-            bootStatus = "Checking local storage...";
-            const cachedLocal = await localDB.get('psyzx_library_cache');
-            if (cachedLocal?.length > 0) {
-                buildLibrary(cachedLocal, null);
-                bootProgress = 45; 
-            }
-
-            bootStatus = "Syncing tracks from server...";
-            let data = await api.getTracks();
-            bootProgress = 85; 
-
-            if (data?.length > 0) {
-                bootStatus = "Optimizing library...";
-                localDB.set('psyzx_library_cache', data);
-                bootProgress = 95; 
-                
-                let statsData = null;
-                try { statsData = await api.getStats(); } catch(e) {}
-                buildLibrary(data, statsData);
-            }
-        } catch (e) {
-            console.error(e);
-        } finally {
-            clearInterval(trickle);
-            bootProgress = 100; 
-            bootStatus = "Ready.";
-            setTimeout(() => {
-                isLoading = false;
-                sessionStorage.setItem('psyzx_booted', 'true');
-            }, 800);
-        }
-    };
-
-    const handleRefresh = async () => {
-        isLoading = true;
-        isFirstLoad = true; 
-        bootProgress = 10;
-        bootStatus = "Commanding C# to scan /Music...";
-        
-        try {
-            await api.scanLibrary();
-            bootProgress = 50;
-            
-            bootStatus = "Downloading fresh tracks...";
-            let data = await api.getTracks();
-            bootProgress = 80;
-            
-            if (data?.length > 0) {
-                bootStatus = "Rebuilding Library...";
-                await localDB.set('psyzx_library_cache', data);
-                
-                let statsData = null;
-                try { statsData = await api.getStats(); } catch(e) {}
-                
-                buildLibrary(data, statsData);
-            }
-        } catch (error) {
-            console.error("Refresh failed:", error);
-            apiError = "Library Sync Failed (Server Offline?)";
-            setTimeout(() => apiError = null, 4000);
-        } finally {
-            bootProgress = 100;
-            bootStatus = "Done.";
-            setTimeout(() => {
-                isLoading = false;
-                isFirstLoad = false;
-            }, 600);
-        }
-    };
-
-    let showDeadlockWarning = false;
-    
-    onMount(() => {
-        currentHash = window.location.hash;
-        const handleHashChange = () => { 
-            currentHash = window.location.hash; 
-            isMobileSidebarOpen = false; 
-            window.scrollTo({ top: 0, behavior: 'smooth' });
-        };
-        window.addEventListener('hashchange', handleHashChange);
-        bootEngine();
-
-        const triggerWarning = () => {
-            showDeadlockWarning = true;
-        };
-
-        window.addEventListener('ios-hardware-deadlock', triggerWarning);
-
-        return () => {
-            window.removeEventListener('hashchange', handleHashChange);
-            window.removeEventListener('ios-hardware-deadlock', triggerWarning);
-        };
-    });
-
-    if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('/sw.js', { scope: '/' })
-            .then(reg => {
-                console.log('SW Registered!', reg);
-                reg.onupdatefound = () => {
-                    const newWorker = reg.installing;
-                    newWorker.onstatechange = () => {
-                        if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                            location.reload(); 
-                        }
-                    };
-                };
-            })
-            .catch(err => console.error('SW Registration Failed', err));
-    }
-
-    const handleScroll = (e) => { isScrolled = e.target.scrollTop > 50; };
-
-    // --- HEAVILY MODIFIED AUTH EXECUTION ---
-    const executeAuth = async () => {
-        console.group(`[AUTH DEBUG] executeAuth() - Mode: ${isRegisterMode ? 'REGISTER' : 'LOGIN'}`);
-        
-        const trimmedUsername = loginUsername.trim();
-        console.log(`[AUTH DEBUG] Raw Input -> User: "${loginUsername}", Trimmed: "${trimmedUsername}", Password Length: ${loginPassword.length}`);
-
-        if (!trimmedUsername || !loginPassword) {
-            console.warn('[AUTH DEBUG] Validation failed: Empty fields detected after trim.');
-            loginErrorMsg = "Fill all fields.";
-            console.groupEnd();
-            return;
-        }
-        
-        isLoggingIn = true;
-        loginErrorMsg = '';
-        
-        const credentials = { username: trimmedUsername, password: loginPassword };
-        console.log('[AUTH DEBUG] Sending credentials payload to API...', { username: credentials.username, password: '***' });
-
-        try {
-            if (isRegisterMode) {
-                console.log('[AUTH DEBUG] Calling api.register...');
-                const res = await api.register(credentials);
-                console.log('[AUTH DEBUG] api.register response received:', res);
-
-                // Handle Fetch Response natively, or raw JSON object wrappers
-                if (res && (res.ok === true || res.success === true || res.status === 200 || res.status === 201)) {
-                    console.log('[AUTH DEBUG] Registration SUCCESS. Switching to login mode to auto-auth.');
-                    isRegisterMode = false;
-                    console.groupEnd();
-                    await executeAuth(); // Recursive auto-login
-                } else {
-                    console.error('[AUTH DEBUG] Registration FAILED.');
-                    let errorText = "Username already taken or server error.";
-                    
-                    // Attempt to parse out exact server error
-                    if (res && typeof res.json === 'function') {
-                        try {
-                            const errData = await res.clone().json();
-                            console.log('[AUTH DEBUG] Extracted JSON error payload:', errData);
-                            errorText = errData.message || errData.error || errorText;
-                        } catch (e) { console.warn('[AUTH DEBUG] Could not parse error JSON'); }
-                    } else if (res && res.message) {
-                        errorText = res.message;
-                    }
-
-                    loginErrorMsg = errorText;
-                    isLoggingIn = false;
-                    console.groupEnd();
-                }
-            } else {
-                console.log('[AUTH DEBUG] Calling api.login...');
-                const res = await api.login(credentials);
-                console.log('[AUTH DEBUG] api.login response received:', res);
-
-                // Handle standard auth success criteria
-                if (res && (res.ok === true || res.success === true || res.token || res.status === 200)) {
-                    console.log('[AUTH DEBUG] Login SUCCESS! Transitioning app state...');
-                    requiresLogin = false;
-                    isLoggingIn = false; // reset cleanly
-                    isLoading = true;
-                    
-                    console.log('[AUTH DEBUG] Re-triggering bootEngine()...');
-                    console.groupEnd();
-                    bootEngine();
-                } else {
-                    console.error('[AUTH DEBUG] Login FAILED. Denied by server.');
-                    let errorText = "Invalid credentials. Retry.";
-                    
-                    // Attempt to parse out exact server error
-                    if (res && typeof res.json === 'function') {
-                        try {
-                            const errData = await res.clone().json();
-                            console.log('[AUTH DEBUG] Extracted JSON error payload:', errData);
-                            errorText = errData.message || errData.error || errorText;
-                        } catch (e) { console.warn('[AUTH DEBUG] Could not parse error JSON'); }
-                    } else if (res && res.message) {
-                        errorText = res.message;
-                    }
-
-                    loginErrorMsg = errorText;
-                    isLoggingIn = false;
-                    console.groupEnd();
-                }
-            }
-        } catch (error) {
-            console.error('[AUTH DEBUG] FATAL EXCEPTION during authentication API call:', error);
-            loginErrorMsg = "A network or server error occurred.";
-            isLoggingIn = false;
-            console.groupEnd();
-        }
-    };
-</script>
-
-{#if isLoading}
-    {#if isFirstLoad}
-        <InitialLoader progress={bootProgress} status={bootStatus} />
-    {:else}
-        <div id="loader-overlay" class="active" out:fade={{duration: 300}}>
-            <div class="ios-spinner">
-                {#each Array(12) as _, i}
-                    <div style="transform: rotate({i * 30}deg); animation-delay: {-(1.1 - (i * 0.083))}s;"></div>
-                {/each}
-            </div>
-        </div>
-    {/if}
-{/if}
-
-{#if requiresLogin}
-    <div class="auth-overlay" in:fade={{duration: 300}}>
-        <div class="auth-card">
-            <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="var(--accent-color)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom: 16px;">
-                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
-            </svg>
-            <h2>{isRegisterMode ? 'Create Account' : 'Access Required'}</h2>
-            
-            <form on:submit|preventDefault={executeAuth} class="auth-form">
-                <input type="text" bind:value={loginUsername} placeholder="Username" required disabled={isLoggingIn} autocomplete="username">
-                <input type="password" bind:value={loginPassword} placeholder="Password" required disabled={isLoggingIn} autocomplete={isRegisterMode ? "new-password" : "current-password"}>
-                
-                {#if loginErrorMsg}
-                    <div class="auth-error">{loginErrorMsg}</div>
-                {/if}
-                
-                <button type="submit" class="btn-auth" disabled={isLoggingIn}>
-                    {#if isLoggingIn}
-                        Working...
-                    {:else}
-                        {isRegisterMode ? 'Sign Up' : 'Enter'}
-                    {/if}
-                </button>
-            </form>
-
-            <button class="btn-toggle-auth" on:click={() => { isRegisterMode = !isRegisterMode; loginErrorMsg = ''; }} disabled={isLoggingIn}>
-                {isRegisterMode ? 'Already have an account? Login' : 'No account? Register here'}
-            </button>
-        </div>
-    </div>
-{/if}
-
-{#if apiError && !requiresLogin}
-    <div id="toast-msg" class="show" style="background: #ef4444;">{apiError}</div>
-{/if}
-
-<div class="global-dynamic-bg" style="background-color: {$isGlobalColorActive ? $accentColor : '#1a0524'};"></div>
-<div class="global-gradient-overlay"></div>
-
-{#if !requiresLogin && !isLoading}
-    <div id="app-layout" style="position: relative; z-index: 1;">
-        <div class="app-row" class:max-glass-layout={$isMaxGlassActive}>
-            <Sidebar bind:isMobileOpen={isMobileSidebarOpen} {currentHash} />
-
-            <main id="main-view" on:scroll={handleScroll}>
-                <Topbar 
-                    {isScrolled} 
-                    navContext={navContextTitle} 
-                    currentHash={currentHash} 
-                    on:toggleSidebar={() => isMobileSidebarOpen = !isMobileSidebarOpen} 
-                    on:refresh={handleRefresh} 
-                />                
-                <div id="main-content" style="flex: 1; display: grid;">
-                    {#key currentHash}
-                    <div in:fade={{duration: 250, delay: 100}} out:fade={{duration: 100}} style="grid-area: 1 / 1; display: flex; flex-direction: column; min-height: 100%;">
-                        
-                        <div style="flex-grow: 1;">
-                            {#if currentHash === '' || currentHash === '#' || currentHash === '#/'}
-                                <Library />
-                            {:else if currentHash.startsWith('#artist/')}
-                                <Artist artistId={currentHash.split('/')[1]} />
-                            {:else if currentHash.startsWith('#album/')}
-                                <Album albumId={currentHash.split('/')[1]} />
-                            {:else if currentHash.startsWith('#search/')}
-                                <Search query={decodeURIComponent(currentHash.substring(8))} />
-                            {:else if currentHash === '#playlists'}
-                                <Playlists />
-                            {:else if currentHash.startsWith('#playlist/')} 
-                                <Playlist playlistId={currentHash.split('/')[1]} />
-                            {:else if currentHash === '#account'}
-                                <Account />
-                            {:else if currentHash === '#top'}
-                                <TopPlayed />
-                            {:else if currentHash === '#all'}
-                                <ThePool />
-                            {:else if currentHash === '#offline'}
-                                <Offline />
-                            {:else if currentHash === '#downloader'}
-                                <Downloader />
-                            {:else if currentHash === '#settings'}
-                                <Settings />
-                            {:else}
-                                <div style="padding: 24px; color: var(--text-secondary);">Route not found.</div>
-                            {/if}
-                        </div>
-
-                        <Footer />
-                        
-                    </div>
-                    {/key}
-                </div>
-            </main>
-
-            <aside id="right-sidebar">
-                <RightSidebar />
-            </aside>
-        </div>
-
-        <Player on:toggleFull={() => isFullPlayerOpen = !isFullPlayerOpen} />
-    </div>
-
-    <FullPlayer isOpen={isFullPlayerOpen} on:close={() => isFullPlayerOpen = false} />
-{/if}
-
-<!-- {#if showDeadlockWarning}
-    <div 
-        class="system-modal-backdrop" 
-        transition:fade={{duration: 200}} 
-        style="position: fixed; inset: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(8px); z-index: 999999; display: flex; align-items: center; justify-content: center; padding: 24px;"
-    >
-        <div 
-            class="system-modal-card" 
-            transition:scale={{start: 0.9, duration: 250, opacity: 0}}
-            style="background: #1c1c1e; border: 1px solid rgba(255,255,255,0.1); border-radius: 20px; padding: 24px; text-align: center; max-width: 320px; box-shadow: 0 25px 50px rgba(0,0,0,0.5);"
-        >
-            <div style="background: rgba(255,59,48,0.15); width: 64px; height: 64px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px;">
-                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#ff3b30" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
-                    <line x1="12" y1="9" x2="12" y2="13"></line>
-                    <line x1="12" y1="17" x2="12.01" y2="17"></line>
-                </svg>
-            </div>
-            
-            <h3 style="margin: 0 0 8px; font-size: 18px; color: white;">Audio System Locked</h3>
-            
-            <p style="margin: 0 0 16px; font-size: 14px; color: rgba(255,255,255,0.7); line-height: 1.4;">
-                Apple's iOS has locked your device's audio hardware. This is a known WebKit bug that prevents playback.
-            </p>
-            <p style="margin: 0 0 24px; font-size: 15px; color: white; font-weight: 600;">
-                Please reboot your iPhone to clear the hardware cache.
-            </p>
-            
-            <button 
-                on:click={() => showDeadlockWarning = false}
-                style="background: white; color: black; border: none; border-radius: 12px; padding: 12px 24px; font-weight: 600; font-size: 16px; width: 100%; cursor: pointer;"
-            >
-                Dismiss
-            </button>
-        </div>
-    </div>
-{/if} -->
-
-<style>
-    :global(body), :global(html) {
-        background-color: #050505 !important;
-        margin: 0; padding: 0;
-        overflow: hidden;
-    }
-
-    :global(#app-layout) {
-        display: flex;
-        flex-direction: column;
-        height: 100vh;
-        width: 100vw;
-        overflow: hidden;
-        background: transparent !important;
-    }
-
-    .app-row {
-        display: flex;
-        flex-direction: row;
-        flex: 1;
-        width: 100%;
-        height: calc(100vh - 80px);
-        overflow: hidden;
-        position: relative;
-        transition: padding 0.3s ease, gap 0.3s ease;
-    }
-
-    .app-row.max-glass-layout {
-        padding: 16px 16px 0 16px;
-        gap: 16px;
-        align-items: flex-start;
-    }
-
-    :global(.app-row > aside) {
-        background: rgba(0, 0, 0, 0.02) !important;
-        backdrop-filter: blur(28px);
-        -webkit-backdrop-filter: blur(28px);
-        border-right: 1px solid rgba(255,255,255,0.05);
-    }
-
-    :global(.app-row.max-glass-layout > aside), 
-    :global(.app-row.max-glass-layout > main#main-view) {
-        border-radius: 24px !important;
-        background: rgba(255, 255, 255, 0.05) !important;
-        backdrop-filter: blur(32px) saturate(120%) !important;
-        -webkit-backdrop-filter: blur(32px) saturate(120%) !important;
-        border: 1px solid rgba(255, 255, 255, 0.1) !important;
-        box-shadow: 0 16px 40px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.1) !important;
-        overflow-x: hidden;
-        height: 100% !important;
-        will-change: transform;
-    }
-
-    @supports (-moz-appearance:none) {
-        :global(.app-row.max-glass-layout > aside), :global(.app-row.max-glass-layout > main#main-view) {
-            backdrop-filter: blur(16px) !important;
-            background: rgba(255, 255, 255, 0.08) !important;
-        }
-    }
-
-    :global(main#main-view) { flex: 1; overflow-y: auto; position: relative; }
-    :global(#topbar) { 
-        position: sticky !important; 
-        top: 0 !important; 
-        z-index: 10000 !important; 
-        transition: background 0.3s ease, border-bottom 0.3s ease, backdrop-filter 0.3s ease, box-shadow 0.3s ease !important;
-    }
-
-    :global(#topbar.scrolled) {
-        background: rgba(5, 5, 5, 0.40) !important;
-        backdrop-filter: blur(32px) saturate(150%) !important;
-        -webkit-backdrop-filter: blur(32px) saturate(150%) !important;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.05) !important;
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5) !important;
-    }
-
-    :global(#right-sidebar) {
-        width: 420px !important;
-        min-width: 420px !important;
-        flex-shrink: 0 !important;
-        border-left: 1px solid rgba(255,255,255,0.05);
-    }
-
-    /* SFONDI DINAMICI E OVERLAY */
-    .global-dynamic-bg {
-        position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-        z-index: -2; pointer-events: none;
-        -webkit-mask-image: linear-gradient(to bottom, rgba(0,0,0,1) 0%, rgba(0,0,0,0) 100%);
-        mask-image: linear-gradient(to bottom, rgba(0,0,0,1) 0%, rgba(0,0,0,0) 100%);
-        opacity: 0.35;
-        transition: background-color 0.8s ease;
-    }
-
-    .global-gradient-overlay {
-        position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-        background: linear-gradient(to bottom, transparent 0%, #050505 100%);
-        z-index: -1; pointer-events: none;
-    }
-
-    /* OVERLAY SCURO E BLURRATO PER IL LOGIN */
-    .auth-overlay {
-        position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-        background: rgba(0, 0, 0, 0.6); 
-        backdrop-filter: blur(8px);
-        -webkit-backdrop-filter: blur(8px);
-        display: flex; align-items: center; justify-content: center;
-        z-index: 999999;
-        perspective: 1000px;
-    }
-
-    /* CARD LOGIN ULTRA-GLASS */
-    .auth-card {
-        background: rgba(255, 255, 255, 0.03);
-        backdrop-filter: blur(40px) saturate(150%);
-        -webkit-backdrop-filter: blur(40px) saturate(150%);
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        border-top: 1px solid rgba(255, 255, 255, 0.25); /* Glossy top edge */
-        padding: 48px 40px; 
-        border-radius: 28px; 
-        text-align: center; 
-        width: 90%;
-        max-width: 420px;
-        box-shadow: 
-            0 32px 64px rgba(0, 0, 0, 0.5), 
-            inset 0 1px 0 rgba(255, 255, 255, 0.1);
-        transform: translateY(0);
-        animation: cardFloatUp 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
-    }
-
-    @keyframes cardFloatUp {
-        0% { opacity: 0; transform: translateY(30px) scale(0.95); }
-        100% { opacity: 1; transform: translateY(0) scale(1); }
-    }
-
-    .auth-card h2 { 
-        margin: 0 0 32px 0; 
-        font-size: 28px; 
-        color: white; 
-        font-weight: 800;
-        letter-spacing: -1px;
-    }
-
-    .auth-form { 
-        display: flex; 
-        flex-direction: column; 
-        gap: 16px; 
-    }
-
-    /* INPUT CAMPI INCASSATI E LUMINOSI */
-    .auth-form input {
-        width: 100%; 
-        padding: 16px 20px; 
-        background: rgba(0, 0, 0, 0.3); 
-        color: white;
-        border: 1px solid rgba(255, 255, 255, 0.05); 
-        border-radius: 16px; 
-        font-size: 15px;
-        box-sizing: border-box; 
-        outline: none; 
-        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
-    }
-
-    .auth-form input::placeholder {
-        color: rgba(255, 255, 255, 0.3);
-    }
-
-    .auth-form input:focus { 
-        border-color: var(--accent-color); 
-        background: rgba(0, 0, 0, 0.5);
-        box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.1), inset 0 2px 4px rgba(0,0,0,0.2); 
-    }
-    
-    .auth-form input:disabled { 
-        opacity: 0.5; 
-        cursor: not-allowed; 
-    }
-
-    .auth-error { 
-        color: #ef4444; 
-        font-size: 13px; 
-        font-weight: 700; 
-        margin-top: -4px; 
-        background: rgba(239, 68, 68, 0.1);
-        padding: 10px;
-        border-radius: 10px;
-        border: 1px solid rgba(239, 68, 68, 0.2);
-    }
-
-    /* BOTTONE CALL TO ACTION */
-    .btn-auth {
-        background: var(--accent-color); 
-        color: black; 
-        border: none; 
-        padding: 16px;
-        font-size: 16px; 
-        font-weight: 800; 
-        border-radius: 16px; 
-        cursor: pointer;
-        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); 
-        width: 100%; 
-        margin-top: 8px;
-    }
-
-    .btn-auth:hover:not(:disabled) { 
-        transform: translateY(-2px); 
-        box-shadow: 0 8px 24px rgba(255, 255, 255, 0.2);
-        filter: brightness(1.15);
-    }
-    
-    .btn-auth:active:not(:disabled) {
-        transform: translateY(1px);
-        box-shadow: 0 2px 8px rgba(255, 255, 255, 0.1);
-    }
-
-    .btn-auth:disabled { 
-        opacity: 0.7; 
-        cursor: wait; 
-        filter: grayscale(0.5);
-    }
-
-    /* BOTTONE TOGGLE SECONDARIO */
-    .btn-toggle-auth {
-        background: none; 
-        border: none; 
-        color: rgba(255, 255, 255, 0.4);
-        margin-top: 24px; 
-        cursor: pointer; 
-        font-size: 14px; 
-        font-weight: 600;
-        transition: all 0.2s;
-    }
-
-    .btn-toggle-auth:hover { 
-        color: white; 
-        text-shadow: 0 0 12px rgba(255,255,255,0.4);
-    }
-
-    #loader-overlay {
-        position: fixed; 
-        inset: 0; 
-        background: rgba(5, 5, 5, 0.8);
-        backdrop-filter: blur(20px); 
-        -webkit-backdrop-filter: blur(20px);
-        display: flex; 
-        align-items: center; 
-        justify-content: center; 
-        z-index: 999999;
-    }
-
-    .ios-spinner {
-        position: relative; 
-        width: 36px; 
-        height: 36px;
-        display: inline-block;
-    }
-
-    .ios-spinner div {
-        position: absolute; 
-        left: 46%; 
-        top: 10%;
-        width: 8%; 
-        height: 26%;
-        background: rgba(255, 255, 255, 0.9);
-        border-radius: 50px; 
-        opacity: 0;
-        animation: ios-fade 1s linear infinite;
-        transform-origin: 50% 150%;
-        will-change: opacity;
-    }
-
-    @keyframes ios-fade {
-        from { opacity: 1; }
-        to { opacity: 0.15; }
-    }
-
-    /* MEDIA QUERIES (FIX MOBILE ANTI-GLITCH) */
-    @media (max-width: 768px) {
-        .app-row.max-glass-layout { padding: 12px 12px 0 12px; gap: 12px; }
-
-        :global(.app-row > aside:first-child) {
-            position: fixed !important;
-            top: 0 !important;
-            left: 0 !important;
-            height: 100dvh !important;
-            z-index: 100005 !important;
-            padding-bottom: 140px !important;
-        }
-
-        :global(.app-row.max-glass-layout > aside:first-child) {
-            top: 12px !important;
-            left: 12px !important;
-            height: calc(100dvh - 24px) !important;
-            width: calc(100vw - 24px) !important;
-            border-radius: 20px !important;
-            
-            pointer-events: none;
-            transition: pointer-events 0s linear 0.3s; 
-        }
-
-        :global(.app-row.max-glass-layout > aside:first-child.open) {
-            pointer-events: auto !important;
-            transition: pointer-events 0s linear 0s;
-        }
-
-        :global(.app-row.max-glass-layout > main#main-view) {
-            border-radius: 20px !important;
-        }
-    }
-
-    :global(.max-glass-layout) {
-        --surface-color: rgba(255, 255, 255, 0.05) !important;
-    }
-
-    :global(.max-glass-layout .card),
-    :global(.max-glass-layout .album-card), 
-    :global(.max-glass-layout .artist-card), 
-    :global(.max-glass-layout .playlist-card), 
-    :global(.max-glass-layout .grid-item) {
-        background: var(--surface-color) !important;
-        backdrop-filter: blur(24px) saturate(120%) !important;
-        -webkit-backdrop-filter: blur(24px) saturate(120%) !important;
-        border: 1px solid rgba(255, 255, 255, 0.1) !important;
-        border-radius: 12px !important;
-        box-shadow: 0 8px 24px rgba(0,0,0,0.2), inset 1px 1px 0 rgba(255,255,255,0.1) !important;
-        overflow: hidden;
-        transition: transform 0.3s ease, background-color 0.3s ease;
-    }
-
-    :global(.max-glass-layout .card:hover) {
-        background: rgba(255, 255, 255, 0.1) !important;
-    }
-
-    :global(body.modal-open #app-layout) {
-        transform: scale(var(--modal-scale, 0.93)) translateY(10px) !important;
-        border-radius: 32px !important;
-        overflow: hidden !important;
-        pointer-events: none !important; /* Prevents clicking background while player is open */
-        filter: brightness(0.6) !important;
-        transition: transform 0.8s cubic-bezier(0.32, 0.72, 0, 1), 
-                    filter 0.8s ease, 
-                    border-radius 0.8s ease !important;
-    }
-
-    :global(body) {
-        background-color: #000 !important; /* Background must be black for the 'gap' to look right */
     }
 </style>
 </file>

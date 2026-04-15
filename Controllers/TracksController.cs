@@ -12,6 +12,10 @@ using System.Linq;
 using Microsoft.Extensions.Configuration;
 using System;
 using Microsoft.AspNetCore.Authorization;
+using System.Diagnostics;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Processing;
+using SixLabors.ImageSharp.Formats.Jpeg;
 
 [Authorize]
 [ApiController]
@@ -20,13 +24,11 @@ public class TracksController : ControllerBase
 {
     private readonly AppDbContext _context;
     private readonly string _basePath;
-    private readonly LyricsDownloader _lyricsDownloader;
 
-    public TracksController(AppDbContext context, IConfiguration config, LyricsDownloader lyricsDownloader)
+    public TracksController(AppDbContext context, IConfiguration config)
     {
         _context = context;
         _basePath = Path.GetFullPath(config["MusicSettings:BasePath"] ?? "");
-        _lyricsDownloader = lyricsDownloader;
     }
 
     [HttpGet]
@@ -67,115 +69,71 @@ public class TracksController : ControllerBase
     }
 
     [HttpGet("stream/{id}")]
-    public async Task<IActionResult> StreamTrack(int id)
+    public async Task<IActionResult> StreamTrack(int id, [FromQuery] int kbps = 192, [FromQuery] string format = "mp3")
     {
         var track = await _context.Tracks.FindAsync(id);
-        if (track == null || string.IsNullOrEmpty(track.FilePath)) return NotFound();
+        if (track == null) return NotFound();
 
         var fullPath = Path.Combine(_basePath, track.FilePath);
-        if (!System.IO.File.Exists(fullPath)) return NotFound();
-
-        var mimeType = track.FilePath.EndsWith(".flac", StringComparison.OrdinalIgnoreCase) ? "audio/flac" : "audio/mpeg";
         
-        Response.Headers.Append("Access-Control-Allow-Origin", "*"); 
-        Response.Headers.Append("Access-Control-Allow-Methods", "GET, OPTIONS");
-        Response.Headers.Append("Access-Control-Allow-Headers", "Range, Authorization, Content-Type");
-        Response.Headers.Append("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges");
+        // FIX 1: Fallback to 320 if track.Bitrate is missing/0 to prevent FFmpeg crash
+        int validTrackBitrate = track.Bitrate > 0 ? track.Bitrate : 320;
+        int targetKbps = Math.Min(kbps, validTrackBitrate);
+        
+        bool needsTranscode = track.Bitrate > kbps || format == "mp4";
 
-        return PhysicalFile(fullPath, mimeType, enableRangeProcessing: true);
+        if (needsTranscode)
+        {
+            string contentType = format == "mp4" ? "audio/mp4" : "audio/mpeg";
+
+            // 1. Added '-re' to process in real-time (1x speed limit)
+            // 2. Kept '-threads 1' to isolate it to a single core
+            string ffmpegArgs = format == "mp4"
+                ? $"-re -threads 1 -i \"{fullPath}\" -map 0:a:0 -c:a aac -b:a {targetKbps}k -f mp4 -movflags frag_keyframe+empty_moov -"
+                : $"-re -threads 1 -i \"{fullPath}\" -map 0:a:0 -b:a {targetKbps}k -f mp3 -";
+            
+            var process = new Process {
+                StartInfo = new ProcessStartInfo {
+                    // Use the Linux 'nice' command to run FFmpeg with lowest CPU priority (19)
+                    // This ensures FFmpeg only uses CPU cycles the OS doesn't currently need.
+                    FileName = "nice",
+                    Arguments = $"-n 19 ffmpeg {ffmpegArgs}",
+                    RedirectStandardOutput = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                }
+            };
+            process.Start();
+            
+            return File(process.StandardOutput.BaseStream, contentType, enableRangeProcessing: false);
+        }
+        
+        // Native files ARE seekable, so range processing stays true here
+        return PhysicalFile(fullPath, "audio/mpeg", enableRangeProcessing: true);
     }
 
     [HttpGet("image")]
-    public IActionResult GetImage([FromQuery] string path)
+    public IActionResult GetImage([FromQuery] string path, [FromQuery] string quality = "high")
     {
-        if (string.IsNullOrEmpty(path)) return NotFound();
-        
         var fullPath = Path.Combine(_basePath, path);
         if (!System.IO.File.Exists(fullPath)) return NotFound();
-        
+
+        if (quality == "low")
+        {
+            // Use ImageSharp to resize on the fly and compress (or serve a pre-generated thumbnail)
+            using var image = SixLabors.ImageSharp.Image.Load(fullPath);
+            image.Mutate(x => x.Resize(new ResizeOptions {
+                Size = new Size(150, 150),
+                Mode = ResizeMode.Crop
+            }));
+            
+            var ms = new MemoryStream();
+            image.SaveAsJpeg(ms, new JpegEncoder { Quality = 50 }); // High compression
+            ms.Position = 0;
+            return File(ms, "image/jpeg");
+        }
+
         return PhysicalFile(fullPath, "image/jpeg");
-    }
-
-    public class LyricLine
-    {
-        public double t { get; set; }
-        public string text { get; set; } = string.Empty;
-    }
-
-    [HttpGet("lyrics/{id}")]
-    public async Task<IActionResult> GetLyrics(int id)
-    {
-        var track = await _context.Tracks
-            .Include(t => t.Album)
-                .ThenInclude(a => a.Artist)
-            .FirstOrDefaultAsync(t => t.Id == id); 
-
-        if (track == null || string.IsNullOrEmpty(track.FilePath)) return NotFound();
-
-        var relativeAudioDir = Path.GetDirectoryName(track.FilePath) ?? "";
-        var fileNameWithoutExt = Path.GetFileNameWithoutExtension(track.FilePath);
-        
-        var lrcDir = Path.Combine(_basePath, "lrc", relativeAudioDir);
-        var lyricPath = Path.Combine(lrcDir, $"{fileNameWithoutExt}.lrc");
-
-        if (!System.IO.File.Exists(lyricPath))
-        {
-            await _lyricsDownloader.DownloadLyricsForTrackAsync(track);
-        }
-
-        if (!System.IO.File.Exists(lyricPath))
-        {
-            return Ok(new List<LyricLine>()); 
-        }
-
-        var lines = await System.IO.File.ReadAllLinesAsync(lyricPath);
-        var parsedLyrics = new List<LyricLine>();
-        bool isSynced = false;
-
-        var timeRegex = new System.Text.RegularExpressions.Regex(@"\[(\d+):(\d+(?:\.\d+)?)\]");
-
-        foreach (var line in lines)
-        {
-            var matches = timeRegex.Matches(line);
-            if (matches.Count > 0)
-            {
-                var cleanText = timeRegex.Replace(line, "").Trim();
-
-                foreach (System.Text.RegularExpressions.Match match in matches)
-                {
-                    try
-                    {
-                        double minutes = double.Parse(match.Groups[1].Value);
-                        double seconds = double.Parse(match.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture); 
-                        
-                        parsedLyrics.Add(new LyricLine { 
-                            t = (minutes * 60) + seconds, 
-                            text = cleanText 
-                        });
-                        isSynced = true;
-                    }
-                    catch { continue; }
-                }
-            }
-        }
-
-        if (isSynced)
-        {
-            parsedLyrics = parsedLyrics.OrderBy(l => l.t).ToList();
-        }
-        else if (lines.Length > 0)
-        {
-            parsedLyrics.Add(new LyricLine { t = 0, text = "◆ LYRICS SYNC NOT AVAILABLE ◆" });
-            foreach (var line in lines)
-            {
-                if (!string.IsNullOrWhiteSpace(line))
-                {
-                    parsedLyrics.Add(new LyricLine { t = 9999, text = line.Trim() });
-                }
-            }
-        }
-
-        return Ok(parsedLyrics);
     }
 
     [HttpGet("radio/{seedTrackId}")]

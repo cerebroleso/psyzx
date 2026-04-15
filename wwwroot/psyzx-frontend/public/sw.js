@@ -263,8 +263,8 @@ self.addEventListener('message', async event => {
 });
 
 function queueMetadata(id) {
-    const lyricsUrl = `/api/Tracks/lyrics/${id}`;
-    downloadQueue.push({ type: 'DATA', cacheKey: getCleanApiRequest(lyricsUrl), url: lyricsUrl, trackId: id });
+    // const lyricsUrl = `/api/Tracks/lyrics/${id}`;
+    // downloadQueue.push({ type: 'DATA', cacheKey: getCleanApiRequest(lyricsUrl), url: lyricsUrl, trackId: id });
 }
 
 // ── LIFECYCLE ──
@@ -310,6 +310,13 @@ self.addEventListener('fetch', event => {
     }
 
     if (url.pathname.startsWith('/api/Tracks/stream')) {
+        // ONLY bypass the Service Worker for the fragmented MP4 MSE stream.
+        // The standard MP3 fetches (for background gapless decoding) will pass 
+        // through to your normal caching strategy and be saved for offline use!
+        if (url.pathname.includes('/api/Tracks/stream') && url.searchParams.get('format') === 'mp4') {
+            return; 
+        }
+        return;
         if (req.method !== 'GET') return;
         event.respondWith(handleMediaRequest(event, req));
         return;

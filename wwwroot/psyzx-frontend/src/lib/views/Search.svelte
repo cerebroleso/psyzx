@@ -1,5 +1,5 @@
 <script>
-    import { currentPlaylist, currentIndex, shuffleHistory } from '../../store.js';
+    import { currentPlaylist, currentIndex, shuffleHistory, isLowQualityImages } from '../../store.js';
     import { api } from '../api.js';
 
     export let query = '';

@@ -4,7 +4,7 @@
     currentPlaylist, currentIndex, isPlaying, isShuffle, isRepeat,
     shuffleHistory, albumsMap, playerCurrentTime, playerDuration,
     accentColor, isMaxGlassActive, isDesktopSwapActive, appSessionVersion,
-    isBuffering, globalBitrate, globalFileExt
+    isBuffering, globalBitrate, globalFileExt, isLowQualityImages
   } from '../store.js';
   import {
     audioCtx, updateMediaSession, registerAudioElements, setVolumeBoost,
@@ -196,6 +196,8 @@
       }
   }
 
+  let isRestoringState = true;
+
   onMount(() => {
     registerAudioElements(audioElA, audioElB);
     animationFrameId = requestAnimationFrame(updateProgressBarLoop);
@@ -207,7 +209,7 @@
       try {
         currentPlaylist.set(JSON.parse(savedPl));
         currentIndex.set(parseInt(savedIdx) || 0);
-        setTimeout(() => { activePlayer.currentTime = parseFloat(savedTime) || 0; }, 300);
+        setTimeout(() => { activePlayer.currentTime = parseFloat(savedTime) || 0; isRestoringState = false}, 300);
       } catch(e) {}
     }
     return () => cancelAnimationFrame(animationFrameId);
@@ -221,19 +223,23 @@
   let lastUrl = '';
   $: if (streamUrl && streamUrl !== lastUrl) {
     lastUrl = streamUrl;
-    loadAndPlayUrl(streamUrl, track?.id);
+    if (isRestoringState) {
+        preloadNextUrl(streamUrl); 
+    } else {
+        loadAndPlayUrl(streamUrl, track?.id);
 
-    if (track) {
-      api.recordPlay(track.id);
-      albumsMap.update(map => {
-        const targetAlbum = map.get(track.albumId);
-        if (targetAlbum) {
-          targetAlbum.playCount = (targetAlbum.playCount || 0) + 1;
-          const targetTrack = targetAlbum.tracks.find(t => t.id === track.id);
-          if (targetTrack) targetTrack.playCount = (targetTrack.playCount || 0) + 1;
-        }
-        return new Map(map);
-      });
+      if (track) {
+        api.recordPlay(track.id);
+        albumsMap.update(map => {
+          const targetAlbum = map.get(track.albumId);
+          if (targetAlbum) {
+            targetAlbum.playCount = (targetAlbum.playCount || 0) + 1;
+            const targetTrack = targetAlbum.tracks.find(t => t.id === track.id);
+            if (targetTrack) targetTrack.playCount = (targetTrack.playCount || 0) + 1;
+          }
+          return new Map(map);
+        });
+      }
     }
   }
 

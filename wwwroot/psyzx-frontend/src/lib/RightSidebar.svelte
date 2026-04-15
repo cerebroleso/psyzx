@@ -1,5 +1,5 @@
 <script>
-    import { albumsMap, appSessionVersion } from '../store.js';
+    import { albumsMap, appSessionVersion, isLowQualityImages } from '../store.js';
 
     const DEFAULT_PLACEHOLDER = '...'; // your base64
 
@@ -26,9 +26,7 @@
     {#each topAlbums as album (album.id)}
         <div class="top-album-item" role="button" tabindex="0" on:click={() => goAlbum(album.id)}>
             <img 
-                src={album.coverPath 
-                    ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&v=${$appSessionVersion}` 
-                    : DEFAULT_PLACEHOLDER} 
+                src={`/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&quality=${$isLowQualityImages ? 'low' : 'high'}`}
                 alt={album.title}
                 on:error={handleImageError}
             >

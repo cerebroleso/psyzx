@@ -1,56 +1,28 @@
 <script>
     import { onMount } from 'svelte';
     import { fade } from 'svelte/transition';
-    import { isGlobalColorActive, isMaxGlassActive, isDesktopSwapActive, viewSize, isCacheDebugActive, isGaplessModeActive, currentPlaylist, currentIndex } from '../../store.js';
+    import { 
+        isGlobalColorActive, isMaxGlassActive, isDesktopSwapActive, viewSize, 
+        isCacheDebugActive, isGaplessModeActive, currentPlaylist, currentIndex, 
+        isLowQualityImages, audioBitrate, visEnabled, visIntensity, visShape, 
+        visMovement, visYPos, visDimension, visDetail, visSides 
+    } from '../../store.js';
     import { setVolumeBoost, isWebAudioMode, setWebAudioGaplessMode } from '../audio.js';
     import { api } from '../api.js';
 
     let currentBoost = '1.0';
     let currentScrubSound = 'vinyl';
-
-    // Visualizer Settings State
-    let visEnabled = true;
-    let visIntensity = '1.0';
-    let visShape = 'Tunnel'; // Defaulted to Tunnel
-    let visMovement = 'Hypnotic';
-    let visYPos = '11';
-    let visDimension = '1.0';
-    let visDetail = '16';
-    let visSides = 'Default';
-
     let isScanning = false;
 
     onMount(() => {
-        // 1. Read values from localStorage (or fallback to defaults)
-        currentBoost = localStorage.getItem('psyzx_boost') || '1.0';
-        currentScrubSound = localStorage.getItem('psyzx_scrub_sound') || 'vinyl';
+        if (typeof window !== 'undefined') {
+            currentBoost = localStorage.getItem('psyzx_boost') || '1.0';
+            currentScrubSound = localStorage.getItem('psyzx_scrub_sound') || 'vinyl';
+        }
 
-        visEnabled = localStorage.getItem('psyzx_vis_enabled') !== 'false';
-        visIntensity = localStorage.getItem('psyzx_vis_intensity') || '1.0';
-        visShape = localStorage.getItem('psyzx_vis_shape') || 'Tunnel'; 
-        visMovement = localStorage.getItem('psyzx_vis_movement') || 'Hypnotic';
-        visYPos = localStorage.getItem('psyzx_vis_ypos') || '11';
-        visDimension = localStorage.getItem('psyzx_vis_dimension') || '1.0';
-        visDetail = localStorage.getItem('psyzx_vis_detail') || '16';
-        visSides = localStorage.getItem('psyzx_vis_sides') || 'Default';
-
-        // ---------------------------------------------------------
-        // 2. THE FIX: Apply these settings to the app engines NOW
-        // ---------------------------------------------------------
-        
-        // Push the volume boost to the audio engine
         setVolumeBoost(currentBoost);
-
-        // Push the gapless mode state to the audio engine (using your timeout logic)
-        // setTimeout(() => {
-        //     setWebAudioGaplessMode($isGaplessModeActive);
-        // }, 50);
-
-        // Fire the event so the Canvas Visualizer grabs the initial parameters
         window.dispatchEvent(new CustomEvent('visualizer-update'));
 
-
-        // 3. Apply Service Worker settings
         if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
             navigator.serviceWorker.controller.postMessage({
                 type: 'SET_DEBUG_MODE',
@@ -58,6 +30,8 @@
             });
         }
     });
+
+    const toggleLowQualityImages = () => isLowQualityImages.set(!$isLowQualityImages);
 
     const runScan = async (hard = false) => {
         if (isScanning) return;
@@ -74,31 +48,13 @@
     const updateBoost = (e) => {
         const val = parseFloat(e.target.value).toFixed(1);
         currentBoost = val;
-        localStorage.setItem('psyzx_boost', val);
+        if (typeof window !== 'undefined') localStorage.setItem('psyzx_boost', val);
         setVolumeBoost(val);
     };
 
     const updateScrubSound = (val) => {
         currentScrubSound = val;
-        localStorage.setItem('psyzx_scrub_sound', val);
-    };
-
-    const updateVisSetting = (key, storeKey, val) => {
-        if (key === 'visEnabled') visEnabled = val;
-        if (key === 'visIntensity') visIntensity = val;
-        if (key === 'visShape') visShape = val;
-        if (key === 'visMovement') visMovement = val;
-        if (key === 'visYPos') visYPos = val;
-        if (key === 'visDimension') visDimension = val;
-        if (key === 'visDetail') visDetail = val;
-        if (key === 'visSides') visSides = val;
-
-        localStorage.setItem(storeKey, val);
-        window.dispatchEvent(new CustomEvent('visualizer-update'));
-    };
-
-    const toggleVisEnabled = () => {
-        updateVisSetting('visEnabled', 'psyzx_vis_enabled', !visEnabled);
+        if (typeof window !== 'undefined') localStorage.setItem('psyzx_scrub_sound', val);
     };
 
     const toggleGlobalColor = () => isGlobalColorActive.set(!$isGlobalColorActive);
@@ -107,7 +63,7 @@
     
     const updateViewSize = (size) => {
         viewSize.set(size);
-        localStorage.setItem('psyzx_view_size', size);
+        if (typeof window !== 'undefined') localStorage.setItem('psyzx_view_size', size);
     };
 
     const toggleCacheDebug = () => {
@@ -124,23 +80,22 @@
     const toggleGaplessMode = () => {
         const newState = !$isGaplessModeActive;
         isGaplessModeActive.set(newState);
-        setTimeout(() => {
-            setWebAudioGaplessMode(newState);
-        }, 50);
+        setWebAudioGaplessMode(newState);
+        
+        if (confirm("Changing the audio engine requires a page reload to fully apply. Reload now?")) {
+            window.location.reload();
+        }
     }; 
 
     const refreshApp = async () => {
+        if (typeof window === 'undefined' || !('caches' in window)) return window.location.reload();
         try {
             const keys = await caches.keys();
-            await Promise.all(
-                keys.filter(key => key.includes('core')).map(key => caches.delete(key))
-            );
-
+            await Promise.all(keys.filter(key => key.includes('core')).map(key => caches.delete(key)));
             if ('serviceWorker' in navigator) {
                 const regs = await navigator.serviceWorker.getRegistrations();
                 for (let reg of regs) await reg.unregister();
             }
-            
             window.location.reload();
         } catch (e) {
             window.location.reload();
@@ -149,15 +104,17 @@
 
     const nukeCache = async () => {
         if (confirm('Are you sure? This will delete all cached tracks and settings.')) {
-            localStorage.clear();
-            try {
-                const keys = await caches.keys();
-                await Promise.all(keys.map(k => caches.delete(k)));
-                if ('serviceWorker' in navigator) {
-                    const regs = await navigator.serviceWorker.getRegistrations();
-                    for (let reg of regs) await reg.unregister();
-                }
-            } catch(e) {}
+            if (typeof window !== 'undefined') localStorage.clear();
+            if (typeof window !== 'undefined' && 'caches' in window) {
+                try {
+                    const keys = await caches.keys();
+                    await Promise.all(keys.map(k => caches.delete(k)));
+                    if ('serviceWorker' in navigator) {
+                        const regs = await navigator.serviceWorker.getRegistrations();
+                        for (let reg of regs) await reg.unregister();
+                    }
+                } catch(e) {}
+            }
             window.location.reload();
         }
     };
@@ -170,6 +127,16 @@
 
     <div class="settings-section">
         <h2>Audio Engine</h2>
+
+        <div class="setting-item">
+            <span class="setting-title">Audio Quality Cap</span>
+            <select class="sleek-select" bind:value={$audioBitrate}>
+                <option value="320">320 kbps</option>
+                <option value="256">256 kbps</option>
+                <option value="192">192 kbps</option>
+                <option value="160">160 kbps</option>
+            </select>
+        </div>
         
         <div class="setting-item" style="margin-bottom: 24px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 24px;">
             <div class="setting-info">
@@ -204,7 +171,7 @@
                 </div>
                 <span class="setting-desc mb-16">Increases the gain of the local player (up to 3x).</span>
             </div>
-            <input class="range-slider" type="range" min="0.5" max="3.0" step="0.1" value={currentBoost} on:input={updateBoost}>
+            <input class="range-slider" type="range" min="0.5" max="3.0" step="0.1" value={currentBoost} on:change={updateBoost} on:input={(e) => currentBoost = e.target.value}>
         </div>
     </div>
 
@@ -217,7 +184,7 @@
                     <span class="setting-title">Enable 3D Visualizer</span>
                     <span class="setting-desc">Renders hardware-accelerated graphics responding to audio.</span>
                 </div>
-                <button class="toggle-btn" class:active={visEnabled} on:click={toggleVisEnabled} aria-label="Toggle Visualizer">
+                <button class="toggle-btn" class:active={$visEnabled} on:click={() => visEnabled.set(!$visEnabled)} aria-label="Toggle Visualizer">
                     <div class="toggle-knob"></div>
                 </button>
             </div>
@@ -228,16 +195,16 @@
                     <span class="setting-desc">The geometric form reflecting audio data.</span>
                 </div>
                 <div class="segmented-control">
-                    <button class:active={visShape === 'Icosahedron'} on:click={() => updateVisSetting('visShape', 'psyzx_vis_shape', 'Icosahedron')}>Ico</button>
-                    <button class:active={visShape === 'Dodecahedron'} on:click={() => updateVisSetting('visShape', 'psyzx_vis_shape', 'Dodecahedron')}>Dodeca</button>
-                    <button class:active={visShape === 'TorusKnot'} on:click={() => updateVisSetting('visShape', 'psyzx_vis_shape', 'TorusKnot')}>Knot</button>
-                    <button class:active={visShape === 'Tunnel'} on:click={() => updateVisSetting('visShape', 'psyzx_vis_shape', 'Tunnel')}>Tunnel</button>
-                    <button class:active={visShape === 'DNA'} on:click={() => updateVisSetting('visShape', 'psyzx_vis_shape', 'DNA')}>DNA</button>
-                    <button class:active={visShape === 'Shell'} on:click={() => updateVisSetting('visShape', 'psyzx_vis_shape', 'Shell')}>Shell</button>
-                    <button class:active={visShape === 'Synthwave'} on:click={() => updateVisSetting('visShape', 'psyzx_vis_shape', 'Synthwave')}>Synth Terrain</button>
-                    <button class:active={visShape === 'Galaxy'} on:click={() => updateVisSetting('visShape', 'psyzx_vis_shape', 'Galaxy')}>Galaxy</button>
-                    <button class:active={visShape === 'Wormhole'} on:click={() => updateVisSetting('visShape', 'psyzx_vis_shape', 'Wormhole')}>Wormhole</button>
-                    <button class:active={visShape === 'Fractal'} on:click={() => updateVisSetting('visShape', 'psyzx_vis_shape', 'Fractal')}>Fractal Spire</button>
+                    <button class:active={$visShape === 'Icosahedron'} on:click={() => visShape.set('Icosahedron')}>Ico</button>
+                    <button class:active={$visShape === 'Dodecahedron'} on:click={() => visShape.set('Dodecahedron')}>Dodeca</button>
+                    <button class:active={$visShape === 'TorusKnot'} on:click={() => visShape.set('TorusKnot')}>Knot</button>
+                    <button class:active={$visShape === 'Tunnel'} on:click={() => visShape.set('Tunnel')}>Tunnel</button>
+                    <button class:active={$visShape === 'DNA'} on:click={() => visShape.set('DNA')}>DNA</button>
+                    <button class:active={$visShape === 'Shell'} on:click={() => visShape.set('Shell')}>Shell</button>
+                    <button class:active={$visShape === 'Synthwave'} on:click={() => visShape.set('Synthwave')}>Synth</button>
+                    <button class:active={$visShape === 'Galaxy'} on:click={() => visShape.set('Galaxy')}>Galaxy</button>
+                    <button class:active={$visShape === 'Wormhole'} on:click={() => visShape.set('Wormhole')}>Wormhole</button>
+                    <button class:active={$visShape === 'Fractal'} on:click={() => visShape.set('Fractal')}>Fractal</button>
                 </div>
             </div>
 
@@ -247,9 +214,9 @@
                     <span class="setting-desc">The base animated movement pattern.</span>
                 </div>
                 <div class="segmented-control">
-                    <button class:active={visMovement === 'Hypnotic'} on:click={() => updateVisSetting('visMovement', 'psyzx_vis_movement', 'Hypnotic')}>Hypnotic</button>
-                    <button class:active={visMovement === 'Pulsate'} on:click={() => updateVisSetting('visMovement', 'psyzx_vis_movement', 'Pulsate')}>Pulsate</button>
-                    <button class:active={visMovement === 'None'} on:click={() => updateVisSetting('visMovement', 'psyzx_vis_movement', 'None')}>None</button>
+                    <button class:active={$visMovement === 'Hypnotic'} on:click={() => visMovement.set('Hypnotic')}>Hypnotic</button>
+                    <button class:active={$visMovement === 'Pulsate'} on:click={() => visMovement.set('Pulsate')}>Pulsate</button>
+                    <button class:active={$visMovement === 'None'} on:click={() => visMovement.set('None')}>None</button>
                 </div>
             </div>
 
@@ -259,11 +226,11 @@
                     <span class="setting-desc">Adjusts structural sides for Tube/Tunnel/Wormhole forms.</span>
                 </div>
                 <div class="segmented-control">
-                    <button class:active={visSides === 'Default'} on:click={() => updateVisSetting('visSides', 'psyzx_vis_sides', 'Default')}>Auto</button>
-                    <button class:active={visSides === '3'} on:click={() => updateVisSetting('visSides', 'psyzx_vis_sides', '3')}>3</button>
-                    <button class:active={visSides === '4'} on:click={() => updateVisSetting('visSides', 'psyzx_vis_sides', '4')}>4</button>
-                    <button class:active={visSides === '6'} on:click={() => updateVisSetting('visSides', 'psyzx_vis_sides', '6')}>6</button>
-                    <button class:active={visSides === '12'} on:click={() => updateVisSetting('visSides', 'psyzx_vis_sides', '12')}>12</button>
+                    <button class:active={$visSides === 'Default'} on:click={() => visSides.set('Default')}>Auto</button>
+                    <button class:active={$visSides === '3'} on:click={() => visSides.set('3')}>3</button>
+                    <button class:active={$visSides === '4'} on:click={() => visSides.set('4')}>4</button>
+                    <button class:active={$visSides === '6'} on:click={() => visSides.set('6')}>6</button>
+                    <button class:active={$visSides === '12'} on:click={() => visSides.set('12')}>12</button>
                 </div>
             </div>
 
@@ -271,44 +238,44 @@
                 <div class="setting-info w-full">
                     <div class="flex-between">
                         <span class="setting-title">Beat Intensity</span>
-                        <span class="highlight-val">{visIntensity}x</span>
+                        <span class="highlight-val">{$visIntensity}x</span>
                     </div>
-                    <span class="setting-desc mb-16">How violently the shape reacts to the FFT frequency data. Set to 0 to disable beat reaction.</span>
+                    <span class="setting-desc mb-16">How violently the shape reacts to the FFT frequency data.</span>
                 </div>
-                <input class="range-slider" type="range" min="0.0" max="3.0" step="0.1" value={visIntensity} on:input={(e) => updateVisSetting('visIntensity', 'psyzx_vis_intensity', e.target.value)}>
+                <input class="range-slider" type="range" min="0.0" max="3.0" step="0.1" value={$visIntensity} on:change={(e) => visIntensity.set(e.target.value)}>
             </div>
 
             <div class="setting-item-col">
                 <div class="setting-info w-full">
                     <div class="flex-between">
                         <span class="setting-title">Y-Position (Vertical Offset)</span>
-                        <span class="highlight-val">{visYPos}</span>
+                        <span class="highlight-val">{$visYPos}</span>
                     </div>
                     <span class="setting-desc mb-16">Height positioning within the background.</span>
                 </div>
-                <input class="range-slider" type="range" min="-30" max="30" step="1" value={visYPos} on:input={(e) => updateVisSetting('visYPos', 'psyzx_vis_ypos', e.target.value)}>
+                <input class="range-slider" type="range" min="-30" max="30" step="1" value={$visYPos} on:change={(e) => visYPos.set(e.target.value)}>
             </div>
 
             <div class="setting-item-col">
                 <div class="setting-info w-full">
                     <div class="flex-between">
                         <span class="setting-title">Dimension (Overall Scale)</span>
-                        <span class="highlight-val">{visDimension}x</span>
+                        <span class="highlight-val">{$visDimension}x</span>
                     </div>
                     <span class="setting-desc mb-16">Multiplier for the visualizer's size.</span>
                 </div>
-                <input class="range-slider" type="range" min="0.5" max="3.0" step="0.1" value={visDimension} on:input={(e) => updateVisSetting('visDimension', 'psyzx_vis_dimension', e.target.value)}>
+                <input class="range-slider" type="range" min="0.5" max="3.0" step="0.1" value={$visDimension} on:change={(e) => visDimension.set(e.target.value)}>
             </div>
 
             <div class="setting-item-col">
                 <div class="setting-info w-full">
                     <div class="flex-between">
                         <span class="setting-title">Detail Level (Geometry)</span>
-                        <span class="highlight-val">{visDetail}</span>
+                        <span class="highlight-val">{$visDetail}</span>
                     </div>
-                    <span class="setting-desc mb-16">Complexity of the 3D mesh. Higher numbers are smoother but cost more GPU power.</span>
+                    <span class="setting-desc mb-16">Complexity of the 3D mesh. Higher numbers cost more GPU power.</span>
                 </div>
-                <select class="sleek-select" value={visDetail} on:change={(e) => updateVisSetting('visDetail', 'psyzx_vis_detail', e.target.value)}>
+                <select class="sleek-select" value={$visDetail} on:change={(e) => visDetail.set(e.target.value)}>
                     <option value="4">4 (Lowest)</option>
                     <option value="8">8 (Low)</option>
                     <option value="16">16 (Normal)</option>
@@ -322,6 +289,16 @@
 
     <div class="settings-section">
         <h2>UI & Look</h2>
+
+        <div class="setting-item">
+            <div class="setting-info">
+                <span class="setting-title">Low Quality Images (Data Saver)</span>
+                <span class="setting-desc">Loads compressed thumbnails to save bandwidth.</span>
+            </div>
+            <button class="toggle-btn" class:active={$isLowQualityImages} on:click={toggleLowQualityImages} aria-label="Toggle Low Quality Images">
+                <div class="toggle-knob"></div>
+            </button>
+        </div>
         
         <div class="setting-item">
             <div class="setting-info">
@@ -338,7 +315,7 @@
         <div class="setting-item">
             <div class="setting-info">
                 <span class="setting-title">Dynamic Background</span>
-                <span class="setting-desc">Applies the color of the active album for the entire app's background.</span>
+                <span class="setting-desc">Applies the color of the active album globally.</span>
             </div>
             <button class="toggle-btn" class:active={$isGlobalColorActive} on:click={toggleGlobalColor} aria-label="Toggle Global Background">
                 <div class="toggle-knob"></div>
@@ -348,7 +325,7 @@
         <div class="setting-item">
             <div class="setting-info">
                 <span class="setting-title">Max Glassmorphism</span>
-                <span class="setting-desc">Enables glassmorphism (IOS 26).</span>
+                <span class="setting-desc">Enables heavy transparency and blur elements.</span>
             </div>
             <button class="toggle-btn" class:active={$isMaxGlassActive} on:click={toggleMaxGlass} aria-label="Toggle Max Glass">
                 <div class="toggle-knob"></div>
@@ -358,7 +335,7 @@
         <div class="setting-item">
             <div class="setting-info">
                 <span class="setting-title">Invert Status Bar Layout (Desktop)</span>
-                <span class="setting-desc">Moves track's info to the right and volume/bitrate controls to the left.</span>
+                <span class="setting-desc">Moves track's info to the right.</span>
             </div>
             <button class="toggle-btn" class:active={$isDesktopSwapActive} on:click={toggleDesktopSwap} aria-label="Toggle Layout Swap">
                 <div class="toggle-knob"></div>
@@ -368,7 +345,7 @@
         <div class="setting-item">
             <div class="setting-info">
                 <span class="setting-title">Developer: Bypass Cache</span>
-                <span class="setting-desc">Disables aggressive caching. Use this if you are editing CSS/JS and don't see changes.</span>
+                <span class="setting-desc">Disables aggressive caching.</span>
             </div>
             <button class="toggle-btn" class:active={$isCacheDebugActive} on:click={toggleCacheDebug} aria-label="Toggle Cache Debug">
                 <div class="toggle-knob"></div>
@@ -382,7 +359,7 @@
         <div class="setting-item">
             <div class="setting-info">
                 <span class="setting-title">Refresh Library</span>
-                <span class="setting-desc">Scans for new files and removes deleted tracks from the database.</span>
+                <span class="setting-desc">Scans for new files and removes deleted tracks.</span>
             </div>
             <button class="btn-action" on:click={() => runScan(false)} disabled={isScanning}>
                 {isScanning ? 'Scanning...' : 'Scan Now'}
@@ -392,9 +369,9 @@
         <div class="setting-item">
             <div class="setting-info">
                 <span class="setting-title">Deep Metadata Sweep</span>
-                <span class="setting-desc">Forcibly re-downloads missing artist images and album covers even if they already exist in the DB. (Uses Playwright)</span>
+                <span class="setting-desc">Forcibly re-downloads missing artist images and covers.</span>
             </div>
-            <button class="btn-action highlight" on:click={() => runScan(true)} disabled={isScanning}>
+            <button class="btn-action" on:click={() => runScan(true)} disabled={isScanning}>
                 {isScanning ? 'Running Sweep...' : 'Hard Scan'}
             </button>
         </div>
@@ -406,7 +383,7 @@
         <div class="setting-item-col">
             <div class="setting-info w-full">
                 <span class="setting-title" style="color: #ef4444;">Force App Update</span>
-                <span class="setting-desc mb-16">Purges JS/CSS/HTML and checks for a new version. Fixes iOS PWA "freeze". Your music stays safe.</span>
+                <span class="setting-desc mb-16">Purges logic caches and checks for a new version.</span>
                 <button class="btn-refresh" on:click={refreshApp}>
                     <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
                     Refresh App
@@ -417,7 +394,7 @@
         <div class="setting-item-col" style="margin-top: 24px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 24px;">
             <div class="setting-info w-full">
                 <span class="setting-title" style="color: #ef4444;">Nuke Local Cache</span>
-                <span class="setting-desc mb-16">Destroys Service Worker, Storage and Local Database. Use only as a last resort.</span>
+                <span class="setting-desc mb-16">Destroys Service Worker, Storage and Local Database.</span>
                 <button class="btn-danger" on:click={nukeCache}>
                     <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"></path><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
                     Purge All Data
@@ -428,149 +405,52 @@
 </div>
 
 <style>
-    .view-wrapper { 
-        padding: 32px 24px; 
-        max-width: 800px; 
-        margin: 0 auto; 
-        color: white; 
-        box-sizing: border-box;
-        width: 100%;
-        overflow-x: hidden; 
-    }
-    
+    .view-wrapper { padding: 32px 24px; max-width: 800px; margin: 0 auto; color: white; box-sizing: border-box; width: 100%; overflow-x: hidden; }
     .settings-header { margin-bottom: 40px; }
     .settings-header h1 { font-size: 32px; font-weight: 700; margin: 0; letter-spacing: -0.5px; }
-    
-    .settings-section { 
-        margin-bottom: 32px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); 
-        border-radius: 12px; padding: 24px; box-shadow: 0 8px 24px rgba(0,0,0,0.3);
-    }
-    
+    .settings-section { margin-bottom: 32px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); border-radius: 12px; padding: 24px; box-shadow: 0 8px 24px rgba(0,0,0,0.3); }
     .danger-zone { border-color: rgba(239, 68, 68, 0.2); }
     .settings-section h2 { font-size: 14px; color: var(--accent-color); margin: 0 0 24px 0; text-transform: uppercase; letter-spacing: 1px; font-weight: 800; }
-    
-    .setting-item { 
-        display: flex; justify-content: space-between; align-items: center; 
-        padding: 16px 0; border-bottom: 1px solid rgba(255,255,255,0.05); 
-    }
+    .setting-item { display: flex; justify-content: space-between; align-items: center; padding: 16px 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
     .setting-item-col { display: flex; flex-direction: column; padding: 16px 0; }
     .setting-item:last-child, .setting-item-col:last-child { border-bottom: none; padding-bottom: 0; }
-    
     .setting-info { display: flex; flex-direction: column; gap: 6px; }
     .setting-info:not(.w-full) { max-width: 60%; }
     .w-full { width: 100%; }
-    
     .flex-between { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
     .setting-title { font-size: 16px; font-weight: 600; }
     .setting-desc { font-size: 13px; color: rgba(255,255,255,0.5); line-height: 1.5;}
     .mb-16 { margin-bottom: 16px; }
     .highlight-val { font-weight: 900; font-family: monospace; color: var(--accent-color); font-size: 16px; }
     
-    .sleek-select {
-        width: 100%;
-        background: rgba(255,255,255,0.05);
-        color: white;
-        border: 1px solid rgba(255,255,255,0.2);
-        padding: 10px 12px;
-        border-radius: 8px;
-        font-size: 14px;
-        font-weight: 600;
-        outline: none;
-        cursor: pointer;
-        transition: border-color 0.2s ease, background 0.2s ease;
-    }
+    .sleek-select { width: 100%; background: rgba(255,255,255,0.05); color: white; border: 1px solid rgba(255,255,255,0.2); padding: 10px 12px; border-radius: 8px; font-size: 14px; font-weight: 600; outline: none; cursor: pointer; transition: border-color 0.2s ease, background 0.2s ease; }
     .sleek-select:hover { border-color: rgba(255,255,255,0.4); background: rgba(255,255,255,0.1); }
     .sleek-select option { background: #1a1a1a; color: white; font-weight: 500; }
 
-    .segmented-control {
-        display: flex; background: rgba(255,255,255,0.15); padding: 2px; border-radius: 10px;
-        border: 1px solid rgba(255,255,255,0.05);
-        margin-left: 10px;
-        flex-wrap: wrap; 
-        gap: 2px;
-    }
-    .segmented-control button {
-        background: transparent; border: none; color: white; padding: 0 10px; height: 32px;
-        font-size: 11px; font-weight: 800; cursor: pointer; border-radius: 6px;
-        transition: all 0.2s; display: flex; align-items: center; justify-content: center;
-        white-space: nowrap;
-        flex-grow: 1; 
-    }
+    .segmented-control { display: flex; background: rgba(255,255,255,0.15); padding: 2px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.05); margin-left: 10px; flex-wrap: wrap; gap: 2px; }
+    .segmented-control button { background: transparent; border: none; color: white; padding: 0 10px; height: 32px; font-size: 11px; font-weight: 800; cursor: pointer; border-radius: 6px; transition: all 0.2s; display: flex; align-items: center; justify-content: center; white-space: nowrap; flex-grow: 1; }
     .segmented-control button.active { background: var(--accent-color); color: black; box-shadow: 0 2px 8px rgba(0,0,0,0.3); }
 
-    .toggle-btn {
-        width: 52px; height: 28px; border-radius: 14px; background: rgba(255,255,255,0.2); border: none;
-        cursor: pointer; position: relative; transition: background 0.3s; padding: 0; flex-shrink: 0;
-    }
+    .toggle-btn { width: 52px; height: 28px; border-radius: 14px; background: rgba(255,255,255,0.2); border: none; cursor: pointer; position: relative; transition: background 0.3s; padding: 0; flex-shrink: 0; }
     .toggle-btn.active { background: var(--accent-color); }
-    .toggle-knob {
-        width: 22px; height: 22px; border-radius: 50%; background: white;
-        position: absolute; top: 3px; left: 3px; transition: transform 0.3s cubic-bezier(0.4, 0.0, 0.2, 1);
-        box-shadow: 0 2px 6px rgba(0,0,0,0.3);
-    }
+    .toggle-knob { width: 22px; height: 22px; border-radius: 50%; background: white; position: absolute; top: 3px; left: 3px; transition: transform 0.3s cubic-bezier(0.4, 0.0, 0.2, 1); box-shadow: 0 2px 6px rgba(0,0,0,0.3); }
     .toggle-btn.active .toggle-knob { transform: translateX(24px); }
     
-    .range-slider {
-        width: 100%; height: 6px; border-radius: 3px; -webkit-appearance: none; appearance: none;
-        background: rgba(255,255,255,0.15); outline: none;
-    }
+    .range-slider { width: 100%; height: 6px; border-radius: 3px; -webkit-appearance: none; appearance: none; background: rgba(255,255,255,0.15); outline: none; }
     .range-slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 16px; height: 16px; border-radius: 50%; background: white; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,0.4); }
     .range-slider::-moz-range-thumb { width: 16px; height: 16px; border-radius: 50%; background: white; cursor: pointer; border: none; box-shadow: 0 2px 6px rgba(0,0,0,0.4); }
 
-    .btn-action {
-        background: rgba(255, 255, 255, 0.1);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        color: white;
-        padding: 8px 16px;
-        border-radius: 8px;
-        font-weight: 700;
-        font-size: 13px;
-        cursor: pointer;
-        transition: all 0.2s;
-        min-width: 100px;
-    }
+    .btn-action { background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 255, 255, 0.1); color: white; padding: 8px 16px; border-radius: 8px; font-weight: 700; font-size: 13px; cursor: pointer; transition: all 0.2s; min-width: 100px; }
+    .btn-action:hover:not(:disabled) { background: rgba(255, 255, 255, 0.2); border-color: rgba(255, 255, 255, 0.3); }
+    .btn-action:disabled { opacity: 0.5; cursor: not-allowed; }
 
-    .btn-action:hover:not(:disabled) {
-        background: rgba(255, 255, 255, 0.2);
-        border-color: rgba(255, 255, 255, 0.3);
-    }
-
-    .btn-action.highlight {
-        border-color: var(--accent-color);
-        color: var(--accent-color);
-    }
-
-    .btn-action.highlight:hover:not(:disabled) {
-        background: rgba(255, 255, 255, 0.1);
-    }
-
-    .btn-action:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-    }
-
-    .btn-refresh, .btn-danger {
-        padding: 12px 24px; background: rgba(239, 68, 68, 0.1); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.5); 
-        border-radius: 24px; font-weight: 700; font-size: 14px; cursor: pointer; display: inline-flex; align-items: center; 
-        gap: 8px; transition: all 0.2s ease; width: fit-content;
-    }
+    .btn-refresh, .btn-danger { padding: 12px 24px; background: rgba(239, 68, 68, 0.1); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.5); border-radius: 24px; font-weight: 700; font-size: 14px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; transition: all 0.2s ease; width: fit-content; }
     .btn-refresh:hover, .btn-danger:hover { background: rgba(239, 68, 68, 0.2); border-color: #ef4444; }
 
     @media (max-width: 650px) {
-        .setting-item {
-            flex-direction: column;
-            align-items: flex-start;
-            gap: 16px;
-        }
-        .setting-info:not(.w-full) {
-            max-width: 100%;
-        }
-        .segmented-control {
-            margin-left: 0;
-            width: 100%;
-        }
-        .toggle-btn {
-            align-self: flex-start;
-        }
+        .setting-item { flex-direction: column; align-items: flex-start; gap: 16px; }
+        .setting-info:not(.w-full) { max-width: 100%; }
+        .segmented-control { margin-left: 0; width: 100%; }
+        .toggle-btn { align-self: flex-start; }
     }
 </style>

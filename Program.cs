@@ -6,8 +6,15 @@ using Microsoft.AspNetCore.SignalR;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using System.Diagnostics;
+using Microsoft.AspNetCore.ResponseCompression;
+
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddResponseCompression(options => {
+    options.EnableForHttps = true;
+    options.Providers.Add<BrotliCompressionProvider>();
+});
 
 builder.Configuration.AddIniFile("config.ini", optional: true, reloadOnChange: true);
 
@@ -19,7 +26,6 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 builder.Services.AddHttpClient();
 
 builder.Services.AddScoped<LibraryScanner>();
-builder.Services.AddSingleton<LyricsDownloader>();
 
 builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
     .AddCookie(options =>
@@ -123,6 +129,8 @@ if (!string.IsNullOrWhiteSpace(currentPath))
 
 app.UseDefaultFiles();
 app.UseStaticFiles();
+
+app.UseResponseCompression();
 
 app.UseAuthentication();
 app.UseAuthorization();

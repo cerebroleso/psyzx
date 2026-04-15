@@ -8,7 +8,8 @@
         viewSize,
         currentPlaylist,
         currentIndex,
-        isShuffle 
+        isShuffle,
+        isLowQualityImages
     } from '../../store.js';
     import { api } from '../api.js';
 
@@ -71,7 +72,7 @@
         
         const reader = new FileReader();
         reader.onload = (event) => {
-            previewImage = event.target.result; 
+            previewImage = String(event.target.result); 
         };
         reader.readAsDataURL(file);
     };
@@ -242,10 +243,11 @@
 <div class="album-hero">
     <div class="cover-wrapper artist-wrapper" role="button" tabindex="0" on:click={toggleEdit} on:keydown={(e) => e.key === 'Enter' && toggleEdit()}>
         <img 
-            src={artist.imagePath ? `/api/Tracks/image?path=${encodeURIComponent(artist.imagePath)}&v=${$appSessionVersion}` : DEFAULT_PLACEHOLDER} 
-            alt=""
+            src={`/api/Tracks/image?path=${encodeURIComponent(artist.imagePath)}&quality=${$isLowQualityImages ? 'low' : 'high'}`} 
+            alt="Cover" 
+            loading="lazy" 
             on:error={handleImageError}
-        >        
+        />       
         <div class="edit-overlay-circle">
             <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>
         </div>

@@ -12,7 +12,10 @@
         playerDuration, 
         isMaxGlassActive, 
         appSessionVersion,
-        isBuffering
+        isBuffering,
+        isLowQualityImages,
+        artistsMap,
+        eqPreset, eqBandValues
     } from '../store.js';
     import { formatTime } from './utils.js';
     import { 
@@ -25,11 +28,21 @@
         updateScrubEffect,
         stopScrubEffect,
         isWebAudioMode,
-        getFftData 
+        getFftData,
+        loadAndPlayUrl,
+        preloadNextUrl,
+        getBufferedPct
     } from './audio.js';
-    import { api } from './api.js';
+    import { api, fetchLyricsOnFrontend } from './api.js';
     import { quintOut, expoIn, expoOut, linear } from 'svelte/easing';
     import { spring } from 'svelte/motion';
+    import { get } from 'svelte/store';
+
+
+    export let artistId;
+
+    $: artist = album ? $artistsMap.get(album.artistId) : null;
+
 
     export let isOpen = false;
     const dispatch = createEventDispatcher();
@@ -69,6 +82,39 @@
     
     const handleGlobalVisUpdate = () => {
         isVisEnabled = localStorage.getItem('psyzx_vis_enabled') !== 'false';
+    };
+
+    const playTrackPriorityFlow = async (track, nextTrack) => {
+        // 1. HIGHEST PRIORITY: Audio Stream
+        const kbps = localStorage.getItem('psyzx_bitrate') || '320';
+        await loadAndPlayUrl(`/api/Tracks/stream/${track.id}?kbps=${kbps}`);
+
+        // 2. SECOND PRIORITY: Lyrics (Lightweight text, fast fetch)
+        // Don't await this so it doesn't block the cover, but trigger it immediately after audio starts
+        fetchLyricsOnFrontend(track).catch(console.error);
+
+        // 3. THIRD PRIORITY: Album Cover (Heavy payload)
+        const img = new Image();
+        img.src = `/api/Tracks/image?path=${encodeURIComponent(track.album.coverPath)}&quality=${$isLowQualityImages ? 'low' : 'high'}`;
+        await new Promise(resolve => {
+            img.onload = resolve;
+            img.onerror = resolve; 
+        });
+        currentCover = img.src;
+
+        // 4. FOURTH PRIORITY: Next Track Buffer
+        if (nextTrack) {
+            preloadNextUrl(`/api/Tracks/stream/${nextTrack.id}?kbps=${kbps}`);
+        }
+
+        // 5. LOWEST PRIORITY: Pre-fetch Queue Metadata to Service Worker
+        if ('serviceWorker' in navigator) {
+            const upcomingIds = get(currentPlaylist).slice(get(currentIndex) + 2, get(currentIndex) + 6).map(t => t.id);
+            navigator.serviceWorker.controller.postMessage({
+                type: 'PRELOAD_METADATA',
+                trackIds: upcomingIds
+            });
+        }
     };
 
 // --- THREE.JS VISUALIZER ACTION (OPTIMIZED) ---
@@ -703,29 +749,31 @@
             }
         }
 
-        // --- NEW BUTTERY SMOOTH LOADING BAR LOGIC ---
+        // --- FIXED TRUE BUFFER BAR SYNCING ---
         let targetBuffer = 0;
         
-        if ($isBuffering) {
-            // Organic creeping effect while waiting for audio chunk
+        if ($isBuffering && displayBufferPct < 95) {
             targetBuffer = Math.min(displayBufferPct + 1.5, 95); 
         } else if (track && activeDownloads[track] !== undefined) {
-            // Hook into service worker download exact percentage
             targetBuffer = activeDownloads[track];
         } else {
-            // Snap to current playtime percentage at minimum
-            targetBuffer = (($playerCurrentTime || 0) / ($playerDuration || 1)) * 100;
+            // Fetch actual loaded percentage from audio engine
+            const trueBuffer = getBufferedPct();
+            const playheadPct = (($playerCurrentTime || 0) / ($playerDuration || 1)) * 100;
+            
+            // Show the highest of either the true buffer or the playhead to prevent visual snapping
+            targetBuffer = Math.max(trueBuffer, playheadPct);
             targetBuffer = Math.max(targetBuffer, displayBufferPct); // Prevent backward jumps
+            
             if (targetBuffer >= 98.5) targetBuffer = 100; 
         }
 
-        // Chases 'targetBuffer' with snappy but smooth easing (0.06 like requested)
         displayBufferPct = lerp(displayBufferPct, targetBuffer, 0.06);
 
         if (bufferRef) {
             bufferRef.style.transform = `scaleX(${displayBufferPct / 100})`;
         }
-        // ---------------------------------------------
+        // -------------------------------------
 
         if (typeof document !== 'undefined') {
             const appLayout = document.getElementById('app-layout');
@@ -759,6 +807,7 @@
     let activeDownloads = {};
 
     onMount(() => {
+        window.addEventListener('visualizer-update', handleGlobalVisUpdate);
         rafId = requestAnimationFrame(frameLoop);
 
         if ('serviceWorker' in navigator) {
@@ -777,6 +826,7 @@
     });
 
     onDestroy(() => {
+        window.removeEventListener('visualizer-update', handleGlobalVisUpdate);
         if (rafId) cancelAnimationFrame(rafId);
         if (typeof document !== 'undefined') {
             document.body.classList.remove('modal-open');
@@ -790,28 +840,38 @@
         }
     });
 
+    // Initialize springs with the saved values from our store
     let eqMaster = spring(0, { stiffness: 0.15, damping: 0.8 });
-    let eqBands = spring([0, 0, 0, 0, 0, 0], { stiffness: 0.1, damping: 0.8 });
+    let eqBands = spring($eqBandValues, { stiffness: 0.1, damping: 0.8 });
 
+    // Sync audio engine whenever the spring updates
     $: $eqBands.forEach((val, i) => setEqBand(i, val));
 
     const syncMasterEq = (event) => {
-        currentPreset = 'Custom';
         const val = parseFloat(event.target.value);
+        eqPreset.set('Custom'); // Any movement makes it custom
         eqMaster.set(val, { hard: true });
-        eqBands.set([val, val, val, val, val, val], { hard: true });
+        
+        const newBands = [val, val, val, val, val, val];
+        eqBands.set(newBands, { hard: true });
+        eqBandValues.set(newBands); // Save to localStorage
     };
 
     const applyPreset = (name) => {
-        currentPreset = name;
-        eqBands.set([...presets[name]]);
+        eqPreset.set(name);
+        const presetValues = [...presets[name]];
+        eqBands.set(presetValues);
+        eqBandValues.set(presetValues); // Save to localStorage
     };
 
     const handleEqChange = (index, event) => {
-        currentPreset = 'Custom';
         const val = parseFloat(event.target.value);
+        eqPreset.set('Custom');
+        
         eqBands.update(current => {
             current[index] = val;
+            // Update the persistent store with the new array
+            eqBandValues.set(current); 
             return current;
         }, { hard: true }); 
     };
@@ -829,20 +889,27 @@
 
     let lyrics = [{ t: 0, text: "♪ (Music) ♪" }];
 
-    $: if (track && track.id && isOpen) {
-        if (api && api.getLyrics) {
-            api.getLyrics(track.id)
-                .then(data => {
-                    if (data && data.length > 0) { lyrics = data; }
-                    else { lyrics = [{ t: 0, text: "♪ (Instrumental) ♪" }]; }
-                })
-                .catch(() => { lyrics = [{ t: 0, text: "♪ (Lyrics Unavailable) ♪" }]; });
-        }
+    $: if (track && track.title && isOpen) {
+        const artistName = track.album?.artist?.name || album?.artistName || 'Unknown Artist';
+        
+        // Added track.id as the first parameter
+        fetchLyricsOnFrontend(track.id, artistName, track.title)
+            .then(data => {
+                if (data && data.length > 0) {
+                    lyrics = data;
+                } else {
+                    lyrics = [{ t: 0, text: "♪ (Instrumental) ♪" }];
+                }
+            })
+            .catch(() => {
+                lyrics = [{ t: 0, text: "♪ (Lyrics Unavailable) ♪" }];
+            });
     }
 
     $: hasSyncLyrics = lyrics.length > 0 &&
                        lyrics[0].text !== "◆ LYRICS SYNC NOT AVAILABLE ◆" &&
                        lyrics[0].text !== "♪ (Instrumental / No text) ♪" &&
+                       lyrics[0].text !== "♪ (Lyrics Unavailable) ♪" &&
                        lyrics[0].text !== "♪ (Text not available) ♪" &&
                        lyrics[0].text !== "♪ (Instrumental) ♪" &&
                        lyrics[0].text !== "♪ (Music) ♪" &&
@@ -1007,13 +1074,39 @@
 
     $: track = $currentPlaylist[$currentIndex];
     $: album = track ? $albumsMap.get(track.albumId) : null;
-    $: coverUrl = (album && album.coverPath) 
-        ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&v=${$appSessionVersion}` 
+    $: lowResCoverUrl = (album && album.coverPath) 
+        ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&v=${$appSessionVersion}&quality=low` 
         : DEFAULT_PLACEHOLDER;
+
+    $: highResCoverUrl = (album && album.coverPath) 
+        ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&v=${$appSessionVersion}&quality=high` 
+        : DEFAULT_PLACEHOLDER;
+
+    let isHighResLoaded = false;
+    let activeHighResUrl = null;
+
+    // Background Image Preloader
+    $: if (highResCoverUrl) {
+        if (highResCoverUrl === DEFAULT_PLACEHOLDER) {
+            isHighResLoaded = true;
+            activeHighResUrl = DEFAULT_PLACEHOLDER;
+        } else {
+            isHighResLoaded = false;
+            const img = new Image();
+            img.onload = () => {
+                // Ensure we only trigger if the user hasn't skipped to another track already
+                if (img.src.includes(encodeURIComponent(album?.coverPath || ''))) {
+                    activeHighResUrl = highResCoverUrl;
+                    isHighResLoaded = true;
+                }
+            };
+            img.src = highResCoverUrl;
+        }
+    }
     
-    // --- ADDED FOR ARTIST PROFILE CARD ---
-    $: artistImageUrl = (album && album.coverPath) ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&v=${$appSessionVersion}` 
-        : DEFAULT_PLACEHOLDER;  
+    $: artistImageUrl = (artist && artist.imagePath) 
+        ? `/api/Tracks/image?path=${encodeURIComponent(artist.imagePath)}&v=${$appSessionVersion}&quality=${$isLowQualityImages ? 'low' : 'high'}` 
+        : DEFAULT_PLACEHOLDER;
 </script>
 
 <svelte:window
@@ -1023,7 +1116,6 @@
     on:touchmove|nonpassive={onSeekMove}
     on:touchend={onSeekEnd}
     on:keydown={handleGlobalKeyDown}
-    on:visualizer-update={handleGlobalVisUpdate}
 />
 
 {#if isOpen}
@@ -1069,9 +1161,27 @@
             <div class="fp-scroll-content">
                 
                 <div class="fp-cover-container" class:shrink={hasSyncLyrics && !coverClick} on:click={handleCoverClick} role="button" tabindex="0">
-                    {#key coverUrl}
-                        <img class="sober-cover" src={coverUrl} alt="Album Cover" in:fade={{duration: 250}} on:error={handleImageError} />
-                    {/key}
+                    
+                    <div class="sober-cover-wrapper">
+                        {#key lowResCoverUrl}
+                            <img 
+                                class="sober-cover low-res" 
+                                src={lowResCoverUrl} 
+                                alt="Album Cover" 
+                                on:error={handleImageError} 
+                            />
+                        {/key}
+                        
+                        {#if isHighResLoaded && activeHighResUrl}
+                            {#key activeHighResUrl}
+                                <img 
+                                    class="sober-cover high-res installed-pop" 
+                                    src={activeHighResUrl} 
+                                    alt="Album Cover" 
+                                />
+                            {/key}
+                        {/if}
+                    </div>
                     
                     {#if showHeartAnim}
                         <div class="heart-anim-overlay" in:scale={{duration: 200, easing: expoOut, start: 0.5}} out:fade={{duration: 300}}>
@@ -1182,23 +1292,20 @@
 
                 <div class="fp-sliders">
                     <div class="preset-scroll">
-                        <button class="preset-chip" class:active={currentPreset === 'Custom'} on:click={() => currentPreset = 'Custom'} on:mousemove={handlePresetMouseMove}>Custom</button>
+                        <button class="preset-chip" 
+                                class:active={$eqPreset === 'Custom'} 
+                                on:click={() => eqPreset.set('Custom')} 
+                                on:mousemove={handlePresetMouseMove}>
+                            Custom
+                        </button>
                         {#each Object.keys(presets) as p}
-                            <button class="preset-chip" class:active={currentPreset === p} on:click={() => applyPreset(p)} on:mousemove={handlePresetMouseMove}>{p}</button>
+                            <button class="preset-chip" 
+                                    class:active={$eqPreset === p} 
+                                    on:click={() => applyPreset(p)} 
+                                    on:mousemove={handlePresetMouseMove}>
+                                {p}
+                            </button>
                         {/each}
-                    </div>
-
-                    <div class="fp-slider-row">
-                        <span class="label-accent">ALL</span>
-                        <input 
-                            class="sleek-slider" 
-                            type="range" 
-                            aria-label="Master EQ" 
-                            min="-12" max="12" step="0.1" 
-                            value={$eqMaster} 
-                            on:input={syncMasterEq} 
-                            style="--val: {(( $eqMaster + 12) / 24) * 100}%"
-                        >
                     </div>
 
                     {#each [60, 250, '1K', '4K', '8K', '14K'] as freq, i}
@@ -1442,7 +1549,7 @@
     }
 
     .artist-stats-text {
-        font-size: 10px;
+        font-size: 9px;
         color: rgba(255, 255, 255, 0.8);
         font-weight: 600;
         white-space: nowrap;
@@ -1462,7 +1569,7 @@
         font-size: 8px;
         font-family: 'JetBrains Mono', monospace; /* Modern tech look */
         font-weight: 800;
-        color: var(--accent-color, #fff);
+        color: rgba(0, 0, 0, 0.8);
         border: 1px solid rgba(255, 255, 255, 0.1);
         text-transform: uppercase;
         box-shadow: 0 4px 10px rgba(0,0,0,0.2);
@@ -1853,18 +1960,62 @@
         margin-bottom: 16px; 
     }
 
-    .sober-cover { 
-        width: 100%; 
-        height: auto; 
-        aspect-ratio: 1/1; 
-        object-fit: cover; 
-        border-radius: 12px; 
-        box-shadow: 0 15px 40px rgba(0,0,0,0.5); 
-        pointer-events: none; 
+    /* --- NEW SOBER COVER SYSTEM --- */
+    .sober-cover-wrapper {
+        position: relative;
+        width: 100%;
+        aspect-ratio: 1/1;
+        border-radius: 12px;
+        box-shadow: 0 15px 40px rgba(0,0,0,0.5);
+        border: 1px solid rgba(255,255,255,0.1);
+        overflow: hidden; /* Essential to clip the low-res blur bleed */
         -webkit-backface-visibility: hidden;
         backface-visibility: hidden;
         -webkit-transform: translate3d(0,0,0);
         transform: translate3d(0,0,0);
+    }
+
+    .sober-cover { 
+        width: 100%; 
+        height: 100%; 
+        object-fit: cover; 
+        position: absolute;
+        top: 0;
+        left: 0;
+        pointer-events: none; 
+    }
+
+    .low-res {
+        filter: blur(15px) saturate(1.2);
+        /* Scale up slightly to prevent blurred white edges from bleeding into the frame */
+        transform: scale(1.1); 
+    }
+
+    .high-res {
+        z-index: 2;
+    }
+
+    /* The distinct iOS "App just finished downloading on Homescreen" animation */
+    @keyframes iosInstallPop {
+        0% {
+            transform: scale(0.92);
+            filter: brightness(1.5); /* The bright flash */
+            opacity: 0;
+        }
+        50% {
+            transform: scale(1.03); /* The bounce overshoot */
+            filter: brightness(1.1);
+            opacity: 1;
+        }
+        100% {
+            transform: scale(1);
+            filter: brightness(1);
+            opacity: 1;
+        }
+    }
+
+    .installed-pop {
+        animation: iosInstallPop 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
     }
 
     .fp-info, 

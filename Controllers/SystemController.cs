@@ -62,27 +62,6 @@ public class SystemController : ControllerBase
         _config = config;
     }
 
-    [HttpGet("lyrics")]
-    public async Task<IActionResult> GetLyrics([FromQuery] string artist, [FromQuery] string title)
-    {
-        Console.WriteLine($"[DEBUG-LYRICS] Request received for Artist: '{artist}', Title: '{title}'");
-        var cleanArtist = CleanSongString(artist);
-        var cleanTitle = CleanSongString(title);
-
-        string? fetchedLyrics = await FetchFromLrcLib(cleanArtist, cleanTitle);
-        if (string.IsNullOrEmpty(fetchedLyrics)) fetchedLyrics = await FetchFromLyricsOvh(cleanArtist, cleanTitle);
-        if (string.IsNullOrEmpty(fetchedLyrics)) fetchedLyrics = await FetchFromPopCat(cleanArtist, cleanTitle);
-        if (string.IsNullOrEmpty(fetchedLyrics)) fetchedLyrics = await FetchFromLyrist(cleanArtist, cleanTitle);
-        if (string.IsNullOrEmpty(fetchedLyrics)) fetchedLyrics = await FetchFromSomeRandomApi(cleanArtist, cleanTitle);
-
-        if (!string.IsNullOrEmpty(fetchedLyrics))
-        {
-            return Ok(new { lrc = fetchedLyrics });
-        }
-
-        return NotFound(new { message = "Lyrics not found across all mirrors." });
-    }
-
     private string CleanSongString(string input)
     {
         if (string.IsNullOrWhiteSpace(input)) return input;
