@@ -13,7 +13,6 @@
     loadAndPlayUrl, activePlayer, preloadNextUrl, setGlobalVolume
   } from './audio.js';
   
-  // NEW IMPORTS FOR AUDIO ROUTING
   import { connectedDevices, thisDeviceName, targetDeviceId, myDeviceId, selectTargetDevice } from './sync.js'; 
   
   import { api } from './api.js';
@@ -35,7 +34,7 @@
   let mouseX = 0;
   let mouseY = 0;
   
-  let showSyncModal = false; // Modal State
+  let showSyncModal = false; 
 
   const handleMouseMove = (e) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -47,7 +46,7 @@
   $: album = track ? $albumsMap.get(track.albumId) : null;
   $: streamUrl = track ? `/api/Tracks/stream/${track.id}` : '';
   $: coverUrl = (album && album.coverPath)
-    ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&v=${$appSessionVersion}`
+    ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&v=${$appSessionVersion}&quality=low`
     : DEFAULT_PLACEHOLDER;
   $: progressPct = $playerDuration > 0 ? ($playerCurrentTime / $playerDuration) * 100 : 0;
   $: fileExt = track ? track.filePath.split('.').pop().toUpperCase() : 'UNK';
@@ -68,18 +67,6 @@
       seek: (time) => { activePlayer.currentTime = time; },
       seekRelative: (offset) => { activePlayer.currentTime = Math.max(0, Math.min(activePlayer.duration, activePlayer.currentTime + offset)); }
     });
-  }
-
-  $: if (typeof navigator !== 'undefined' && navigator.serviceWorker && navigator.serviceWorker.controller && $currentPlaylist.length > 0) {
-    const nextTracks = $currentPlaylist
-      .slice($currentIndex + 1, $currentIndex + 6)
-      .map(t => t.id);
-    if (nextTracks.length > 0) {
-      navigator.serviceWorker.controller.postMessage({
-        type: 'PRELOAD_TRACKS',
-        trackIds: nextTracks
-      });
-    }
   }
 
   const safeSetStorage = (k, v) => { try { localStorage.setItem(k, v); } catch(e) {} };
@@ -221,6 +208,8 @@
   }
 
   let lastUrl = '';
+
+  // --- PRIORITY 2: Audio stream starts instantly on change ---
   $: if (streamUrl && streamUrl !== lastUrl) {
     lastUrl = streamUrl;
     if (isRestoringState) {
@@ -256,9 +245,30 @@
   $: nextTrackIndex = $isRepeat && $currentIndex === $currentPlaylist.length - 1 ? 0 : $currentIndex + 1;
   $: nextTrack = $currentPlaylist[nextTrackIndex];
 
+  // --- PRIORITY 5: Delay Next Track Preload Buffer ---
+  let preloadNextTimeout;
   $: if (nextTrack && isEngineInitialized) {
+      clearTimeout(preloadNextTimeout);
       const nextUrl = `/api/Tracks/stream/${nextTrack.id}`;
-      setTimeout(() => preloadNextUrl(nextUrl), 1000);
+      // Wait 1.5s to ensure active track and images had priority
+      preloadNextTimeout = setTimeout(() => preloadNextUrl(nextUrl), 1500); 
+  }
+
+  // --- PRIORITY 6: Delay Service Worker Offline Caching ---
+  let swPreloadTimeout;
+  $: if (typeof navigator !== 'undefined' && navigator.serviceWorker && navigator.serviceWorker.controller && $currentPlaylist.length > 0) {
+    clearTimeout(swPreloadTimeout);
+    swPreloadTimeout = setTimeout(() => {
+      const nextTracks = $currentPlaylist
+        .slice($currentIndex + 1, $currentIndex + 6)
+        .map(t => t.id);
+      if (nextTracks.length > 0) {
+        navigator.serviceWorker.controller.postMessage({
+          type: 'PRELOAD_TRACKS',
+          trackIds: nextTracks
+        });
+      }
+    }, 3000); // 3s delay yields to Preload Next track stream
   }
 </script>
 

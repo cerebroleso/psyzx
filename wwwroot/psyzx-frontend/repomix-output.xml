@@ -1396,62 +1396,67 @@ async function handleRangeLogic(response, request) {
     }
 
     @media (max-width: 768px) {
-    /* 1. Tighten the main card padding (Bottom is now 8px instead of 20px) */
+        /* 1. Tighten the main card padding */
         .album-header-block {
-            padding: 16px 12px 8px 12px !important;
+            padding: 16px 12px 12px 12px !important;
             margin-bottom: 16px !important;
         }
 
         .album-hero { 
             flex-direction: column; 
             align-items: center; 
-            gap: 16px; /* Reduced from 16px */
+            gap: 20px; 
             text-align: center; 
         } 
 
-        /* 2. Reduce the gap between text info and action buttons */
-        .header-separator {
-            margin: 0px 0 !important; /* Reduced from 16px */
+        /* FIX: Resize the WRAPPER, not just the image */
+        .cover-wrapper {
+            width: 200px !important;  /* Increased from 180 for better visibility */
+            height: 200px !important;
+            margin: 0 auto;           /* Forces horizontal centering */
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.5); /* Slightly smaller shadow for mobile */
         }
 
-        /* 3. Ensure the action bar itself doesn't push the bottom away */
-        .action-bar { 
-            justify-content: left; 
-            flex-wrap: wrap; 
-            gap: 24px !important; /* Tighter button spacing */
-            margin-bottom: 4px !important; 
-        } 
-
-        /* Optional: Shrink the cover size slightly to give text more room */
-        .album-hero .cover-wrapper img {
-            width: 180px !important;
-            height: 180px !important;
+        /* Ensure image fills the new wrapper size */
+        .cover-wrapper img {
+            width: 100% !important;
+            height: 100% !important;
         }
 
         .album-info { 
+            width: 100%;
+            display: flex;
+            flex-direction: column;
             align-items: center; 
             text-align: center; 
         } 
 
-        /* Existing font size fixes */
-        .album-info-text, .duration-highlight, .kbps-badge-inline {
-            font-size: 7px;
+        /* 2. Fix the separator and meta text */
+        .header-separator {
+            margin: 12px 0 !important; 
         }
+
+        /* Boost font size slightly - 7px was likely too small to read */
+        .album-info-text, .duration-highlight {
+            font-size: 12px;
+        }
+        
+        .album-title {
+            font-size: 24px;
+            margin-bottom: 4px;
+        }
+
+        /* 3. Action bar alignment */
+        .action-bar { 
+            justify-content: center; /* Center buttons on mobile */
+            gap: 20px !important; 
+            margin-top: 8px;
+        } 
 
         .list-item-title {
             padding-right: 12px;
-            font-size: 12px;
+            font-size: 14px;
         }
-
-        .list-item-time {
-            font-size: 10px;
-        }
-
-        .btn-add-playlist {
-            margin-left: -16px;
-            margin-right: -2px;
-        }
-
     }
 
     .modal-backdrop {
@@ -4010,7 +4015,11 @@ async function handleRangeLogic(response, request) {
     {#if tracks.length > 0}
         <div class="list-container active-view" in:fade={{duration: 200}}>
             <div class="list-header">
-                <div style="text-align:center;">#</div><div>Title</div><div style="text-align:right;"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg></div>
+                <div style="text-align:center;">#</div>
+                <div>Title</div>
+                <div style="text-align:right;">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                </div>
             </div>
             
             {#each tracks as track, index}
@@ -4018,13 +4027,14 @@ async function handleRangeLogic(response, request) {
                     <div class="swipe-bg"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg></div>
                     <div class="list-item-content" role="button" tabindex="0" use:swipeToQueue={track} on:click={() => playSpecificTrack(index)} on:keydown={(e) => e.key === 'Enter' && playSpecificTrack(index)}>
                         <div class="list-item-num">{index + 1}</div>
-                        <div style="min-width: 0; display: flex; align-items: center; gap: 16px; flex-grow: 1;">
+                        <div class="track-details-wrapper">
                             <img 
+                                class="track-cover"
                                 src={`/api/Tracks/image?path=${encodeURIComponent(track.album?.coverPath)}&quality=${$isLowQualityImages ? 'low' : 'high'}`} 
                                 alt="Cover" 
                                 loading="lazy" 
                             />
-                            <div style="min-width: 0;">
+                            <div class="track-text-info">
                                 <div class="list-item-title">{track.title}</div>
                                 <div class="list-item-artist">{track.album?.artist?.name || 'Unknown Artist'}</div>
                             </div>
@@ -4043,17 +4053,41 @@ async function handleRangeLogic(response, request) {
 {/if}
 
 <style>
-    .view-wrapper { position: relative; min-height: 100%; padding-bottom: 120px; }
+    /* View Layout */
+    .view-wrapper { 
+        position: relative; 
+        min-height: 100%; 
+        padding: 24px;
+    }
     
-    .album-header-block { display: flex; flex-direction: column; gap: 0; margin-bottom: 24px; background: rgba(255, 255, 255, 0.03); backdrop-filter: blur(32px) saturate(150%); -webkit-backdrop-filter: blur(32px) saturate(150%); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 24px; padding: 20px; box-shadow: 0 8px 32px rgba(0,0,0,0.2), inset 1px 1px 0 rgba(255,255,255,0.05); }
-    .album-hero { display: flex; gap: 24px; align-items: flex-end; margin-bottom: 0; }
-    .action-bar { display: flex; align-items: center; gap: 16px; margin-bottom: 0; }
-    .header-separator { height: 1px; background: rgba(255,255,255,0.1); margin: 16px 0; width: 100%; }
+    /* Header Block */
+    .album-header-block { 
+        display: flex; 
+        flex-direction: column; 
+        gap: 0; 
+        margin-bottom: 32px; 
+        background: var(--surface-color);
+        border: 1px solid rgba(255, 255, 255, 0.05); 
+        border-radius: 16px; 
+        padding: 32px; 
+        box-shadow: 0 16px 40px rgba(0,0,0,0.3); 
+    }
+    .album-hero { 
+        display: flex; 
+        gap: 32px; 
+        align-items: flex-end; 
+        margin-bottom: 0; 
+    }
     
     .playlist-cover-wrapper.playlist-hero-cover {
-        width: 232px; height: 232px; border-radius: 12px; background: rgba(0,0,0,0.4); 
-        display: flex; align-items: center; justify-content: center; color: rgba(255,255,255,0.3); 
-        border: 1px solid rgba(255,255,255,0.05); box-shadow: 0 16px 32px rgba(0,0,0,0.4); overflow: hidden;
+        width: 232px; height: 232px; 
+        border-radius: 8px; 
+        background: rgba(0,0,0,0.4); 
+        display: flex; align-items: center; justify-content: center; 
+        color: var(--text-secondary); 
+        border: 1px solid rgba(255,255,255,0.05); 
+        box-shadow: 0 16px 32px rgba(0,0,0,0.4); 
+        overflow: hidden;
     }
     
     .dynamic-grid-cover {
@@ -4064,46 +4098,94 @@ async function handleRangeLogic(response, request) {
     }
     .dynamic-grid-cover img { width: 100%; height: 100%; object-fit: cover; }
     .single-cover { width: 100%; height: 100%; object-fit: cover; }
-    .empty-cover { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: rgba(255,255,255,0.2); }
+    .empty-cover { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); }
 
     .album-type { font-size: 12px; font-weight: 800; letter-spacing: 2px; text-transform: uppercase; color: var(--accent-color); margin-bottom: 8px; }
-    .album-title { font-size: clamp(32px, 5vw, 64px); font-weight: 900; line-height: 1.1; margin-bottom: 12px; letter-spacing: -2px; color: white; text-shadow: 0 4px 24px rgba(0,0,0,0.4); }
-    .album-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 14px; font-weight: 600; color: rgba(255,255,255,0.7); }
+    .album-title { font-size: clamp(32px, 5vw, 64px); font-weight: 900; line-height: 1.1; margin-bottom: 12px; letter-spacing: -2px; color: var(--text-primary); text-shadow: 0 4px 24px rgba(0,0,0,0.4); }
+    .album-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 14px; font-weight: 600; color: var(--text-secondary); }
     .dot { font-size: 10px; opacity: 0.5; }
-    .duration-highlight { color: rgba(255,255,255,0.95); font-weight: 800;}
+    .duration-highlight { color: var(--text-primary); font-weight: 800;}
     
-    .list-container { background: rgba(255, 255, 255, 0.03); backdrop-filter: blur(32px) saturate(150%); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 24px; padding: 16px; }
-    .list-header { display: grid; grid-template-columns: 40px 1fr 60px; padding: 0 16px 12px 16px; border-bottom: 1px solid rgba(255,255,255,0.1); color: rgba(255,255,255,0.5); font-size: 12px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 8px; }
-    .list-item { position: relative; overflow: hidden; border-radius: 12px; transition: background 0.2s; }
-    .list-item:hover { background: rgba(255, 255, 255, 0.08); }
-    .list-item.active { background: rgba(255,255,255,0.1); }
+    .header-separator { height: 1px; background: rgba(255,255,255,0.1); margin: 24px 0; width: 100%; }
+    .action-bar { display: flex; align-items: center; gap: 24px; margin-bottom: 0; }
+    
+    /* List Container */
+    .list-container { 
+        display: flex; 
+        flex-direction: column; 
+    }
+    .list-header { 
+        display: grid; 
+        grid-template-columns: 40px 1fr 60px; 
+        gap: 16px;
+        padding: 0 16px 12px 16px; 
+        border-bottom: 1px solid rgba(255,255,255,0.1); 
+        color: var(--text-secondary); 
+        font-size: 12px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; 
+        margin-bottom: 12px; 
+    }
+
+    /* List Items */
+    .list-item { 
+        position: relative; 
+        overflow: hidden; 
+        border-radius: 8px; 
+        margin-bottom: 4px;
+        transition: background-color 0.2s ease; 
+    }
+    .list-item:hover { background-color: var(--surface-hover); }
+    .list-item.active { background-color: rgba(255,255,255,0.1); }
     .list-item.active .list-item-num, .list-item.active .list-item-title { color: var(--accent-color); }
     
-    .swipe-bg { position: absolute; top: 0; left: 0; height: 100%; width: 0; background: rgba(181, 52, 209, 0.5); z-index: 1; display: flex; align-items: center; border-radius: 8px; overflow: hidden; }
+    .swipe-bg { position: absolute; top: 0; left: 0; height: 100%; width: 0; background: var(--accent-dark); z-index: 1; display: flex; align-items: center; border-radius: 8px 0 0 8px; overflow: hidden; }
     .swipe-bg svg { position: absolute; left: 30px; top: 50%; transform: translate(-50%, -50%); transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1); }
     
-    .list-item-content { position: relative; z-index: 2; display: grid; grid-template-columns: 40px 1fr 60px; align-items: center; padding: 12px 16px; cursor: pointer; outline: none; }
-    .list-item-num { text-align: center; color: rgba(255,255,255,0.5); font-weight: 600; font-size: 14px; }
-    .list-item-title { color: white; font-weight: 700; font-size: 15px; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .list-item-artist { color: rgba(255,255,255,0.5); font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .list-item-time { text-align: right; color: rgba(255,255,255,0.5); font-size: 14px; font-variant-numeric: tabular-nums; }
+    .list-item-content { position: relative; z-index: 2; display: grid; grid-template-columns: 40px 1fr 60px; gap: 16px; align-items: center; padding: 10px 16px; cursor: pointer; outline: none; }
+    .list-item-num { text-align: center; color: var(--text-secondary); font-weight: 500; font-size: 16px; font-variant-numeric: tabular-nums; }
     
-    .tiny-cover { width: 40px; height: 40px; border-radius: 6px; object-fit: cover; background: rgba(0,0,0,0.5); flex-shrink: 0; }
+    /* Missing Image CSS Added Here */
+    .track-details-wrapper { min-width: 0; display: flex; align-items: center; gap: 16px; flex-grow: 1; }
+    .track-cover { 
+        width: 48px; 
+        height: 48px; 
+        border-radius: 4px; 
+        object-fit: cover; 
+        background: rgba(255,255,255,0.05); 
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        flex-shrink: 0;
+    }
+    .track-text-info { min-width: 0; flex: 1; }
+    
+    .list-item-title { color: var(--text-primary); font-weight: 600; font-size: 15px; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .list-item-artist { color: var(--text-secondary); font-size: 13px; font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .list-item-time { text-align: right; color: var(--text-secondary); font-size: 14px; font-variant-numeric: tabular-nums; }
 
+    /* Buttons */
     .hoverable { transition: transform 0.2s, background 0.2s, color 0.2s; cursor: pointer; }
-    .btn-main-play { width: 56px; height: 56px; border-radius: 50%; background: white; color: black; border: none; display: flex; align-items: center; justify-content: center; box-shadow: 0 8px 16px rgba(0,0,0,0.3); }
-    .btn-main-play.hoverable:hover { transform: scale(1.05); background: var(--accent-color); color: black; }
+    .btn-main-play { width: 56px; height: 56px; border-radius: 50%; background: var(--accent-color); color: #000; border: none; display: flex; align-items: center; justify-content: center; box-shadow: 0 8px 16px rgba(0,0,0,0.3); transition: transform 0.15s cubic-bezier(0.4, 0, 0.2, 1); }
+    .btn-main-play.hoverable:hover { transform: scale(1.05); }
+    .btn-main-play.hoverable:active { transform: scale(0.95); }
     .btn-main-play:disabled { opacity: 0.5; filter: grayscale(1); cursor: not-allowed; transform: none !important; }
-    .btn-icon-bar { background: none; border: none; color: rgba(255,255,255,0.5); padding: 8px; }
+    
+    .btn-icon-bar { background: none; border: none; color: var(--text-secondary); padding: 8px; transition: color 0.2s ease; }
     .btn-icon-bar.active { color: var(--accent-color); }
-    .btn-icon-bar.hoverable:hover:not(:disabled) { color: white; transform: scale(1.1); }
+    .btn-icon-bar.hoverable:hover:not(:disabled) { color: var(--text-primary); transform: scale(1.1); }
     .btn-icon-bar:disabled { opacity: 0.3; cursor: not-allowed; }
 
-    .empty-state { text-align: center; padding: 64px 24px; color: rgba(255,255,255,0.4); font-size: 16px; font-weight: bold; background: rgba(255,255,255,0.02); border-radius: 24px; border: 1px dashed rgba(255,255,255,0.1); }
+    .empty-state { text-align: center; padding: 64px 24px; color: var(--text-secondary); font-size: 16px; font-weight: 600; background: var(--surface-color); border-radius: 16px; border: 1px dashed rgba(255,255,255,0.1); }
 
+    /* Mobile Adjustments */
     @media (max-width: 768px) {
-        .album-hero { flex-direction: column; align-items: center; gap: 16px; text-align: center; }
+        .view-wrapper { padding: 16px; }
+        .album-header-block { padding: 24px; }
+        .album-hero { flex-direction: column; align-items: center; gap: 24px; text-align: center; }
         .action-bar { justify-content: center; }
+        .playlist-cover-wrapper.playlist-hero-cover { width: 200px; height: 200px; }
+        
+        .list-header { grid-template-columns: 30px 1fr 40px; padding: 8px 12px; font-size: 10px; gap: 12px; }
+        .list-item-content { grid-template-columns: 30px 1fr 40px; padding: 10px 12px; gap: 12px; }
+        .track-cover { width: 40px; height: 40px; }
+        .list-item-num { font-size: 14px; }
     }
 </style>
 </file>
@@ -4310,8 +4392,9 @@ async function handleRangeLogic(response, request) {
 
 <file path="src/lib/views/Search.svelte">
 <script>
-    import { currentPlaylist, currentIndex, shuffleHistory, isLowQualityImages } from '../../store.js';
+    import { currentPlaylist, currentIndex, shuffleHistory, isLowQualityImages, albumsMap, artistsMap } from '../../store.js';
     import { api } from '../api.js';
+    import { fade, scale } from 'svelte/transition';
 
     export let query = '';
 
@@ -4322,7 +4405,25 @@ async function handleRangeLogic(response, request) {
     let searchTimeout;
     let isSearching = false;
 
-    // Reactively watch 'query' and debounce the API call
+    let contextMenuOpen = false;
+    let contextMenuX = 0;
+    let contextMenuY = 0;
+    let contextMenuItem = null;
+    let contextMenuType = null;
+
+    const DEFAULT_PLACEHOLDER = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxIDEiPjxyZWN0IHdpZHRoPSIxIiBoZWlnaHQ9IjEiIGZpbGw9IiMzMzMiLz48L3N2Zz4=';
+    
+    const handleImageError = (ev) => { 
+        if (ev.target.src !== DEFAULT_PLACEHOLDER) {
+            ev.target.src = DEFAULT_PLACEHOLDER; 
+        }
+    };
+
+    function portal(node) {
+        document.body.appendChild(node);
+        return { destroy() { if (node.parentNode) node.parentNode.removeChild(node); } };
+    }
+
     $: {
         clearTimeout(searchTimeout);
         const q = query.trim();
@@ -4337,18 +4438,48 @@ async function handleRangeLogic(response, request) {
             searchTimeout = setTimeout(async () => {
                 try {
                     const res = await api.fetchWithTimeout(`/Search?q=${encodeURIComponent(q)}`);
+                    
                     if (res.ok) {
                         const data = await res.json();
-                        resultsArtists = data.artists;
-                        resultsAlbums = data.albums;
-                        resultsTracks = data.tracks;
+                        
+                        const fetchedTracks = (data.tracks || []).map(t => {
+                            t.albumId = t.albumId || t.album?.id;
+                            if (t.album) {
+                                t.album.artistId = t.album.artistId || t.album.artist?.id;
+                                t.album.artistName = t.album.artistName || t.album.artist?.name;
+                            }
+                            return t;
+                        });
+
+                        const fetchedArtists = data.artists || [];
+                        const fetchedAlbums = data.albums || [];
+
+                        albumsMap.update(m => {
+                            fetchedAlbums.forEach(a => m.set(a.id, a));
+                            fetchedTracks.forEach(t => {
+                                if (t.album && !m.has(t.album.id)) m.set(t.album.id, t.album);
+                            });
+                            return m;
+                        });
+
+                        artistsMap.update(m => {
+                            fetchedArtists.forEach(a => m.set(a.id, a));
+                            fetchedTracks.forEach(t => {
+                                if (t.album?.artist && !m.has(t.album.artist.id)) m.set(t.album.artist.id, t.album.artist);
+                            });
+                            return m;
+                        });
+
+                        resultsTracks = fetchedTracks;
+                        resultsArtists = fetchedArtists;
+                        resultsAlbums = fetchedAlbums;
                     }
                 } catch (err) {
-                    console.error("[Search] Failed to fetch results", err);
+                    console.error(err);
                 } finally {
                     isSearching = false;
                 }
-            }, 300); // 300ms delay prevents spamming your AMD E1-6010 processor
+            }, 300);
         }
     }
 
@@ -4360,24 +4491,86 @@ async function handleRangeLogic(response, request) {
             currentIndex.set(indexInResults);
         }
     };
+
+    function openContextMenu(e, item, type) {
+        contextMenuItem = item;
+        contextMenuType = type;
+        
+        const menuWidth = 220;
+        let x = e.clientX;
+        if (x + menuWidth > window.innerWidth) {
+            x = window.innerWidth - menuWidth - 10;
+        }
+
+        contextMenuX = x;
+        contextMenuY = e.clientY + 15;
+        contextMenuOpen = true;
+    }
+
+    function closeContextMenu() {
+        contextMenuOpen = false;
+        contextMenuItem = null;
+        contextMenuType = null;
+    }
 </script>
+
+<svelte:window on:click={closeContextMenu} />
+
+{#if contextMenuOpen}
+    <div use:portal>
+        <div class="context-menu" style="top: {contextMenuY}px; left: {contextMenuX}px;" in:scale={{ start: 0.95, duration: 100 }} out:fade={{ duration: 100 }} on:click|stopPropagation>
+            <button class="context-item" on:click={() => { if(contextMenuType === 'track') playTrack(contextMenuItem); closeContextMenu(); }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                </svg>
+                Play Now
+            </button>
+            <button class="context-item" on:click={closeContextMenu}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="12" y1="5" x2="12" y2="19"></line>
+                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                </svg>
+                Add to Queue
+            </button>
+        </div>
+    </div>
+{/if}
 
 <div class="search-view">
     {#if query.trim() === ''}
         <div class="empty-state">Type something to search</div>
     {:else if isSearching}
-        <div class="empty-state">Searching...</div>
+        <div class="empty-state">
+            <span class="spinner"></span>
+            Searching...
+        </div>
     {:else}
         {#if resultsArtists.length > 0}
             <h2>Artists</h2>
             <div class="grid-container">
                 {#each resultsArtists as artist}
-                    <a href="#artist/{artist.id}" class="card artist-card">
-                        <img src={artist.imagePath ? `/api/Tracks/image?path=${encodeURIComponent(artist.imagePath.split('?')[0])}&size=thumb` : '/placeholder.png'} alt={artist.name} />
-                        <div class="card-info">
-                            <div class="title">{artist.name}</div>
+                    <div class="card artist-card">
+                        <a href="#artist/{artist.id}" class="card-link-overlay" aria-label="View {artist.name}"></a>
+                        
+                        <div class="cover-wrapper artist-wrapper">
+                            <img 
+                                src={artist.imagePath ? `/api/Tracks/image?path=${encodeURIComponent(artist.imagePath.split('?')[0])}&quality=low` : DEFAULT_PLACEHOLDER} 
+                                alt={artist.name} 
+                                class="sleek-cover"
+                                on:error={handleImageError}
+                            />
                         </div>
-                    </a>
+                        <div class="card-bottom">
+                            <div class="card-title">{artist.name}</div>
+                            <button class="more-options-btn" aria-label="Artist Options" on:click|preventDefault|stopPropagation={(e) => openContextMenu(e, artist, 'artist')}>
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <circle cx="12" cy="12" r="1.5"></circle>
+                                    <circle cx="12" cy="5" r="1.5"></circle>
+                                    <circle cx="12" cy="19" r="1.5"></circle>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
                 {/each}
             </div>
         {/if}
@@ -4386,13 +4579,31 @@ async function handleRangeLogic(response, request) {
             <h2>Albums</h2>
             <div class="grid-container">
                 {#each resultsAlbums as album}
-                    <a href="#album/{album.id}" class="card album-card">
-                        <img src={album.coverPath ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath.split('?')[0])}&size=thumb` : '/placeholder.png'} alt={album.title} />
-                        <div class="card-info">
-                            <div class="title">{album.title}</div>
-                            <div class="subtitle">{album.artistName}</div>
+                    <div class="card album-card">
+                        <a href="#album/{album.id}" class="card-link-overlay" aria-label="View {album.title}"></a>
+
+                        <div class="cover-wrapper">
+                            <img 
+                                src={album.coverPath ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath.split('?')[0])}&quality=low` : DEFAULT_PLACEHOLDER} 
+                                alt={album.title} 
+                                class="sleek-cover"
+                                on:error={handleImageError}
+                            />
                         </div>
-                    </a>
+                        <div class="card-bottom">
+                            <div class="card-info-stack">
+                                <div class="card-title">{album.title}</div>
+                                <div class="card-subtitle">{album.artistName}</div>
+                            </div>
+                            <button class="more-options-btn" aria-label="Album Options" on:click|preventDefault|stopPropagation={(e) => openContextMenu(e, album, 'album')}>
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <circle cx="12" cy="12" r="1.5"></circle>
+                                    <circle cx="12" cy="5" r="1.5"></circle>
+                                    <circle cx="12" cy="19" r="1.5"></circle>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
                 {/each}
             </div>
         {/if}
@@ -4402,10 +4613,23 @@ async function handleRangeLogic(response, request) {
             <div class="track-list">
                 {#each resultsTracks as track}
                     <div class="track-item" role="button" tabindex="0" on:click={() => playTrack(track)} on:keydown={(e) => e.key === 'Enter' && playTrack(track)}>
+                        <img 
+                            src={track.album?.coverPath ? `/api/Tracks/image?path=${encodeURIComponent(track.album.coverPath.split('?')[0])}&quality=low` : DEFAULT_PLACEHOLDER} 
+                            alt={track.title} 
+                            class="track-thumb sleek-cover"
+                            on:error={handleImageError}
+                        />
                         <div class="track-info">
                             <div class="track-title">{track.title}</div>
-                            <div class="track-artist">{track.album.artist.name} • {track.album.title}</div>
+                            <div class="track-artist">{track.album?.artist?.name || 'Unknown Artist'} • {track.album?.title || 'Unknown Album'}</div>
                         </div>
+                        <button class="more-options-btn track-options" aria-label="Track Options" on:click|preventDefault|stopPropagation={(e) => openContextMenu(e, track, 'track')}>
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <circle cx="12" cy="12" r="1.5"></circle>
+                                <circle cx="12" cy="5" r="1.5"></circle>
+                                <circle cx="12" cy="19" r="1.5"></circle>
+                            </svg>
+                        </button>
                     </div>
                 {/each}
             </div>
@@ -4414,13 +4638,15 @@ async function handleRangeLogic(response, request) {
         {#if resultsArtists.length === 0 && resultsAlbums.length === 0 && resultsTracks.length === 0}
             <div class="empty-state">No results found for "{query}"</div>
         {/if}
+        
+        <div class="keyboard-spacer"></div>
     {/if}
 </div>
 
 <style>
     .search-view {
         padding: 24px;
-        padding-bottom: 120px;
+        padding-bottom: 24px; 
     }
 
     h2 {
@@ -4442,6 +4668,7 @@ async function handleRangeLogic(response, request) {
     }
 
     .card {
+        position: relative;
         text-decoration: none;
         color: inherit;
         display: flex;
@@ -4450,42 +4677,98 @@ async function handleRangeLogic(response, request) {
         padding: 16px;
         border-radius: 12px;
         transition: background 0.2s ease;
+        outline: none;
+    }
+
+    .card-link-overlay {
+        position: absolute;
+        top: 0; left: 0; right: 0; bottom: 0;
+        z-index: 1;
+        border-radius: 12px;
     }
 
     .card:hover {
         background: rgba(255,255,255,0.08);
     }
 
-    .card img {
+    .cover-wrapper {
         width: 100%;
         aspect-ratio: 1;
-        object-fit: cover;
-        border-radius: 8px;
         margin-bottom: 16px;
+        border-radius: 8px;
+        overflow: hidden;
         box-shadow: 0 8px 24px rgba(0,0,0,0.3);
     }
 
-    .artist-card img {
+    .artist-wrapper {
         border-radius: 50%;
     }
 
-    .title {
+    .sleek-cover { 
+        width: 100%; 
+        height: 100%; 
+        object-fit: cover; 
+        transition: all 0.3s ease; 
+    }
+
+    .card-bottom { 
+        position: relative; 
+        display: flex; 
+        align-items: center; 
+        justify-content: space-between; 
+        min-height: 24px;
+    }
+
+    .card-info-stack {
+        display: flex;
+        flex-direction: column;
+        flex-grow: 1;
+        overflow: hidden;
+    }
+
+    .card-title { 
         font-weight: 700;
         color: white;
         font-size: 16px;
-        margin-bottom: 4px;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
+        flex-grow: 1; 
+        white-space: nowrap; 
+        overflow: hidden; 
+        text-overflow: ellipsis; 
+        max-width: 100%; 
+        transition: max-width 0.2s ease; 
     }
-
-    .subtitle {
-        font-size: 14px;
+    
+    .card-subtitle {
+        font-size: 13px;
         color: rgba(255,255,255,0.5);
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+        margin-top: 2px;
     }
+
+    .more-options-btn { 
+        position: absolute; 
+        right: 0; 
+        top: 50%;
+        transform: translateY(-50%);
+        background: transparent; 
+        border: none; 
+        color: rgba(255, 255, 255, 0.6); 
+        cursor: pointer; 
+        padding: 4px; 
+        border-radius: 50%; 
+        display: flex; 
+        align-items: center; 
+        justify-content: center; 
+        opacity: 0; 
+        transition: opacity 0.2s ease, background 0.2s ease, color 0.2s ease; 
+        z-index: 2;
+    }
+    .more-options-btn:hover { color: white; background: rgba(255, 255, 255, 0.1); }
+    
+    .card:hover .card-title, .card:hover .card-info-stack { max-width: calc(100% - 32px); }
+    .card:hover .more-options-btn { opacity: 1; }
 
     .track-list {
         display: flex;
@@ -4494,8 +4777,10 @@ async function handleRangeLogic(response, request) {
     }
 
     .track-item {
+        position: relative;
         display: flex;
-        padding: 12px 16px;
+        align-items: center;
+        padding: 10px 16px;
         background: rgba(255,255,255,0.03);
         border-radius: 8px;
         transition: background 0.2s ease;
@@ -4507,29 +4792,111 @@ async function handleRangeLogic(response, request) {
         background: rgba(255,255,255,0.08);
     }
 
+    .track-thumb {
+        width: 48px;
+        height: 48px;
+        border-radius: 6px;
+        margin-right: 16px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    }
+
     .track-info {
         display: flex;
         flex-direction: column;
         gap: 4px;
+        flex: 1;
+        overflow: hidden;
     }
 
     .track-title {
         color: white;
         font-weight: 600;
         font-size: 15px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
 
     .track-artist {
         font-size: 13px;
         color: rgba(255,255,255,0.5);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
+
+    .track-options {
+        position: relative;
+        transform: none;
+        right: auto;
+        top: auto;
+        opacity: 0;
+        z-index: 2;
+    }
+    .track-item:hover .track-options { opacity: 1; }
+
+    .context-menu { 
+        position: fixed; 
+        z-index: 9999999; 
+        background: rgba(30, 30, 30, 0.75); 
+        backdrop-filter: blur(20px) saturate(150%); 
+        -webkit-backdrop-filter: blur(20px) saturate(150%); 
+        border: 1px solid rgba(255, 255, 255, 0.1); 
+        border-radius: 8px; 
+        padding: 4px; 
+        min-width: 200px; 
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4); 
+    }
+    .context-item { 
+        display: flex; 
+        align-items: center; 
+        gap: 8px; 
+        width: 100%; 
+        padding: 10px 12px; 
+        background: transparent; 
+        border: none; 
+        color: white; 
+        font-size: 13px; 
+        font-weight: 500; 
+        border-radius: 4px; 
+        cursor: pointer; 
+        text-align: left; 
+        transition: background 0.15s; 
+    }
+    .context-item:hover { background: rgba(255, 255, 255, 0.1); }
 
     .empty-state {
         color: rgba(255,255,255,0.4);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 16px;
         text-align: center;
         padding: 64px 24px;
         font-size: 18px;
         font-weight: 600;
+    }
+    
+    .spinner {
+        display: block; width: 24px; height: 24px;
+        border: 2px solid rgba(255,255,255,0.12); border-top-color: rgba(255,255,255,0.65);
+        border-radius: 50%; animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .keyboard-spacer {
+        width: 100%;
+        height: 120px;
+        margin-top: 32px;
+        background-image: 
+            linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+        background-size: 20px 20px;
+        border-radius: 8px;
+        mask-image: linear-gradient(to bottom, black 0%, transparent 100%);
+        -webkit-mask-image: linear-gradient(to bottom, black 0%, transparent 100%);
+        pointer-events: none;
     }
 </style>
 </file>
@@ -4548,13 +4915,22 @@ async function handleRangeLogic(response, request) {
     import { api } from '../api.js';
 
     let currentBoost = '1.0';
-    let currentScrubSound = 'vinyl';
+    let currentScrubSound = 'speed'; // FIX: Default set to speed to prevent visual flash
     let isScanning = false;
 
     onMount(() => {
         if (typeof window !== 'undefined') {
             currentBoost = localStorage.getItem('psyzx_boost') || '1.0';
-            currentScrubSound = localStorage.getItem('psyzx_scrub_sound') || 'vinyl';
+            currentScrubSound = localStorage.getItem('psyzx_scrub_sound') || 'speed';
+            
+            // FIX: Enforce requested defaults if not set by the user yet
+            if (localStorage.getItem('psyzx_webaudio_gapless') === null) {
+                isGaplessModeActive.set(false);
+                setWebAudioGaplessMode(false);
+            }
+            if (localStorage.getItem('psyzx_vis_shape') === null) {
+                visShape.set('PSPWaves');
+            }
         }
 
         setVolumeBoost(currentBoost);
@@ -4618,10 +4994,7 @@ async function handleRangeLogic(response, request) {
         const newState = !$isGaplessModeActive;
         isGaplessModeActive.set(newState);
         setWebAudioGaplessMode(newState);
-        
-        if (confirm("Changing the audio engine requires a page reload to fully apply. Reload now?")) {
-            window.location.reload();
-        }
+        window.location.reload();
     }; 
 
     const refreshApp = async () => {
@@ -4666,16 +5039,19 @@ async function handleRangeLogic(response, request) {
         <h2>Audio Engine</h2>
 
         <div class="setting-item">
-            <span class="setting-title">Audio Quality Cap</span>
-            <select class="sleek-select" bind:value={$audioBitrate}>
-                <option value="320">320 kbps</option>
-                <option value="256">256 kbps</option>
-                <option value="192">192 kbps</option>
-                <option value="160">160 kbps</option>
-            </select>
+            <div class="setting-info">
+                <span class="setting-title">Audio Quality Cap</span>
+                <span class="setting-desc">Maximum streaming bitrate for standard audio files.</span>
+            </div>
+            <div class="segmented-control">
+                <button class:active={$audioBitrate === '320'} on:click={() => audioBitrate.set('320')}>320</button>
+                <button class:active={$audioBitrate === '256'} on:click={() => audioBitrate.set('256')}>256</button>
+                <button class:active={$audioBitrate === '192'} on:click={() => audioBitrate.set('192')}>192</button>
+                <button class:active={$audioBitrate === '160'} on:click={() => audioBitrate.set('160')}>160</button>
+            </div>
         </div>
         
-        <div class="setting-item" style="margin-bottom: 24px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 24px;">
+        <div class="setting-item">
             <div class="setting-info">
                 <span class="setting-title">True Gapless (RAM Engine)</span>
                 <span class="setting-desc">Bypasses HTML5 logic to force 0ms continuous audio using RAM buffers.</span>
@@ -4685,20 +5061,18 @@ async function handleRangeLogic(response, request) {
             </button>
         </div>
 
-        {#if $isGaplessModeActive}
-            <div class="setting-item" style="margin-bottom: 24px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 24px;" transition:fade={{duration: 200}}>
-                <div class="setting-info">
-                    <span class="setting-title">Gapless Scrub Sound</span>
-                    <span class="setting-desc">Effect played when dragging the progress bar.</span>
-                </div>
-                <div class="segmented-control">
-                    <button class:active={currentScrubSound === 'vinyl'} on:click={() => updateScrubSound('vinyl')}>Vinyl</button>
-                    <button class:active={currentScrubSound === 'speed'} on:click={() => updateScrubSound('speed')}>Speed</button>
-                    <button class:active={currentScrubSound === 'beep'} on:click={() => updateScrubSound('beep')}>Beep</button>
-                    <button class:active={currentScrubSound === 'none'} on:click={() => updateScrubSound('none')}>Off</button>
-                </div>
+        <div class="setting-item">
+            <div class="setting-info">
+                <span class="setting-title">Progress Scrub Sound</span>
+                <span class="setting-desc">Effect played when dragging the progress bar.</span>
             </div>
-        {/if}
+            <div class="segmented-control">
+                <button class:active={currentScrubSound === 'vinyl'} on:click={() => updateScrubSound('vinyl')}>Vinyl</button>
+                <button class:active={currentScrubSound === 'speed'} on:click={() => updateScrubSound('speed')}>Speed</button>
+                <button class:active={currentScrubSound === 'beep'} on:click={() => updateScrubSound('beep')}>Beep</button>
+                <button class:active={currentScrubSound === 'none'} on:click={() => updateScrubSound('none')}>Off</button>
+            </div>
+        </div>
 
         <div class="setting-item-col">
             <div class="setting-info w-full">
@@ -4712,117 +5086,116 @@ async function handleRangeLogic(response, request) {
         </div>
     </div>
 
-    {#if $isGaplessModeActive}
-        <div class="settings-section" transition:fade={{duration: 200}}>
-            <h2>Visualizer (Canvas)</h2>
+    <div class="settings-section">
+        <h2>Visualizer (Canvas)</h2>
 
-            <div class="setting-item">
-                <div class="setting-info">
-                    <span class="setting-title">Enable 3D Visualizer</span>
-                    <span class="setting-desc">Renders hardware-accelerated graphics responding to audio.</span>
-                </div>
-                <button class="toggle-btn" class:active={$visEnabled} on:click={() => visEnabled.set(!$visEnabled)} aria-label="Toggle Visualizer">
-                    <div class="toggle-knob"></div>
-                </button>
+        <div class="setting-item">
+            <div class="setting-info">
+                <span class="setting-title">Enable 3D Visualizer</span>
+                <span class="setting-desc">Renders hardware-accelerated graphics responding to audio.</span>
             </div>
-            
-            <div class="setting-item" style="margin-bottom: 24px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 24px;">
-                <div class="setting-info">
-                    <span class="setting-title">Shape</span>
-                    <span class="setting-desc">The geometric form reflecting audio data.</span>
-                </div>
-                <div class="segmented-control">
-                    <button class:active={$visShape === 'Icosahedron'} on:click={() => visShape.set('Icosahedron')}>Ico</button>
-                    <button class:active={$visShape === 'Dodecahedron'} on:click={() => visShape.set('Dodecahedron')}>Dodeca</button>
-                    <button class:active={$visShape === 'TorusKnot'} on:click={() => visShape.set('TorusKnot')}>Knot</button>
-                    <button class:active={$visShape === 'Tunnel'} on:click={() => visShape.set('Tunnel')}>Tunnel</button>
-                    <button class:active={$visShape === 'DNA'} on:click={() => visShape.set('DNA')}>DNA</button>
-                    <button class:active={$visShape === 'Shell'} on:click={() => visShape.set('Shell')}>Shell</button>
-                    <button class:active={$visShape === 'Synthwave'} on:click={() => visShape.set('Synthwave')}>Synth</button>
-                    <button class:active={$visShape === 'Galaxy'} on:click={() => visShape.set('Galaxy')}>Galaxy</button>
-                    <button class:active={$visShape === 'Wormhole'} on:click={() => visShape.set('Wormhole')}>Wormhole</button>
-                    <button class:active={$visShape === 'Fractal'} on:click={() => visShape.set('Fractal')}>Fractal</button>
-                </div>
+            <button class="toggle-btn" class:active={$visEnabled} on:click={() => visEnabled.set(!$visEnabled)} aria-label="Toggle Visualizer">
+                <div class="toggle-knob"></div>
+            </button>
+        </div>
+        
+        <div class="setting-item">
+            <div class="setting-info">
+                <span class="setting-title">Shape</span>
+                <span class="setting-desc">The geometric form reflecting audio data.</span>
             </div>
-
-            <div class="setting-item" style="margin-bottom: 24px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 24px;">
-                <div class="setting-info">
-                    <span class="setting-title">Movement</span>
-                    <span class="setting-desc">The base animated movement pattern.</span>
-                </div>
-                <div class="segmented-control">
-                    <button class:active={$visMovement === 'Hypnotic'} on:click={() => visMovement.set('Hypnotic')}>Hypnotic</button>
-                    <button class:active={$visMovement === 'Pulsate'} on:click={() => visMovement.set('Pulsate')}>Pulsate</button>
-                    <button class:active={$visMovement === 'None'} on:click={() => visMovement.set('None')}>None</button>
-                </div>
-            </div>
-
-            <div class="setting-item" style="margin-bottom: 24px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 24px;">
-                <div class="setting-info">
-                    <span class="setting-title">Sides / Radial Segments</span>
-                    <span class="setting-desc">Adjusts structural sides for Tube/Tunnel/Wormhole forms.</span>
-                </div>
-                <div class="segmented-control">
-                    <button class:active={$visSides === 'Default'} on:click={() => visSides.set('Default')}>Auto</button>
-                    <button class:active={$visSides === '3'} on:click={() => visSides.set('3')}>3</button>
-                    <button class:active={$visSides === '4'} on:click={() => visSides.set('4')}>4</button>
-                    <button class:active={$visSides === '6'} on:click={() => visSides.set('6')}>6</button>
-                    <button class:active={$visSides === '12'} on:click={() => visSides.set('12')}>12</button>
-                </div>
-            </div>
-
-            <div class="setting-item-col">
-                <div class="setting-info w-full">
-                    <div class="flex-between">
-                        <span class="setting-title">Beat Intensity</span>
-                        <span class="highlight-val">{$visIntensity}x</span>
-                    </div>
-                    <span class="setting-desc mb-16">How violently the shape reacts to the FFT frequency data.</span>
-                </div>
-                <input class="range-slider" type="range" min="0.0" max="3.0" step="0.1" value={$visIntensity} on:change={(e) => visIntensity.set(e.target.value)}>
-            </div>
-
-            <div class="setting-item-col">
-                <div class="setting-info w-full">
-                    <div class="flex-between">
-                        <span class="setting-title">Y-Position (Vertical Offset)</span>
-                        <span class="highlight-val">{$visYPos}</span>
-                    </div>
-                    <span class="setting-desc mb-16">Height positioning within the background.</span>
-                </div>
-                <input class="range-slider" type="range" min="-30" max="30" step="1" value={$visYPos} on:change={(e) => visYPos.set(e.target.value)}>
-            </div>
-
-            <div class="setting-item-col">
-                <div class="setting-info w-full">
-                    <div class="flex-between">
-                        <span class="setting-title">Dimension (Overall Scale)</span>
-                        <span class="highlight-val">{$visDimension}x</span>
-                    </div>
-                    <span class="setting-desc mb-16">Multiplier for the visualizer's size.</span>
-                </div>
-                <input class="range-slider" type="range" min="0.5" max="3.0" step="0.1" value={$visDimension} on:change={(e) => visDimension.set(e.target.value)}>
-            </div>
-
-            <div class="setting-item-col">
-                <div class="setting-info w-full">
-                    <div class="flex-between">
-                        <span class="setting-title">Detail Level (Geometry)</span>
-                        <span class="highlight-val">{$visDetail}</span>
-                    </div>
-                    <span class="setting-desc mb-16">Complexity of the 3D mesh. Higher numbers cost more GPU power.</span>
-                </div>
-                <select class="sleek-select" value={$visDetail} on:change={(e) => visDetail.set(e.target.value)}>
-                    <option value="4">4 (Lowest)</option>
-                    <option value="8">8 (Low)</option>
-                    <option value="16">16 (Normal)</option>
-                    <option value="32">32 (High)</option>
-                    <option value="64">64 (Ultra)</option>
-                    <option value="128">128 (Extreme - Warning)</option>
-                </select>
+            <div class="segmented-control">
+                <button class:active={$visShape === 'Icosahedron'} on:click={() => visShape.set('Icosahedron')}>Ico</button>
+                <button class:active={$visShape === 'Dodecahedron'} on:click={() => visShape.set('Dodecahedron')}>Dodeca</button>
+                <button class:active={$visShape === 'TorusKnot'} on:click={() => visShape.set('TorusKnot')}>Knot</button>
+                <button class:active={$visShape === 'Tunnel'} on:click={() => visShape.set('Tunnel')}>Tunnel</button>
+                <button class:active={$visShape === 'DNA'} on:click={() => visShape.set('DNA')}>DNA</button>
+                <button class:active={$visShape === 'Shell'} on:click={() => visShape.set('Shell')}>Shell</button>
+                <button class:active={$visShape === 'Synthwave'} on:click={() => visShape.set('Synthwave')}>Synth</button>
+                <button class:active={$visShape === 'Galaxy'} on:click={() => visShape.set('Galaxy')}>Galaxy</button>
+                <button class:active={$visShape === 'Wormhole'} on:click={() => visShape.set('Wormhole')}>Wormhole</button>
+                <button class:active={$visShape === 'Fractal'} on:click={() => visShape.set('Fractal')}>Fractal</button>
+                <button class:active={$visShape === 'PSPWaves'} on:click={() => visShape.set('PSPWaves')}>Waves</button>
             </div>
         </div>
-    {/if}
+
+        <div class="setting-item">
+            <div class="setting-info">
+                <span class="setting-title">Movement</span>
+                <span class="setting-desc">The base animated movement pattern.</span>
+            </div>
+            <div class="segmented-control">
+                <button class:active={$visMovement === 'Hypnotic'} on:click={() => visMovement.set('Hypnotic')}>Hypnotic</button>
+                <button class:active={$visMovement === 'Pulsate'} on:click={() => visMovement.set('Pulsate')}>Pulsate</button>
+                <button class:active={$visMovement === 'None'} on:click={() => visMovement.set('None')}>None</button>
+            </div>
+        </div>
+
+        <div class="setting-item">
+            <div class="setting-info">
+                <span class="setting-title">Radial Segments</span>
+                <span class="setting-desc">Adjusts sides for Tube/Tunnel forms.</span>
+            </div>
+            <div class="segmented-control">
+                <button class:active={$visSides === 'Default'} on:click={() => visSides.set('Default')}>Auto</button>
+                <button class:active={$visSides === '3'} on:click={() => visSides.set('3')}>3</button>
+                <button class:active={$visSides === '4'} on:click={() => visSides.set('4')}>4</button>
+                <button class:active={$visSides === '6'} on:click={() => visSides.set('6')}>6</button>
+                <button class:active={$visSides === '12'} on:click={() => visSides.set('12')}>12</button>
+            </div>
+        </div>
+
+        <div class="setting-item-col">
+            <div class="setting-info w-full">
+                <div class="flex-between">
+                    <span class="setting-title">Beat Intensity</span>
+                    <span class="highlight-val">{($visIntensity * 10).toFixed(1)}x</span>
+                </div>
+                <span class="setting-desc mb-16">How violently the shape reacts to the FFT frequency data.</span>
+            </div>
+            <input class="range-slider" type="range" min="0.0" max="3.0" step="0.1" value={($visIntensity * 10).toFixed(1)} on:input={(e) => visIntensity.set(e.target.value / 10)}>
+        </div>
+
+        <div class="setting-item-col">
+            <div class="setting-info w-full">
+                <div class="flex-between">
+                    <span class="setting-title">Y-Position (Vertical Offset)</span>
+                    <span class="highlight-val">{$visYPos}</span>
+                </div>
+                <span class="setting-desc mb-16">Height positioning within the background.</span>
+            </div>
+            <input class="range-slider" type="range" min="-30" max="30" step="1" value={$visYPos} on:change={(e) => visYPos.set(e.target.value)}>
+        </div>
+
+        <div class="setting-item-col">
+            <div class="setting-info w-full">
+                <div class="flex-between">
+                    <span class="setting-title">Dimension (Overall Scale)</span>
+                    <span class="highlight-val">{$visDimension}x</span>
+                </div>
+                <span class="setting-desc mb-16">Multiplier for the visualizer's size.</span>
+            </div>
+            <input class="range-slider" type="range" min="0.5" max="3.0" step="0.1" value={$visDimension} on:change={(e) => visDimension.set(e.target.value)}>
+        </div>
+
+        <div class="setting-item-col">
+            <div class="setting-info w-full">
+                <div class="flex-between">
+                    <span class="setting-title">Detail Level (Geometry)</span>
+                    <span class="highlight-val">{$visDetail}</span>
+                </div>
+                <span class="setting-desc mb-16">Complexity of the 3D mesh. Higher numbers cost more GPU power.</span>
+            </div>
+            <select class="sleek-select" value={$visDetail} on:change={(e) => visDetail.set(e.target.value)}>
+                <option value="4">4 (Lowest)</option>
+                <option value="8">8 (Low)</option>
+                <option value="16">16 (Normal)</option>
+                <option value="32">32 (High)</option>
+                <option value="64">64 (Ultra)</option>
+                <option value="128">128 (Extreme - Warning)</option>
+            </select>
+        </div>
+    </div>
 
     <div class="settings-section">
         <h2>UI & Look</h2>
@@ -4918,7 +5291,7 @@ async function handleRangeLogic(response, request) {
         <h2 style="color: #ef4444;">System</h2>
         
         <div class="setting-item-col">
-            <div class="setting-info w-full">
+            <div class="setting-info w-full" style="margin-bottom: 32px;">
                 <span class="setting-title" style="color: #ef4444;">Force App Update</span>
                 <span class="setting-desc mb-16">Purges logic caches and checks for a new version.</span>
                 <button class="btn-refresh" on:click={refreshApp}>
@@ -4926,9 +5299,7 @@ async function handleRangeLogic(response, request) {
                     Refresh App
                 </button>
             </div>
-        </div>
 
-        <div class="setting-item-col" style="margin-top: 24px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 24px;">
             <div class="setting-info w-full">
                 <span class="setting-title" style="color: #ef4444;">Nuke Local Cache</span>
                 <span class="setting-desc mb-16">Destroys Service Worker, Storage and Local Database.</span>
@@ -4945,18 +5316,20 @@ async function handleRangeLogic(response, request) {
     .view-wrapper { padding: 32px 24px; max-width: 800px; margin: 0 auto; color: white; box-sizing: border-box; width: 100%; overflow-x: hidden; }
     .settings-header { margin-bottom: 40px; }
     .settings-header h1 { font-size: 32px; font-weight: 700; margin: 0; letter-spacing: -0.5px; }
+    
     .settings-section { margin-bottom: 32px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); border-radius: 12px; padding: 24px; box-shadow: 0 8px 24px rgba(0,0,0,0.3); }
     .danger-zone { border-color: rgba(239, 68, 68, 0.2); }
     .settings-section h2 { font-size: 14px; color: var(--accent-color); margin: 0 0 24px 0; text-transform: uppercase; letter-spacing: 1px; font-weight: 800; }
-    .setting-item { display: flex; justify-content: space-between; align-items: center; padding: 16px 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
-    .setting-item-col { display: flex; flex-direction: column; padding: 16px 0; }
+    
+    .setting-item { display: flex; justify-content: space-between; align-items: center; padding: 20px 0; border-bottom: 1px solid rgba(255,255,255,0.05); gap: 16px; }
+    .setting-item-col { display: flex; flex-direction: column; padding: 20px 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
     .setting-item:last-child, .setting-item-col:last-child { border-bottom: none; padding-bottom: 0; }
-    .setting-info { display: flex; flex-direction: column; gap: 6px; }
-    .setting-info:not(.w-full) { max-width: 60%; }
+    
+    .setting-info { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 0; }
     .w-full { width: 100%; }
     .flex-between { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
     .setting-title { font-size: 16px; font-weight: 600; }
-    .setting-desc { font-size: 13px; color: rgba(255,255,255,0.5); line-height: 1.5;}
+    .setting-desc { font-size: 13px; color: rgba(255,255,255,0.5); line-height: 1.5; }
     .mb-16 { margin-bottom: 16px; }
     .highlight-val { font-weight: 900; font-family: monospace; color: var(--accent-color); font-size: 16px; }
     
@@ -4964,8 +5337,9 @@ async function handleRangeLogic(response, request) {
     .sleek-select:hover { border-color: rgba(255,255,255,0.4); background: rgba(255,255,255,0.1); }
     .sleek-select option { background: #1a1a1a; color: white; font-weight: 500; }
 
-    .segmented-control { display: flex; background: rgba(255,255,255,0.15); padding: 2px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.05); margin-left: 10px; flex-wrap: wrap; gap: 2px; }
-    .segmented-control button { background: transparent; border: none; color: white; padding: 0 10px; height: 32px; font-size: 11px; font-weight: 800; cursor: pointer; border-radius: 6px; transition: all 0.2s; display: flex; align-items: center; justify-content: center; white-space: nowrap; flex-grow: 1; }
+    .segmented-control { display: flex; flex-shrink: 0; background: rgba(255,255,255,0.15); padding: 3px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.05); flex-wrap: wrap; gap: 3px; }
+    .segmented-control button { background: transparent; border: none; color: rgba(255,255,255,0.8); padding: 0 12px; height: 32px; font-size: 12px; font-weight: 800; cursor: pointer; border-radius: 6px; transition: all 0.2s; display: flex; align-items: center; justify-content: center; white-space: nowrap; flex-grow: 1; }
+    .segmented-control button:hover { color: white; }
     .segmented-control button.active { background: var(--accent-color); color: black; box-shadow: 0 2px 8px rgba(0,0,0,0.3); }
 
     .toggle-btn { width: 52px; height: 28px; border-radius: 14px; background: rgba(255,255,255,0.2); border: none; cursor: pointer; position: relative; transition: background 0.3s; padding: 0; flex-shrink: 0; }
@@ -4977,7 +5351,7 @@ async function handleRangeLogic(response, request) {
     .range-slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 16px; height: 16px; border-radius: 50%; background: white; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,0.4); }
     .range-slider::-moz-range-thumb { width: 16px; height: 16px; border-radius: 50%; background: white; cursor: pointer; border: none; box-shadow: 0 2px 6px rgba(0,0,0,0.4); }
 
-    .btn-action { background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 255, 255, 0.1); color: white; padding: 8px 16px; border-radius: 8px; font-weight: 700; font-size: 13px; cursor: pointer; transition: all 0.2s; min-width: 100px; }
+    .btn-action { background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 255, 255, 0.1); color: white; padding: 8px 16px; border-radius: 8px; font-weight: 700; font-size: 13px; cursor: pointer; transition: all 0.2s; min-width: 100px; flex-shrink: 0; }
     .btn-action:hover:not(:disabled) { background: rgba(255, 255, 255, 0.2); border-color: rgba(255, 255, 255, 0.3); }
     .btn-action:disabled { opacity: 0.5; cursor: not-allowed; }
 
@@ -4986,9 +5360,7 @@ async function handleRangeLogic(response, request) {
 
     @media (max-width: 650px) {
         .setting-item { flex-direction: column; align-items: flex-start; gap: 16px; }
-        .setting-info:not(.w-full) { max-width: 100%; }
-        .segmented-control { margin-left: 0; width: 100%; }
-        .toggle-btn { align-self: flex-start; }
+        .segmented-control { width: 100%; }
     }
 </style>
 </file>
@@ -5798,18 +6170,18 @@ import {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const MAX_CACHE_SIZE        = 5;
+const MAX_CACHE_SIZE        = 3;
 const FFT_SIZE              = 256;
 const EQ_FREQS              = [60, 250, 1000, 4000, 8000, 14000];
-const MIN_MSE_BUFFER_SECS   = 3;      // begin MSE playback after this many seconds are buffered
-const ROLLOVER_THRESHOLD    = 0.3;    // seconds before end to treat as natural rollover
+const MIN_MSE_BUFFER_SECS   = 3;      
+const ROLLOVER_THRESHOLD    = 0.3;    
 
 const SILENCE_B64 = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQQAAAAAAAE=';
 
 // ─── Exported state ───────────────────────────────────────────────────────────
 
 export let audioCtx             = null;
-export let gainNode             = null;   // boost gain (user-controlled headroom)
+export let gainNode             = null;   
 export let analyserNode         = null;
 export let isEngineInitialized  = false;
 export let isWebAudioMode;
@@ -5824,10 +6196,9 @@ export const setWebAudioGaplessMode = (enabled) => {
     if (typeof window !== 'undefined') localStorage.setItem('psyzx_webaudio_gapless', String(enabled));
 };
 
-// --- NEW EXPORT: True Buffer Syncing ---
 export const getBufferedPct = () => {
     if (isWebAudioMode) {
-        if (currentBuffer) return 100; // Background fetch complete
+        if (currentBuffer) return 100; 
         if (mseActive && msePlayer && msePlayer.duration > 0 && msePlayer.buffered.length > 0) {
             return (msePlayer.buffered.end(msePlayer.buffered.length - 1) / msePlayer.duration) * 100;
         }
@@ -5857,10 +6228,10 @@ let gainB                   = null;
 
 // ─── MSE streaming layer ──────────────────────────────────────────────────────
 
-let msePlayer               = null;   // dedicated <audio> for MSE streaming
-let mseGain                 = null;   // its WebAudio gain node
+let msePlayer               = null;   
+let mseGain                 = null;   
 let mseWired                = false;
-let mseActive               = false;  // true while MSE element is the live audio source
+let mseActive               = false;  
 let mseAbortCtrl            = null;
 let mseMediaSource          = null;
 let mseObjectUrl            = null;
@@ -5868,15 +6239,15 @@ let mseObjectUrl            = null;
 // ─── WebAudio buffer state ────────────────────────────────────────────────────
 
 let currentBuffer           = null;
-let trackStartTime          = 0;      // audioCtx.currentTime when the current source was started
-let pauseOffset             = 0;      // position (seconds) within the current buffer at last pause
+let trackStartTime          = 0;      
+let pauseOffset             = 0;      
 let currentTrackUrl         = null;
 
 let activeSources           = new Set();
 let pendingLoadId           = 0;
 
 let syntheticClockInterval  = null;
-const decodeCache           = new Map();  // url → { promise: Promise<AudioBuffer>, controller }
+const decodeCache           = new Map();  
 
 // ─── Misc module state ────────────────────────────────────────────────────────
 
@@ -5897,20 +6268,67 @@ const dataArray = typeof window !== 'undefined' ? new Uint8Array(FFT_SIZE / 2) :
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+const safeDecodeAudioData = (buffer) => {
+    return new Promise((resolve, reject) => {
+        // FIX: Lazily instantiate audioCtx if a gapless preload triggers 
+        // before the engine is formally unlocked by a user gesture.
+        if (!audioCtx) {
+            const Ctor = window.AudioContext || window['webkitAudioContext'];
+            if (Ctor) {
+                audioCtx = new Ctor();
+            } else {
+                return reject(new Error('WebAudio API is not supported in this browser.'));
+            }
+        }
+
+        let settled = false;
+        const done = (decoded) => { if (!settled) { settled = true; resolve(decoded); } };
+        const fail = (error) => { if (!settled) { settled = true; reject(error || new Error('Decode failed')); } };
+
+        try {
+            const promise = audioCtx.decodeAudioData(buffer, done, fail);
+            // Crucial for Firefox: hook into the returned Promise if it exists
+            if (promise && typeof promise.catch === 'function') {
+                promise.then(done).catch(fail);
+            }
+        } catch (e) {
+            fail(e);
+        }
+    });
+};
+
+// --- DIAGNOSTIC TELEMETRY ---
+let activeDecodes       = 0;
+let mseLoadedBytes      = 0;
+let mseFetchComplete    = false;
+
+export const getAudioDiagnostics = () => {
+    return {
+        mode: isWebAudioMode ? 'WebAudio API' : 'HTML5 Fallback',
+        ctxState: audioCtx ? audioCtx.state : 'Uninitialized',
+        mseActive: mseActive,
+        mseReadyState: mseMediaSource ? mseMediaSource.readyState : 'N/A',
+        mseWired: mseWired,
+        bufferDecoded: !!currentBuffer,
+        cacheSize: decodeCache.size,
+        activeSources: activeSources.size,
+        html5Status: html5ActivePlayer 
+            ? `readyState: ${html5ActivePlayer.readyState}, netState: ${html5ActivePlayer.networkState}` 
+            : 'Uninitialized',
+        // New Telemetry
+        mseLoadedBytes,
+        mseFetchComplete,
+        activeDecodes
+    };
+};
+
 const buildStreamUrl = (url, useMse = false) => {
     const kbps = typeof window !== 'undefined' ? (localStorage.getItem('psyzx_bitrate') || '320') : '320';
-    // Safely append to existing query parameters
     const separator = url.includes('?') ? '&' : '?';
-    // ONLY request fragmented MP4 if we are piping to MediaSource
     const formatStr = useMse ? '&format=mp4' : '';
-    
     return `${url}${separator}kbps=${kbps}${formatStr}`;
 };
 
-/**
- * Normalise a potentially relative URL to an absolute href for reliable equality checks.
- * Avoids the "/track/1" ⊂ "/track/10" substring-match false positives.
- */
 const normaliseUrl = (u) => {
     if (!u) return '';
     try {
@@ -5922,14 +6340,13 @@ const normaliseUrl = (u) => {
 
 const srcMatchesUrl = (elementSrc, trackUrl) => {
     if (!elementSrc || !trackUrl) return false;
-    // Compare against the standard (MP3) progressive URL
     return normaliseUrl(elementSrc) === normaliseUrl(buildStreamUrl(trackUrl, false));
 };
 
 // ─── FFT ──────────────────────────────────────────────────────────────────────
 
 export const getFftData = () => {
-    if (analyserNode && isWebAudioMode && audioCtx?.state === 'running') {
+    if (analyserNode && audioCtx?.state === 'running') {
         analyserNode.getByteFrequencyData(dataArray);
         return dataArray;
     }
@@ -5997,19 +6414,12 @@ const stopSilentKeepAlive = () => {
 
 // ─── MSE helpers ──────────────────────────────────────────────────────────────
 
-/**
- * Returns the first MSE-compatible MIME type that the browser supports for the
- * given server content-type, or null when MSE audio is unavailable.
- */
 const pickMseMime = (serverContentType) => {
     if (typeof MediaSource === 'undefined') return null;
     const raw = (serverContentType || '').split(';')[0].trim().toLowerCase();
-    
-    // We prioritize AAC/MP4 codecs since we are explicitly requesting fMP4 from the backend
     const candidates = raw
         ? [raw, 'audio/mp4; codecs="mp4a.40.2"', 'audio/mpeg']
         : ['audio/mp4; codecs="mp4a.40.2"', 'audio/mpeg'];
-        
     return candidates.find(m => MediaSource.isTypeSupported(m)) ?? null;
 };
 
@@ -6024,7 +6434,6 @@ const initMsePlayer = () => {
         'position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;';
     document.body.appendChild(msePlayer);
 
-    // Permanent event listeners; `mseActive` gates each handler
     msePlayer.addEventListener('timeupdate', () => {
         if (!mseActive || msePlayer._earlyEndFired) return;
         const dur = msePlayer.duration;
@@ -6068,25 +6477,22 @@ const wireMsePlayer = () => {
     mseWired = true;
 };
 
-/**
- * Stop MSE playback and release all associated resources.
- * Safe to call when MSE is not active.
- */
 const teardownMse = () => {
     mseActive = false;
     if (mseAbortCtrl) { mseAbortCtrl.abort(); mseAbortCtrl = null; }
-
     if (msePlayer) {
-        msePlayer._earlyEndFired = true;  // prevent spurious track-ended after teardown
-        try { msePlayer.pause(); } catch {}
+        msePlayer._earlyEndFired = true; 
+        try { 
+            msePlayer.pause(); 
+            msePlayer.removeAttribute('src'); 
+            msePlayer.load();
+        } catch {}
     }
-
     if (mseGain && audioCtx) {
         const now = audioCtx.currentTime;
         mseGain.gain.cancelScheduledValues(now);
         mseGain.gain.setTargetAtTime(0, now, 0.05);
     }
-
     if (mseMediaSource) {
         try { if (mseMediaSource.readyState === 'open') mseMediaSource.endOfStream(); } catch {}
         mseMediaSource = null;
@@ -6094,18 +6500,14 @@ const teardownMse = () => {
     if (mseObjectUrl) { URL.revokeObjectURL(mseObjectUrl); mseObjectUrl = null; }
 };
 
-/**
- * Stream `url` via MSE for fast-start playback.
- * Simultaneously accumulates the full response for background decoding into decodeCache.
- *
- * Returns true if MSE successfully took over playback (caller should return).
- * Returns false on any error or unsupported codec (caller should fall back to full-fetch path).
- */
 const streamViaMse = async (url, loadId) => {
     if (typeof MediaSource === 'undefined' || !msePlayer || !mseWired) return false;
 
     const abortCtrl = new AbortController();
     mseAbortCtrl    = abortCtrl;
+
+    mseLoadedBytes = 0;
+    mseFetchComplete = false;
 
     try {
         const streamUrl = buildStreamUrl(url, true);
@@ -6115,8 +6517,6 @@ const streamViaMse = async (url, loadId) => {
         const serverMime = response.headers.get('content-type') || '';
         const mimeType   = pickMseMime(serverMime);
         if (!mimeType) return false;
-
-        // ── Build MediaSource & SourceBuffer ──────────────────────────────────
 
         const ms     = new MediaSource();
         mseMediaSource = ms;
@@ -6138,8 +6538,6 @@ const streamViaMse = async (url, loadId) => {
         const sb = ms.addSourceBuffer(mimeType);
         sb.mode  = 'sequence';
 
-        // ── Activate MSE gain, silence HTML5 keep-alive pair ─────────────────
-
         mseActive = true;
         if (mseGain && audioCtx) {
             const now = audioCtx.currentTime;
@@ -6150,10 +6548,7 @@ const streamViaMse = async (url, loadId) => {
         if (gainA && audioCtx) gainA.gain.setTargetAtTime(0.0001, audioCtx.currentTime, 0.01);
         if (gainB && audioCtx) gainB.gain.setTargetAtTime(0.0001, audioCtx.currentTime, 0.01);
 
-        // ── Stream chunks ─────────────────────────────────────────────────────
-
         const appendChunk = async (chunk) => {
-            // Wait for any in-progress append to complete
             if (sb.updating) {
                 await new Promise(r => sb.addEventListener('updateend', r, { once: true }));
             }
@@ -6164,7 +6559,6 @@ const streamViaMse = async (url, loadId) => {
                 await new Promise(r => sb.addEventListener('updateend', r, { once: true }));
             } catch (e) {
                 if (e.name === 'QuotaExceededError') {
-                    // Evict buffered content well behind the playhead
                     const trimTo = Math.max(0, (msePlayer.currentTime || 0) - 10);
                     if (sb.buffered.length > 0 && trimTo > sb.buffered.start(0)) {
                         sb.remove(sb.buffered.start(0), trimTo);
@@ -6192,9 +6586,9 @@ const streamViaMse = async (url, loadId) => {
 
             allChunks.push(value);
             totalBytes += value.byteLength;
+            mseLoadedBytes = totalBytes;
             await appendChunk(value);
 
-            // Begin playback once MIN_MSE_BUFFER_SECS is available
             if (!playStarted && msePlayer.buffered.length > 0 &&
                 msePlayer.buffered.end(0) >= MIN_MSE_BUFFER_SECS) {
                 playStarted    = true;
@@ -6214,18 +6608,18 @@ const streamViaMse = async (url, loadId) => {
             }
         }
 
+        mseFetchComplete = true;
+
         if (totalBytes === 0) {
             teardownMse();
-            return false;
+            return false; 
         }
 
-        // Finalise MediaSource
         if (ms.readyState === 'open') {
             if (sb.updating) await new Promise(r => sb.addEventListener('updateend', r, { once: true }));
             ms.endOfStream();
         }
 
-        // Edge case: never got enough buffer to auto-start — start anyway
         if (!playStarted && loadId === pendingLoadId) {
             if (audioCtx?.state === 'suspended') await audioCtx.resume().catch(() => {});
             const p = msePlayer.play();
@@ -6239,26 +6633,26 @@ const streamViaMse = async (url, loadId) => {
 
         // ── Background decode for gapless cache ───────────────────────────────
         if (loadId === pendingLoadId && allChunks.length > 0 && audioCtx) {
+            activeDecodes++;
             const combined = new Uint8Array(totalBytes);
             let off = 0;
             for (const c of allChunks) { combined.set(c, off); off += c.byteLength; }
 
-            audioCtx.decodeAudioData(combined.buffer)
-                .then(buf => {
-                    if (loadId !== pendingLoadId) return;
-                    // Populate cache so the NEXT track's natural rollover is gapless
-                    if (decodeCache.size >= MAX_CACHE_SIZE) {
-                        const oldest = decodeCache.keys().next().value;
-                        const old    = decodeCache.get(oldest);
-                        if (old?.controller) old.controller.abort();
-                        decodeCache.delete(oldest);
-                    }
-                    decodeCache.set(url, { promise: Promise.resolve(buf), controller: null });
-                    // Also expose as currentBuffer for pause/seek reference
-                    currentBuffer = buf;
-                    playerDuration.set(buf.duration);
-                })
-                .catch(() => { /* non-fatal: MSE is still playing */ });
+            safeDecodeAudioData(combined.buffer.slice(0))
+            .then(buf => {
+                if (loadId !== pendingLoadId) return;
+                if (decodeCache.size >= MAX_CACHE_SIZE) {
+                    const oldest = decodeCache.keys().next().value;
+                    const old    = decodeCache.get(oldest);
+                    if (old?.controller) old.controller.abort();
+                    decodeCache.delete(oldest);
+                }
+                decodeCache.set(url, { promise: Promise.resolve(buf), controller: null, resolved: true });
+                currentBuffer = buf;
+                playerDuration.set(buf.duration);
+            })
+            .catch(() => { /* non-fatal: MSE is still playing, Firefox just didn't like the chunks */ })
+            .finally(() => { activeDecodes--; }); 
         }
 
         return true;
@@ -6273,12 +6667,11 @@ const streamViaMse = async (url, loadId) => {
 // ─── WebAudio graph construction ──────────────────────────────────────────────
 
 const buildWebAudioGraph = () => {
-    if (!audioCtx || mixerNode) return; // idempotent
+    if (!audioCtx || mixerNode) return; 
 
     mixerNode = audioCtx.createGain();
     mixerNode.gain.value = 1.0;
 
-    // Tiny heartbeat oscillator keeps graph alive in iOS background
     const hGain = audioCtx.createGain();
     hGain.gain.value = 0.0000001;
     heartbeatOsc = audioCtx.createOscillator();
@@ -6301,14 +6694,12 @@ const buildWebAudioGraph = () => {
         return f;
     });
 
-    // Two-tier gain: boost node → master volume → destination
     gainNode = audioCtx.createGain();
     gainNode.gain.value = pendingBoost;
 
     masterVolumeNode = audioCtx.createGain();
     masterVolumeNode.gain.value = pendingVolume;
 
-    // Wire: mixer → analyser → EQ chain → boost → volume → out
     mixerNode.connect(analyserNode);
     analyserNode.connect(eqFilters[0]);
     for (let i = 0; i < eqFilters.length - 1; i++) eqFilters[i].connect(eqFilters[i + 1]);
@@ -6317,11 +6708,9 @@ const buildWebAudioGraph = () => {
     masterVolumeNode.connect(audioCtx.destination);
 };
 
-/** Wire all audio elements (HTML5 keep-alive pair + MSE player) once ctx + mixer exist. */
 const tryWireAudioNodes = () => {
     if (!audioCtx || !playerA || !playerB || gainA || !mixerNode) return;
     
-    // Create gains FIRST so the engine state is marked as initialized
     gainA = audioCtx.createGain(); gainA.gain.value = 0;
     gainB = audioCtx.createGain(); gainB.gain.value = 0;
     
@@ -6351,19 +6740,28 @@ const fetchAndDecode = async (url) => {
     }
 
     const controller = new AbortController();
+    activeDecodes++;
     const p = (async () => {
         try {
             const resp = await fetch(buildStreamUrl(url, false), { signal: controller.signal });
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
             const ab = await resp.arrayBuffer();
-            return await audioCtx.decodeAudioData(ab);
+            
+            const decoded = await safeDecodeAudioData(ab.slice(0));
+            
+            // FIX: Mark the cache entry as fully resolved
+            const entry = decodeCache.get(url);
+            if (entry) entry.resolved = true;
+            
+            return decoded;
         } catch (e) {
             if (e.name !== 'AbortError') console.error('Audio decode error:', e);
             return null;
         }
-    })();
+    })().finally(() => { activeDecodes--; });
 
-    decodeCache.set(url, { promise: p, controller });
+    // FIX: Add resolved: false initially
+    decodeCache.set(url, { promise: p, controller, resolved: false });
     return p;
 };
 
@@ -6384,19 +6782,15 @@ const startSyntheticClock = () => {
         let pos, dur;
 
         if (mseActive && msePlayer) {
-            // MSE phase: drive clock from element's native time
             pos = msePlayer.currentTime;
             dur = msePlayer.duration > 0 ? msePlayer.duration : get(playerDuration);
             if (msePlayer.duration > 0) playerDuration.set(msePlayer.duration);
         } else if (currentBuffer && audioCtx) {
-            // Buffer phase: derive from AudioContext timestamps
             const elapsed = audioCtx.currentTime - trackStartTime;
             dur = currentBuffer.duration;
             pos = Math.max(0, Math.min(pauseOffset + elapsed, dur));
         } else return;
 
-        // --- BULLETPROOF WATCHDOG ---
-        // If playhead hasn't moved in 2.5s while supposedly playing and not buffering
         if (pos === lastPos && !get(isBuffering)) {
             stuckTicks++;
             if (stuckTicks > 25) {
@@ -6418,7 +6812,6 @@ const startSyntheticClock = () => {
             syncPulse = 0;
             if (dur > 0) updateMediaPositionState(pos, dur);
 
-            // Keep HTML5 keep-alive element in sync (buffer phase only)
             if (!mseActive && html5ActivePlayer) {
                 if (html5ActivePlayer.paused) {
                     const p = html5ActivePlayer.play(); if (p) p.catch(() => {});
@@ -6438,7 +6831,6 @@ const playWebAudio = () => {
 
     if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
 
-    // Maintain HTML5 keep-alive on iOS
     if (html5ActivePlayer?.paused) {
         const p = html5ActivePlayer.play();
         if (p) p.then(() => stopSilentKeepAlive()).catch(() => startSilentKeepAlive());
@@ -6448,7 +6840,6 @@ const playWebAudio = () => {
     src.buffer = currentBuffer;
     src.connect(mixerNode);
 
-    // FIX: Hardware background advancement support
     src.onended = () => {
         activeSources.delete(src); 
         src.buffer = null; 
@@ -6466,10 +6857,6 @@ const playWebAudio = () => {
     updateMediaPositionState(pauseOffset, currentBuffer.duration);
 };
 
-/**
- * Sample-accurate gapless scheduling: schedule the next buffer source to start
- * at the exact AudioContext time when the current one ends.
- */
 const scheduleGaplessNext = (nextBuf) => {
     if (!audioCtx || !nextBuf) {
         currentBuffer = nextBuf;
@@ -6479,7 +6866,6 @@ const scheduleGaplessNext = (nextBuf) => {
         return;
     }
 
-    // If currentBuffer is null (e.g. transitioning from MSE), start immediately
     const currentEndAt = currentBuffer
         ? trackStartTime + (currentBuffer.duration - pauseOffset)
         : audioCtx.currentTime;
@@ -6494,7 +6880,6 @@ const scheduleGaplessNext = (nextBuf) => {
     src.connect(mixerNode);
 
     const capturedDuration = nextBuf.duration;
-    // FIX: Hardware background advancement support
     src.onended = () => {
         activeSources.delete(src); 
         src.buffer = null;
@@ -6506,11 +6891,7 @@ const scheduleGaplessNext = (nextBuf) => {
     src.start(startAt, 0);
     activeSources.add(src);
 
-    // Recalibrate: trackStartTime = absolute time when new track began
-    // pauseOffset = 0 → (ctx.currentTime - startAt) gives position in new track
     trackStartTime = startAt;
-
-    // isPlaying stays true through the crossover — no state flicker
     updateMediaPositionState(0, capturedDuration);
 };
 
@@ -6522,8 +6903,6 @@ const pauseWebAudio = () => {
     });
     activeSources.clear();
 
-    // Guard: only accumulate elapsed time if actually playing; clamp to ≥ 0
-    // (can be negative if paused during a gapless gap where startAt > currentTime)
     if (wasPlaying && audioCtx) {
         pauseOffset += Math.max(0, audioCtx.currentTime - trackStartTime);
     }
@@ -6580,20 +6959,17 @@ const seekWebAudio = (time) => {
     }
 };
 
-// ─── Bulletproof Hardware Recovery Protocol ──────────────────────────────────
 const attemptHardwareRecovery = (stuckPos) => {
     if (audioCtx) {
-        // Cycle the context to kick the iOS mediaserverd (Hardware reset)
         audioCtx.suspend().then(() => audioCtx.resume()).catch(() => {});
     }
     
     if (isWebAudioMode) {
         if (mseActive && msePlayer) {
-            msePlayer.load(); // Force reload media element
+            msePlayer.load(); 
             msePlayer.currentTime = stuckPos;
             const p = msePlayer.play(); if (p) p.catch(()=>{});
         } else if (currentBuffer) {
-            // Re-build the buffer node to force hardware output
             pauseOffset = stuckPos;
             stopWebAudio(); 
             playWebAudio();
@@ -6620,25 +6996,27 @@ export const unlockAudioContext = () => {
 
     let interruptionPolling = null;
 
-    // Resume AudioContext whenever it is unexpectedly suspended or interrupted
     audioCtx.onstatechange = () => {
         const s = audioCtx.state;
         if ((s === 'interrupted' || s === 'suspended') && get(isPlaying)) {
-            if (!interruptionPolling) {
-                // Aggressive polling: Recovers automatically when a system call/alarm ends
-                interruptionPolling = setInterval(() => {
-                    if (audioCtx.state === 'running' || !get(isPlaying)) {
-                        clearInterval(interruptionPolling);
-                        interruptionPolling = null;
-                    } else {
-                        audioCtx.resume().then(() => {
-                            if (isWebAudioMode && currentBuffer && activeSources.size === 0 && !mseActive) playWebAudio();
-                            else if (mseActive && msePlayer?.paused) { const p = msePlayer.play(); if(p) p.catch(()=>{}); }
-                            else if (!isWebAudioMode && html5ActivePlayer?.paused) { const p = html5ActivePlayer.play(); if(p) p.catch(()=>{}); }
-                        }).catch(() => {});
-                    }
-                }, 1000);
-            }
+            // FIX 1: Instant resume instead of waiting 1000ms. Restores the 10ms gap.
+            audioCtx.resume().then(() => {
+                if (isWebAudioMode && currentBuffer && activeSources.size === 0 && !mseActive) playWebAudio();
+                else if (mseActive && msePlayer?.paused) { const p = msePlayer.play(); if(p) p.catch(()=>{}); }
+                else if (!isWebAudioMode && html5ActivePlayer?.paused) { const p = html5ActivePlayer.play(); if(p) p.catch(()=>{}); }
+            }).catch(() => {
+                // Only fall back to polling if the instant resume fails
+                if (!interruptionPolling) {
+                    interruptionPolling = setInterval(() => {
+                        if (audioCtx.state === 'running' || !get(isPlaying)) {
+                            clearInterval(interruptionPolling);
+                            interruptionPolling = null;
+                        } else {
+                            audioCtx.resume().catch(() => {});
+                        }
+                    }, 100); // Sped up fallback polling to 100ms
+                }
+            });
         } else if (s === 'running') {
             if (interruptionPolling) { clearInterval(interruptionPolling); interruptionPolling = null; }
             if (get(isPlaying)) {
@@ -6655,7 +7033,13 @@ export const unlockAudioContext = () => {
     buildWebAudioGraph();
     tryWireAudioNodes();
 
-    // Prime HTML5 elements to unlock audio on iOS (requires user gesture context)
+    if (msePlayer) {
+        msePlayer.src = SILENCE_B64;
+        const p = msePlayer.play(); if (p) p.catch(() => {});
+        msePlayer.pause();
+        msePlayer.removeAttribute('src');
+    }
+
     if (playerA && playerB) {
         for (const el of [playerA, playerB]) {
             el.src = SILENCE_B64;
@@ -6672,15 +7056,12 @@ export const unlockAudioContext = () => {
         if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
     }
 
-    // ── iOS PWA background / foreground lifecycle ─────────────────────────────
     if (typeof document !== 'undefined') {
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState !== 'visible' || !audioCtx) return;
             
-            // Hard reset recovery: iOS drops audio routes when backgrounded for too long
-            if (get(isPlaying)) {
-                audioCtx.suspend().then(() => audioCtx.resume()).catch(() => {});
-            }
+            // FIX 2: Removed the forced `audioCtx.suspend()` here which was causing 
+            // a heavy stutter whenever the user reopened the app from the background.
 
             if (audioCtx.state !== 'running') {
                 audioCtx.resume().then(() => {
@@ -6700,11 +7081,9 @@ export const unlockAudioContext = () => {
         }, { passive: true });
 
         window.addEventListener('pageshow', (e) => {
-            // `e.persisted` is true when coming from bfcache (iOS common path)
             if (audioCtx && audioCtx.state !== 'running') audioCtx.resume().catch(() => {});
         }, { passive: true });
 
-        // Cordova / Capacitor "resume" event (iOS PWA wrappers)
         window.addEventListener('resume', () => {
             if (audioCtx && audioCtx.state !== 'running') audioCtx.resume().catch(() => {});
         }, { passive: true });
@@ -6721,11 +7100,10 @@ export const registerAudioElements = (elA, elB) => {
 
     tryWireAudioNodes();
 
-    if (isWebAudioMode) return; // HTML5 mode events only
+    if (isWebAudioMode) return; 
 
     const setup = (el) => {
         el.addEventListener('error', () => {
-            // Ignore intentional errors caused by the data: URI unlocker
             if (el === html5ActivePlayer && !el.src.startsWith('data:')) {
                 isBuffering.set(false);
                 stopBufferSound();
@@ -6776,14 +7154,8 @@ export const registerAudioElements = (elA, elB) => {
     setup(playerB);
 };
 
-/**
- * Detect hardware/context deadlock that sometimes occurs on iOS.
- * Only fires 3.5s after the `play` event, so legitimate track-start
- * with currentTime near 0 is not a false positive.
- */
 const checkDeadlock = (el) => {
     const ctxStuck   = audioCtx && audioCtx.state !== 'running';
-    // readyState >= 3 (HAVE_FUTURE_DATA) means the browser has data but playhead isn't moving
     const headStuck  = !el.paused && el.readyState >= 3 && el.currentTime < 0.1;
     if (ctxStuck || headStuck) {
         clearTimeout(stallTimeout);
@@ -6791,12 +7163,9 @@ const checkDeadlock = (el) => {
     }
 };
 
-// ─── Preloading ───────────────────────────────────────────────────────────────
-
 export const preloadNextUrl = async (url) => {
     if (isWebAudioMode) {
         if (url === currentTrackUrl) return;
-        // Fire-and-forget; populates decodeCache so natural rollovers are gapless
         fetchAndDecode(url);
     } else {
         const target    = html5StandbyPlayer;
@@ -6821,13 +7190,11 @@ export const preloadNextUrl = async (url) => {
                     target.removeEventListener('canplaythrough', onReady);
                 };
                 target.addEventListener('canplaythrough', onReady, { once: true });
-                setTimeout(onReady, 1500); // failsafe
+                setTimeout(onReady, 1500); 
             }).catch(() => {});
         }
     }
 };
-
-// ─── Main load / play ─────────────────────────────────────────────────────────
 
 export const loadAndPlayUrl = async (url) => {
     const streamUrl     = buildStreamUrl(url, false);
@@ -6836,7 +7203,6 @@ export const loadAndPlayUrl = async (url) => {
     if (!isEngineInitialized) unlockAudioContext();
     if (audioCtx?.state === 'suspended') await audioCtx.resume().catch(() => {});
 
-    // ── HTML5 element swap (keep-alive pair) ──────────────────────────────────
     if (html5StandbyPlayer && srcMatchesUrl(html5StandbyPlayer.src, url)) {
         [html5ActivePlayer, html5StandbyPlayer] = [html5StandbyPlayer, html5ActivePlayer];
     } else if (html5ActivePlayer && !srcMatchesUrl(html5ActivePlayer.src, url)) {
@@ -6851,7 +7217,6 @@ export const loadAndPlayUrl = async (url) => {
     if (html5StandbyPlayer) html5StandbyPlayer.pause();
     try { html5ActivePlayer.currentTime = 0; } catch {}
 
-    // Start / crossfade HTML5 element (keep-alive in WebAudio mode; primary in HTML5 mode)
     const startHtml5 = () => {
         const p = html5ActivePlayer?.play();
         if (p) {
@@ -6877,9 +7242,6 @@ export const loadAndPlayUrl = async (url) => {
 
     if (!isWebAudioMode) return;
 
-    // ── WebAudio path ─────────────────────────────────────────────────────────
-
-    // Determine whether this is a natural end-of-track rollover
     const currentPos      = get(playerCurrentTime);
     const mseRollover     = mseActive && msePlayer && msePlayer.duration > 0 &&
                             (msePlayer.duration - msePlayer.currentTime <= ROLLOVER_THRESHOLD);
@@ -6888,7 +7250,6 @@ export const loadAndPlayUrl = async (url) => {
     const isNaturalRollover = mseRollover || bufferRollover;
 
     if (!isNaturalRollover) {
-        // Hard track change: stop everything and reset
         teardownMse();
         if (currentLoadId === pendingLoadId) stopWebAudio();
         currentBuffer = null;
@@ -6896,22 +7257,31 @@ export const loadAndPlayUrl = async (url) => {
         isBuffering.set(true);
         startBufferSound();
 
-        // ── Try MSE streaming for fast start ──────────────────────────────────
-        // Skip if the buffer is already cached (decode will be near-instant)
-        if (!decodeCache.has(url)) {
+        const cacheEntry = decodeCache.get(url);
+        
+        // FIX: If it's cached but NOT fully resolved yet, abort it and prefer MSE fast-start
+        if (!cacheEntry || !cacheEntry.resolved) {
+            if (cacheEntry && cacheEntry.controller) {
+                cacheEntry.controller.abort();
+                decodeCache.delete(url);
+            }
             const mseDone = await streamViaMse(url, currentLoadId);
             if (currentLoadId !== pendingLoadId) return;
-            if (mseDone) return; // MSE took over — done
+            if (mseDone) return; 
         }
     } else {
-        // Natural rollover: disarm old sources; do NOT reset pauseOffset
-        activeSources.forEach(s => { try { s.onended = null; } catch {} });
+        activeSources.forEach(s => { 
+            try { 
+                s.onended = () => { 
+                    try { s.disconnect(); s.buffer = null; } catch {} 
+                }; 
+            } catch {} 
+        });
         activeSources.clear();
         if (syntheticClockInterval) clearInterval(syntheticClockInterval);
         isBuffering.set(true);
     }
 
-    // ── Full-decode path (natural rollovers + MSE fallback) ───────────────────
     if (!isNaturalRollover) { isBuffering.set(true); startBufferSound(); }
 
     const buf = await fetchAndDecode(url);
@@ -6932,13 +7302,11 @@ export const loadAndPlayUrl = async (url) => {
     if (isNaturalRollover) {
         const wasPlayingViaMse = mseActive;
         if (mseActive) {
-            // Transition MSE→buffer: capture MSE position then silence it
-            // currentBuffer was null (mse) or stale — let scheduleGaplessNext handle timing
             teardownMse();
-            currentBuffer = null; // scheduleGaplessNext falls back to "start now" when null
+            currentBuffer = null; 
         }
         if (wasPlayingViaMse || get(isPlaying)) {
-            isPlaying.set(true); // keep true through the handoff
+            isPlaying.set(true); 
             scheduleGaplessNext(buf);
             startSyntheticClock();
         }
@@ -7003,7 +7371,6 @@ export const togglePlayGlobal = async () => {
 
 // ─── Volume & EQ ──────────────────────────────────────────────────────────────
 
-/** setVolumeBoost: adjusts the headroom/boost node only (does not affect master volume) */
 export const setVolumeBoost = (val) => {
     pendingBoost = parseFloat(val);
     if (gainNode && audioCtx) gainNode.gain.setTargetAtTime(pendingBoost, audioCtx.currentTime, 0.01);
@@ -7017,7 +7384,6 @@ export const setEqBand = async (index, val) => {
     }
 };
 
-/** setGlobalVolume: controls masterVolumeNode; boost (gainNode) is unaffected */
 export const setGlobalVolume = (val) => {
     pendingVolume = val / 100;
     if (masterVolumeNode && audioCtx)
@@ -7075,7 +7441,6 @@ export const updateMediaPositionState = (currentTime, duration) => {
 
 // ─── Audible cues ─────────────────────────────────────────────────────────────
 
-/** Route cue tones through masterVolumeNode so they respect the global volume setting */
 const makeCueTone = () => {
     if (!audioCtx) return null;
     const osc  = audioCtx.createOscillator();
@@ -7144,8 +7509,6 @@ export const startBufferSound = () => {
 export const stopBufferSound = () => {
     if (bufferInterval) { clearInterval(bufferInterval); bufferInterval = null; }
 
-    // Capture local refs before the async fade so a new startBufferSound() call
-    // (for a subsequent decode) doesn't get torn down by this delayed cleanup.
     const osc  = bufferOsc;
     const gain = bufferGain;
     bufferOsc  = null;
@@ -7166,7 +7529,7 @@ export const stopBufferSound = () => {
 // ─── Scrub effect ─────────────────────────────────────────────────────────────
 
 export const startScrubEffect = async () => {
-    if (!audioCtx || !isWebAudioMode) return;
+    if (!audioCtx) return;
     if (audioCtx.state === 'suspended') await audioCtx.resume().catch(() => {});
     const soundType = typeof window !== 'undefined'
         ? (localStorage.getItem('psyzx_scrub_sound') || 'speed') : 'speed';
@@ -7183,19 +7546,26 @@ export const startScrubEffect = async () => {
 };
 
 export const updateScrubEffect = (speed, dir) => {
-    if (!isWebAudioMode || !audioCtx) return;
+    if (!audioCtx) return; // FIX: Removed !isWebAudioMode
     const soundType = typeof window !== 'undefined'
         ? (localStorage.getItem('psyzx_scrub_sound') || 'speed') : 'speed';
     if (soundType === 'none') return;
 
     if (soundType === 'vinyl') {
+        const rate = dir > 0 ? Math.min(2.5, 1 + speed * 4) : Math.max(0.2, 1 - speed * 3);
+        
+        // Scrub WebAudio Buffers
         activeSources.forEach(src => {
             if (src.playbackRate) {
-                const rate = dir > 0 ? Math.min(2.5, 1 + speed * 4) : Math.max(0.2, 1 - speed * 3);
                 src.playbackRate.cancelScheduledValues(audioCtx.currentTime);
                 src.playbackRate.setTargetAtTime(rate, audioCtx.currentTime, 0.01);
             }
         });
+        
+        // FIX: Scrub HTML5 Fallback
+        if (!isWebAudioMode && html5ActivePlayer) {
+            html5ActivePlayer.playbackRate = rate;
+        }
         return;
     }
 
@@ -7224,6 +7594,11 @@ export const stopScrubEffect = () => {
             src.playbackRate.value = 1.0;
         }
     });
+    
+    if (!isWebAudioMode && html5ActivePlayer) {
+        html5ActivePlayer.playbackRate = 1.0;
+    }
+    
     if (!scrubGain) return;
 
     scrubGain.gain.cancelScheduledValues(audioCtx.currentTime);
@@ -7256,7 +7631,6 @@ export const playNextGlobal = async (api, forceManualCue = false) => {
 
     if (!playlist.length) return;
 
-    // Use store for current position — correct while playing (pauseOffset is stale during play)
     const currentTime   = get(playerCurrentTime);
     const duration      = get(playerDuration);
     const isAutoAdvance = duration > 0 && (duration - currentTime <= 0.5);
@@ -7296,7 +7670,6 @@ export const playPrevGlobal = () => {
 
     if (!playlist.length) return;
 
-    // Use store value (reflects live position while playing, not just at pause)
     const currentPos = get(playerCurrentTime);
 
     if (currentPos > 3) {
@@ -7388,18 +7761,16 @@ export const playPrevGlobal = () => {
         getFftData,
         loadAndPlayUrl,
         preloadNextUrl,
-        getBufferedPct
+        getBufferedPct,
+        getAudioDiagnostics
     } from './audio.js';
     import { api, fetchLyricsOnFrontend } from './api.js';
     import { quintOut, expoIn, expoOut, linear } from 'svelte/easing';
     import { spring } from 'svelte/motion';
     import { get } from 'svelte/store';
 
-
     export let artistId;
-
     $: artist = album ? $artistsMap.get(album.artistId) : null;
-
 
     export let isOpen = false;
     const dispatch = createEventDispatcher();
@@ -7433,547 +7804,468 @@ export const playPrevGlobal = () => {
     let displayBufferPct = 0;
     const lerp = (start, end, amt) => (1 - amt) * start + amt * end;
 
-
-
     let isVisEnabled = typeof localStorage !== 'undefined' ? localStorage.getItem('psyzx_vis_enabled') !== 'false' : true;
     
     const handleGlobalVisUpdate = () => {
         isVisEnabled = localStorage.getItem('psyzx_vis_enabled') !== 'false';
     };
 
-    const playTrackPriorityFlow = async (track, nextTrack) => {
-        // 1. HIGHEST PRIORITY: Audio Stream
-        const kbps = localStorage.getItem('psyzx_bitrate') || '320';
-        await loadAndPlayUrl(`/api/Tracks/stream/${track.id}?kbps=${kbps}`);
-
-        // 2. SECOND PRIORITY: Lyrics (Lightweight text, fast fetch)
-        // Don't await this so it doesn't block the cover, but trigger it immediately after audio starts
-        fetchLyricsOnFrontend(track).catch(console.error);
-
-        // 3. THIRD PRIORITY: Album Cover (Heavy payload)
-        const img = new Image();
-        img.src = `/api/Tracks/image?path=${encodeURIComponent(track.album.coverPath)}&quality=${$isLowQualityImages ? 'low' : 'high'}`;
-        await new Promise(resolve => {
-            img.onload = resolve;
-            img.onerror = resolve; 
-        });
-        currentCover = img.src;
-
-        // 4. FOURTH PRIORITY: Next Track Buffer
-        if (nextTrack) {
-            preloadNextUrl(`/api/Tracks/stream/${nextTrack.id}?kbps=${kbps}`);
-        }
-
-        // 5. LOWEST PRIORITY: Pre-fetch Queue Metadata to Service Worker
-        if ('serviceWorker' in navigator) {
-            const upcomingIds = get(currentPlaylist).slice(get(currentIndex) + 2, get(currentIndex) + 6).map(t => t.id);
-            navigator.serviceWorker.controller.postMessage({
-                type: 'PRELOAD_METADATA',
-                trackIds: upcomingIds
-            });
-        }
-    };
-
-// --- THREE.JS VISUALIZER ACTION (OPTIMIZED) ---
+ // --- THREE.JS VISUALIZER ACTION (OPTIMIZED) ---
     function threeVisualizer(node) {
-        let isDestroyed = false;
-        let cleanup = () => {}; 
+    let isDestroyed = false;
+    let cleanup = () => {}; 
 
-        // 1. DYNAMIC IMPORT: Only load Three.js when this element mounts
-        import('three').then((THREE) => {
-            if (isDestroyed) return;
+    import('three').then((THREE) => {
+        if (isDestroyed) return;
 
-            let scene, camera, renderer, visualizerMesh;
-            let visualizerRafId;
-            
-            // 2. TYPED ARRAY: Pre-allocate memory instead of standard arrays
-            let originalPositions = new Float32Array(0); 
-            let smoothedFftData = null; 
-            let activeSpeedMultiplier = 0; 
-            let currentTunnelSpeed = 0.15;  
-            let currentDnaTwist = 0.15;    
-            let isPointsCloud = false; 
+        let scene, camera, renderer, visualizerMesh;
+        let visualizerRafId;
+        
+        let originalPositions = new Float32Array(0); 
+        let smoothedFftData = null; 
+        let activeSpeedMultiplier = 0; 
+        let currentTunnelSpeed = 0.15;  
+        let currentDnaTwist = 0.15;
+        
+        // --- CUSTOMIZABLE PSP SETTINGS ---
+        let rippleIntensity = 0.1; 
+        let maxTiltDegrees = 10.0; 
+        
+        let transitionFactor = 0; 
+        let pspWavePhase = 0; 
 
-            // 3. CACHE LOCAL STORAGE: Prevent reading DOM/Storage at 60fps
-            let visSpeed = 1.0;
-            let visIntensity = 1.0;
+        let visSpeed = 1.0;
+        let visIntensity = 1.0;
 
-            const lerp = (start, end, factor) => (1 - factor) * start + factor * end;
+        const lerp = (start, end, factor) => (1 - factor) * start + factor * end;
 
-            let visShape = localStorage.getItem('psyzx_vis_shape') || 'Icosahedron';
-            let visMovement = localStorage.getItem('psyzx_vis_movement') || 'Hypnotic';
-            
-            let rawY = parseInt(localStorage.getItem('psyzx_vis_ypos'));
-            let visYPos = isNaN(rawY) ? 11 : rawY;
-            
-            let rawDim = parseFloat(localStorage.getItem('psyzx_vis_dimension'));
-            let visDimension = isNaN(rawDim) ? 1.0 : rawDim;
-            
-            let rawDet = parseInt(localStorage.getItem('psyzx_vis_detail'));
-            let visDetail = isNaN(rawDet) ? 16 : rawDet;
-            
-            let visSides = localStorage.getItem('psyzx_vis_sides') || 'Default';
+        let visShape = localStorage.getItem('psyzx_vis_shape') || 'PSPWaves';
+        let visMovement = localStorage.getItem('psyzx_vis_movement') || 'Hypnotic';
+        
+        let rawY = parseInt(localStorage.getItem('psyzx_vis_ypos'));
+        let visYPos = isNaN(rawY) ? 11 : rawY;
+        
+        let rawDim = parseFloat(localStorage.getItem('psyzx_vis_dimension'));
+        let visDimension = isNaN(rawDim) ? 1.0 : rawDim;
+        
+        let rawDet = parseInt(localStorage.getItem('psyzx_vis_detail'));
+        let visDetail = isNaN(rawDet) ? 16 : rawDet;
+        
+        let visSides = localStorage.getItem('psyzx_vis_sides') || 'Default';
 
-            // Init cached performance variables
-            const rawSpd = parseFloat(localStorage.getItem('psyzx_vis_speed'));
-            visSpeed = isNaN(rawSpd) ? 1.0 : rawSpd;
-            const rawInt = parseFloat(localStorage.getItem('psyzx_vis_intensity'));
-            visIntensity = isNaN(rawInt) ? 1.0 : rawInt;
+        const rawSpd = parseFloat(localStorage.getItem('psyzx_vis_speed'));
+        visSpeed = isNaN(rawSpd) ? 1.0 : rawSpd;
+        const rawInt = parseFloat(localStorage.getItem('psyzx_vis_intensity'));
+        visIntensity = isNaN(rawInt) ? 1.0 : rawInt;
 
-            const getRadialSegments = () => {
-                if (visSides !== 'Default') return parseInt(visSides);
-                if (visShape === 'Tunnel') return 16; 
-                return 32; 
-            };
-            
-            scene = new THREE.Scene();
-            scene.fog = new THREE.Fog(0x000000, 10, 120); 
-            
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const getRadialSegments = () => {
+            if (visSides !== 'Default') return parseInt(visSides);
+            if (visShape === 'Tunnel') return 16; 
+            return 32; 
+        };
+        
+        scene = new THREE.Scene();
+        scene.fog = new THREE.Fog(0x000000, 10, 120); 
 
-            renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
-            renderer.setSize(node.clientWidth || window.innerWidth, node.clientHeight || window.innerHeight);
-            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-            node.appendChild(renderer.domElement);
+        // --- NEW: LIGHTING FOR REAL GLASS HIGHLIGHTS ---
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+        scene.add(ambientLight);
 
-            const buildVisualizerMesh = () => {
-                if (visualizerMesh) {
-                    scene.remove(visualizerMesh);
-                    visualizerMesh.geometry.dispose();
-                    visualizerMesh.material.dispose();
-                    visualizerMesh = null;
-                }
+        const dirLight = new THREE.DirectionalLight(0xaaccff, 2.5); // Cool blue light
+        dirLight.position.set(0, 30, 50);
+        scene.add(dirLight);
+        // -----------------------------------------------
+        
+        camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
 
-                let geometry;
-                isPointsCloud = false; 
+        renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+        renderer.setSize(node.clientWidth || window.innerWidth, node.clientHeight || window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        node.appendChild(renderer.domElement);
 
-                switch (visShape) {
-                    case 'Dodecahedron':
-                        geometry = new THREE.DodecahedronGeometry(12, Math.min(visDetail, 5)); 
-                        break;
-                    case 'Tunnel':
-                        geometry = new THREE.CylinderGeometry(15, 15, 300, getRadialSegments(), visDetail * 3, true); 
-                        geometry.rotateX(Math.PI / 2); 
-                        break;
-                    case 'TorusKnot':
-                        geometry = new THREE.TorusKnotGeometry(10, 3, visDetail * 2, visDetail, 2, 3);
-                        break;
-                    case 'DNA':
-                        geometry = new THREE.CylinderGeometry(2.0, 2.0, 220, 3, visDetail * 5, true);
-                        geometry.rotateZ(Math.PI / 2); 
-                        break;
-                    case 'Shell':
-                        geometry = new THREE.CylinderGeometry(0.1, 15, 40, getRadialSegments(), visDetail * 2, true);
-                        const shellPos = geometry.attributes.position;
-                        const shellVec = new THREE.Vector3();
-                        for (let i = 0; i < shellPos.count; i++) {
-                            shellVec.fromBufferAttribute(shellPos, i);
-                            const twist = shellVec.y * 0.2;
-                            const x = shellVec.x * Math.cos(twist) - shellVec.z * Math.sin(twist);
-                            const z = shellVec.x * Math.sin(twist) + shellVec.z * Math.cos(twist);
-                            const asymmetry = (shellVec.y + 20) * 0.1;
-                            shellPos.setXYZ(i, x + asymmetry, shellVec.y, z);
-                        }
-                        geometry.computeVertexNormals();
-                        break;
-                    case 'Synthwave':
-                        geometry = new THREE.PlaneGeometry(200, 200, Math.min(visDetail*2, 64), Math.min(visDetail*2, 64));
-                        geometry.rotateX(-Math.PI / 2);
-                        break;
-                    case 'Galaxy':
-                        geometry = new THREE.BufferGeometry();
-                        const particleCount = visDetail * 200;
-                        const points = new Float32Array(particleCount * 3);
-                        for (let i = 0; i < particleCount; i++) {
-                            const angle = i * 0.1;
-                            const radius = (i / particleCount) * 40;
-                            points[i*3] = Math.cos(angle) * radius;
-                            points[i*3+1] = (Math.random() - 0.5) * 4; 
-                            points[i*3+2] = Math.sin(angle) * radius;
-                        }
-                        geometry.setAttribute('position', new THREE.BufferAttribute(points, 3));
-                        isPointsCloud = true;
-                        break;
-                    case 'Wormhole':
-                        geometry = new THREE.CylinderGeometry(40, 1, 150, getRadialSegments(), visDetail * 2, true);
-                        geometry.rotateX(Math.PI / 2);
-                        break;
-                    case 'Fractal':
-                        geometry = new THREE.CylinderGeometry(0.1, 10, 40, getRadialSegments(), visDetail * 2, false);
-                        const fracPos = geometry.attributes.position;
-                        const fracVec = new THREE.Vector3();
-                        for (let i = 0; i < fracPos.count; i++) {
-                            fracVec.fromBufferAttribute(fracPos, i);
-                            if (Math.sin(fracVec.y * 10) > 0.6) {
-                                fracVec.x *= 1.8;
-                                fracVec.z *= 1.8;
-                            }
-                            fracPos.setXYZ(i, fracVec.x, fracVec.y, fracVec.z);
-                        }
-                        geometry.computeVertexNormals();
-                        break;
-                    case 'Icosahedron':
-                    default:
-                        geometry = new THREE.IcosahedronGeometry(12, Math.min(visDetail, 32)); 
-                        visShape = 'Icosahedron'; 
-                        break;
-                }
+        const buildVisualizerMesh = () => {
+            if (visualizerMesh) {
+                scene.remove(visualizerMesh);
+                visualizerMesh.geometry.dispose();
+                visualizerMesh.material.dispose();
+                visualizerMesh = null;
+            }
 
-                if (isPointsCloud) {
-                    const material = new THREE.PointsMaterial({
-                        color: 0xffffff,
-                        size: 0.2,
-                        transparent: true,
-                        opacity: 0.8
-                    });
-                    visualizerMesh = new THREE.Points(geometry, material);
-                } else {
-                    const material = new THREE.MeshBasicMaterial({
-                        color: 0xffffff,
-                        wireframe: true,
-                        transparent: true,
-                        opacity: visShape === 'Tunnel' || visShape === 'Wormhole' ? 0.25 : 0.15,
-                        side: THREE.DoubleSide
-                    });
-                    visualizerMesh = new THREE.Mesh(geometry, material);
-                }
-                
-                scene.add(visualizerMesh);
+            let geometry;
 
-                camera.rotation.set(0, 0, 0); 
-
-                if (visShape === 'Tunnel') {
-                    camera.position.set(0, 0, 50); 
-                    visualizerMesh.position.set(0, 0, 0); 
-                } else if (visShape === 'Synthwave') {
-                    camera.position.set(0, 15, 80); 
-                    camera.lookAt(0, 0, 0);
-                    visualizerMesh.position.set(0, -10, 0); 
-                } else if (visShape === 'Wormhole') {
-                    camera.position.set(0, 0, 60); 
-                    visualizerMesh.position.set(0, 0, 0);
-                } else {
-                    camera.position.set(0, 0, 35);
-                    camera.fov = 75; 
-                    camera.updateProjectionMatrix();
-                    visualizerMesh.position.y = visYPos;
-                }
-
-                visualizerMesh.scale.set(visDimension, visDimension, visDimension);
-
-                const positionAttribute = geometry.attributes.position;
-                
-                // USE FLOAT32ARRAY FOR OPTIMIZED MEMORY
-                originalPositions = new Float32Array(positionAttribute.count * 3);
-                for (let i = 0; i < positionAttribute.count; i++) {
-                    originalPositions[i*3] = positionAttribute.getX(i);
-                    originalPositions[i*3+1] = positionAttribute.getY(i);
-                    originalPositions[i*3+2] = positionAttribute.getZ(i);
-                }
-            };
-
-            buildVisualizerMesh(); 
-
-            const handleSettingsUpdate = () => {
-                const newShape = localStorage.getItem('psyzx_vis_shape') || 'Icosahedron';
-                let nDet = parseInt(localStorage.getItem('psyzx_vis_detail'));
-                const newDetail = isNaN(nDet) ? 16 : nDet;
-                const newSides = localStorage.getItem('psyzx_vis_sides') || 'Default';
-
-                visMovement = localStorage.getItem('psyzx_vis_movement') || 'Hypnotic';
-                
-                let nY = parseInt(localStorage.getItem('psyzx_vis_ypos'));
-                visYPos = isNaN(nY) ? 11 : nY;
-                
-                let nDim = parseFloat(localStorage.getItem('psyzx_vis_dimension'));
-                visDimension = isNaN(nDim) ? 1.0 : nDim;
-
-                // Update cached loop variables
-                const nSpeed = parseFloat(localStorage.getItem('psyzx_vis_speed'));
-                visSpeed = isNaN(nSpeed) ? 1.0 : nSpeed;
-                const nInt = parseFloat(localStorage.getItem('psyzx_vis_intensity'));
-                visIntensity = isNaN(nInt) ? 1.0 : nInt;
-
-                if (visualizerMesh) {
-                    if (!['Tunnel', 'Synthwave', 'Wormhole'].includes(visShape)) {
-                        visualizerMesh.position.y = visYPos;
-                    }
-                    visualizerMesh.scale.set(visDimension, visDimension, visDimension);
-                }
-
-                if (newShape !== visShape || newDetail !== visDetail || newSides !== visSides) {
-                    visShape = newShape;
-                    visDetail = newDetail;
-                    visSides = newSides;
-                    buildVisualizerMesh();
-                }
-            };
-
-            window.addEventListener('visualizer-update', handleSettingsUpdate);
-
-            const vertex = new THREE.Vector3();
-
-            const handleResize = () => {
-                if (!node || node.clientWidth === 0 || node.clientHeight === 0) return;
-                camera.aspect = node.clientWidth / node.clientHeight;
-                camera.updateProjectionMatrix();
-                renderer.setSize(node.clientWidth, node.clientHeight);
-            };
-            
-            window.addEventListener('resize', handleResize);
-            const resizeObserver = new ResizeObserver(() => handleResize());
-            resizeObserver.observe(node);
-
-            let time = 0; 
-
-            // Render Loop
-            const animate = () => {
-                visualizerRafId = requestAnimationFrame(animate);
-                time += 0.01;
-                
-                // Using cached memory values instead of localStorage lookups
-                activeSpeedMultiplier = lerp(activeSpeedMultiplier, $isPlaying ? visSpeed : 0.05, 0.05);
-
-                if (visualizerMesh) {
-                    const rawFftData = getFftData();
+            switch (visShape) {
+                case 'Tunnel':
+                    geometry = new THREE.CylinderGeometry(15, 15, 300, getRadialSegments(), visDetail * 3, true); 
+                    geometry.rotateX(Math.PI / 2); 
+                    break;
+                case 'TorusKnot':
+                    geometry = new THREE.TorusKnotGeometry(10, 3, visDetail * 2, visDetail, 2, 3);
+                    break;
+                case 'DNA':
+                    geometry = new THREE.CylinderGeometry(2.0, 2.0, 220, 3, visDetail * 5, true);
+                    geometry.rotateZ(Math.PI / 2); 
+                    break;
+                case 'Synthwave':
+                    geometry = new THREE.PlaneGeometry(200, 200, Math.min(visDetail*2, 64), Math.min(visDetail*2, 64));
+                    geometry.rotateX(-Math.PI / 2);
+                    break;
+                case 'PSPWaves':
+                default:
+                    visShape = 'PSPWaves';
+                    const segments = Math.max(160, visDetail * 5); 
+                    const width = 240;
                     
-                    if (rawFftData && (!smoothedFftData || smoothedFftData.length !== rawFftData.length)) {
-                        smoothedFftData = new Float32Array(rawFftData.length);
+                    // NEW: Upgraded to 3 Ribbons for more overlapping glass depth
+                    const numRibbons = 3; 
+                    geometry = new THREE.BufferGeometry();
+                    const vertsPerRibbon = (segments + 1) * 2;
+                    const points = new Float32Array(numRibbons * vertsPerRibbon * 3);
+                    const indices = [];
+
+                    for (let r = 0; r < numRibbons; r++) {
+                        const zOffset = (r - 1) * 6.0; // Staggered at -6, 0, and +6 depth
+                        for (let i = 0; i <= segments; i++) {
+                            const x = (i / segments) * width - width / 2;
+                            const vIdx = r * vertsPerRibbon + i * 2;
+                            
+                            points[vIdx * 3] = x;     
+                            points[vIdx * 3 + 1] = 0;  
+                            points[vIdx * 3 + 2] = zOffset;
+                            
+                            points[(vIdx+1) * 3] = x; 
+                            points[(vIdx+1) * 3 + 1] = 0; 
+                            points[(vIdx+1) * 3 + 2] = zOffset;
+
+                            if (i < segments) {
+                                indices.push(vIdx, vIdx+1, vIdx+3, vIdx, vIdx+3, vIdx+2);
+                            }
+                        }
                     }
+                    geometry.setAttribute('position', new THREE.BufferAttribute(points, 3));
+                    geometry.setIndex(indices);
+                    break;
+            }
 
-                    if (rawFftData && smoothedFftData) {
-                        let totalSum = 0;
-                        let bassSum = 0;
-                        let trebleSum = 0;
-                        const bassCutoff = Math.floor(rawFftData.length * 0.10); 
-                        const trebleStart = Math.floor(rawFftData.length * 0.60); 
+            const isPSP = visShape === 'PSPWaves';
+            
+            // NEW: Upgraded to MeshPhongMaterial to calculate glossy specular highlights
+            const material = new THREE.MeshPhongMaterial({
+                color: 0xffffff, 
+                emissive: isPSP ? 0x08122a : 0x000000, // Deep PS3 blue inner glow
+                specular: 0xffffff, // Bright white glass reflections
+                shininess: 150, // Sharp, crisp highlights to break the "frosted" look
+                wireframe: !isPSP,
+                transparent: true,
+                opacity: isPSP ? 0.75 : (visShape === 'Tunnel' ? 0.25 : 0.15),
+                blending: isPSP ? THREE.AdditiveBlending : THREE.NormalBlending,
+                side: THREE.DoubleSide,
+                depthWrite: !isPSP, 
+                vertexColors: false 
+            });
+            
+            visualizerMesh = new THREE.Mesh(geometry, material);
+            scene.add(visualizerMesh);
+            camera.rotation.set(0, 0, 0); 
 
-                        let rawBassSum = 0;
-                        for (let i = 0; i < bassCutoff; i++) rawBassSum += rawFftData[i];
-                        const rawBass = (rawBassSum / bassCutoff) / 255.0;
-                        const dynamicBass = Math.max(0, rawBass - 0.35) * 1.6;
+            if (visShape === 'Tunnel') { 
+                camera.position.set(0, 0, 50); 
+                visualizerMesh.position.set(0, 0, 0); 
+            } else if (visShape === 'Synthwave') { 
+                camera.position.set(0, 15, 80); 
+                camera.lookAt(0, 0, 0); 
+                visualizerMesh.position.set(0, -10, 0); 
+            } else if (visShape === 'PSPWaves') { 
+                camera.position.set(0, 0, 60); 
+                camera.fov = 60; 
+                camera.updateProjectionMatrix(); 
+                visualizerMesh.position.y = visYPos - 5; 
+            } else { 
+                camera.position.set(0, 0, 35); 
+                camera.fov = 75; 
+                camera.updateProjectionMatrix(); 
+                visualizerMesh.position.y = visYPos; 
+            }
 
-                        for (let i = 0; i < rawFftData.length; i++) {
-                            const target = $isPlaying ? rawFftData[i] : 0;
-                            const smoothingFactor = $isPlaying ? 0.4 : 0.05; 
-                            smoothedFftData[i] = lerp(smoothedFftData[i], target, smoothingFactor);
-                            
-                            totalSum += smoothedFftData[i];
-                            if (i < bassCutoff) bassSum += smoothedFftData[i];
-                            if (i > trebleStart) trebleSum += smoothedFftData[i];
-                        }
-
-                        const audioIntensity = (totalSum / smoothedFftData.length) / 255.0; 
-                        const trebleIntensity = (trebleSum / (rawFftData.length - trebleStart)) / 255.0;
-
-                        const positions = visualizerMesh.geometry.attributes.position;
-                        
-                        if (visShape === 'Tunnel') {
-                            const targetTunnelSpeed = 0.15 + (dynamicBass * 1.1 * visIntensity);
-                            
-                            if (targetTunnelSpeed > currentTunnelSpeed) {
-                                currentTunnelSpeed = lerp(currentTunnelSpeed, targetTunnelSpeed, 0.8); 
-                            } else {
-                                currentTunnelSpeed = lerp(currentTunnelSpeed, targetTunnelSpeed, 0.05); 
-                            }
-
-                            camera.position.z -= (currentTunnelSpeed * activeSpeedMultiplier);
-                            if (camera.position.z <= -50) camera.position.z += 50; 
-
-                            const targetFov = 75 + (dynamicBass * 45 * visIntensity);
-                            camera.fov = lerp(camera.fov, targetFov, targetFov > camera.fov ? 0.9 : 0.1);
-                            camera.updateProjectionMatrix();
-
-                            for (let i = 0; i < positions.count; i++) {
-                                vertex.set(originalPositions[i*3], originalPositions[i*3+1], originalPositions[i*3+2]);
-                                const binIndex = (i * 2) % smoothedFftData.length; 
-                                const audioValue = (smoothedFftData[binIndex] / 255.0) * visIntensity * 0.1; 
-                                const expand = 1.0 + audioValue; 
-                                positions.setXYZ(i, vertex.x * expand, vertex.y * expand, vertex.z);
-                            }
-                            visualizerMesh.rotation.z += (0.002 * activeSpeedMultiplier);
-
-                        } 
-                        else if (visShape === 'DNA') {
-                            const targetTwist = 0.15 + (dynamicBass * 0.12 * visIntensity);
-                            currentDnaTwist = lerp(currentDnaTwist, targetTwist, targetTwist > currentDnaTwist ? 0.7 : 0.05);
-
-                            for (let i = 0; i < positions.count; i++) {
-                                vertex.set(originalPositions[i*3], originalPositions[i*3+1], originalPositions[i*3+2]);
-                                const theta = vertex.x * currentDnaTwist;
-                                const y = vertex.y * Math.cos(theta) - vertex.z * Math.sin(theta);
-                                const z = vertex.y * Math.sin(theta) + vertex.z * Math.cos(theta);
-
-                                const binIndex = (i * 2) % smoothedFftData.length; 
-                                const audioValue = (smoothedFftData[binIndex] / 255.0) * visIntensity * 0.2; 
-                                const expand = 1.0 + audioValue; 
-                                positions.setXYZ(i, vertex.x, y * expand, z * expand);
-                            }
-                            visualizerMesh.rotation.x += (0.005 * activeSpeedMultiplier);
-
-                        }
-                        else if (visShape === 'Synthwave') {
-                            for (let i = 0; i < positions.count; i++) {
-                                vertex.set(originalPositions[i*3], originalPositions[i*3+1], originalPositions[i*3+2]);
-                                
-                                let movingZ = vertex.z + (time * 50 * activeSpeedMultiplier);
-                                movingZ = movingZ % 200; 
-                                
-                                const binIndex = Math.floor((Math.abs(vertex.x) / 100) * smoothedFftData.length) % smoothedFftData.length;
-                                const audioValue = (smoothedFftData[binIndex] / 255.0) * visIntensity;
-                                
-                                const elevation = audioValue * 20.0;
-                                positions.setXYZ(i, vertex.x, vertex.y, movingZ - 100); 
-                                positions.setY(i, elevation); 
-                            }
-                            
-                            if (visMovement === 'Pulsate') {
-                               visualizerMesh.position.y = -10 + (Math.sin(time*2) * audioIntensity * 5 * visDimension);
-                            }
-
-                        }
-                        else if (visShape === 'Galaxy') {
-                            for (let i = 0; i < positions.count; i++) {
-                                vertex.set(originalPositions[i*3], originalPositions[i*3+1], originalPositions[i*3+2]);
-                                const binIndex = (i * 3) % smoothedFftData.length; 
-                                const audioValue = (smoothedFftData[binIndex] / 255.0) * visIntensity; 
-                                
-                                vertex.multiplyScalar(1.0 + (audioValue * 0.6));
-                                positions.setXYZ(i, vertex.x, vertex.y, vertex.z);
-                            }
-                            visualizerMesh.rotation.y += (0.003 * activeSpeedMultiplier);
-                            if (visMovement === 'Pulsate') {
-                                visualizerMesh.scale.setScalar(visDimension + (audioIntensity * 0.2));
-                            } else {
-                                visualizerMesh.scale.setScalar(visDimension);
-                            }
-                        }
-                        else if (visShape === 'Wormhole') {
-                            const targetFov = 75 + (dynamicBass * 30 * visIntensity);
-                            camera.fov = lerp(camera.fov, targetFov, targetFov > camera.fov ? 0.9 : 0.1);
-                            camera.updateProjectionMatrix();
-
-                            for (let i = 0; i < positions.count; i++) {
-                                vertex.set(originalPositions[i*3], originalPositions[i*3+1], originalPositions[i*3+2]);
-                                const binIndex = (i * 2) % smoothedFftData.length; 
-                                const audioValue = (smoothedFftData[binIndex] / 255.0) * visIntensity * 0.3; 
-                                const expand = 1.0 + audioValue; 
-                                positions.setXYZ(i, vertex.x * expand, vertex.y * expand, vertex.z);
-                            }
-                            visualizerMesh.rotation.z += (0.005 * activeSpeedMultiplier);
-                        }
-                        else if (visShape === 'Fractal') {
-                            for (let i = 0; i < positions.count; i++) {
-                                vertex.set(originalPositions[i*3], originalPositions[i*3+1], originalPositions[i*3+2]);
-                                const len = vertex.length();
-                                vertex.normalize(); 
-                                
-                                const spike = trebleIntensity * visIntensity * 12.0; 
-                                vertex.multiplyScalar(len + spike);
-                                positions.setXYZ(i, vertex.x, vertex.y, vertex.z);
-                            }
-                            visualizerMesh.rotation.y += (0.004 * activeSpeedMultiplier);
-                            if (visMovement === 'Pulsate') visualizerMesh.scale.setScalar(visDimension + (audioIntensity * 0.1));
-                        }
-                        else if (visShape === 'Shell') {
-                            for (let i = 0; i < positions.count; i++) {
-                                vertex.set(originalPositions[i*3], originalPositions[i*3+1], originalPositions[i*3+2]);
-                                const len = vertex.length();
-                                vertex.normalize(); 
-                                
-                                const binIndex = (i * 2) % smoothedFftData.length; 
-                                const audioValue = (smoothedFftData[binIndex] / 255.0) * visIntensity; 
-                                
-                                vertex.x *= (1.0 + audioValue * 0.5);
-                                vertex.z *= (1.0 + audioValue * 0.5);
-                                vertex.multiplyScalar(len);
-
-                                positions.setXYZ(i, vertex.x, vertex.y, vertex.z);
-                            }
-                            visualizerMesh.rotation.y += (0.002 * activeSpeedMultiplier);
-                            visualizerMesh.rotation.x = Math.sin(time) * 0.1; 
-                        }
-                        else {
-                            if (Math.abs(camera.fov - 75) > 0.1) {
-                                camera.fov = lerp(camera.fov, 75, 0.1);
-                                camera.updateProjectionMatrix();
-                            }
-
-                            for (let i = 0; i < positions.count; i++) {
-                                vertex.set(originalPositions[i*3], originalPositions[i*3+1], originalPositions[i*3+2]);
-                                const len = vertex.length();
-                                vertex.normalize(); 
-                                
-                                const binIndex = (i * 2) % smoothedFftData.length; 
-                                const audioValue = (smoothedFftData[binIndex] / 255.0) * visIntensity; 
-                                const displacement = audioValue * 6.0; 
-                                
-                                vertex.multiplyScalar(len + displacement);
-                                positions.setXYZ(i, vertex.x, vertex.y, vertex.z);
-                            }
-
-                            switch (visMovement) {
-                                case 'Hypnotic':
-                                    visualizerMesh.rotation.x += (0.001 * activeSpeedMultiplier);
-                                    visualizerMesh.rotation.y += (0.002 * activeSpeedMultiplier);
-                                    break;
-                                case 'Pulsate':
-                                    const standardScale = 12 * visDimension; 
-                                    const scaleOffset = Math.sin(time * 2) * audioIntensity * standardScale * 0.2; 
-                                    visualizerMesh.scale.setScalar(visDimension + scaleOffset / 12); 
-                                    break;
-                                case 'None':
-                                    visualizerMesh.scale.setScalar(visDimension);
-                                    break;
-                            }
-                        }
-                        
-                        positions.needsUpdate = true;
-
-                    } else if (!$isPlaying && visualizerMesh) {
-                       if (visMovement === 'Pulsate' && !['Tunnel','Wormhole','Synthwave','Galaxy'].includes(visShape)) {
-                           visualizerMesh.scale.setScalar(visDimension);
-                       }
-                       if (camera.fov > 75) {
-                           camera.fov -= 1.0;
-                           camera.updateProjectionMatrix();
-                       }
-                    }
-                }
-
-                renderer.render(scene, camera);
-            };
-            animate();
-
-            cleanup = () => {
-                cancelAnimationFrame(visualizerRafId);
-                window.removeEventListener('resize', handleResize);
-                resizeObserver.disconnect();
-                window.removeEventListener('visualizer-update', handleSettingsUpdate);
-                if (renderer) {
-                    node.removeChild(renderer.domElement);
-                    renderer.dispose();
-                }
-                if (visualizerMesh) {
-                    visualizerMesh.geometry.dispose();
-                    if (visualizerMesh.material) visualizerMesh.material.dispose();
-                }
-            };
-        });
-
-        return {
-            destroy() {
-                isDestroyed = true;
-                cleanup();
+            visualizerMesh.scale.set(visDimension, visDimension, visDimension);
+            const positionAttribute = geometry.attributes.position;
+            
+            originalPositions = new Float32Array(positionAttribute.count * 3);
+            for (let i = 0; i < positionAttribute.count; i++) {
+                originalPositions[i*3] = positionAttribute.getX(i);
+                originalPositions[i*3+1] = positionAttribute.getY(i);
+                originalPositions[i*3+2] = positionAttribute.getZ(i);
             }
         };
-    }
-    // ----------------------------------
+
+        buildVisualizerMesh(); 
+
+        const handleSettingsUpdate = () => {
+            const newShape = localStorage.getItem('psyzx_vis_shape') || 'PSPWaves';
+            let nDet = parseInt(localStorage.getItem('psyzx_vis_detail'));
+            const newDetail = isNaN(nDet) ? 16 : nDet;
+            const newSides = localStorage.getItem('psyzx_vis_sides') || 'Default';
+
+            visMovement = localStorage.getItem('psyzx_vis_movement') || 'Hypnotic';
+            
+            let nY = parseInt(localStorage.getItem('psyzx_vis_ypos'));
+            visYPos = isNaN(nY) ? 11 : nY;
+            
+            let nDim = parseFloat(localStorage.getItem('psyzx_vis_dimension'));
+            visDimension = isNaN(nDim) ? 1.0 : nDim;
+
+            const nSpeed = parseFloat(localStorage.getItem('psyzx_vis_speed'));
+            visSpeed = isNaN(nSpeed) ? 1.0 : nSpeed;
+            const nInt = parseFloat(localStorage.getItem('psyzx_vis_intensity'));
+            visIntensity = isNaN(nInt) ? 1.0 : nInt;
+
+            if (visualizerMesh) {
+                if (!['Tunnel', 'Synthwave', 'PSPWaves'].includes(visShape)) {
+                    visualizerMesh.position.y = visYPos;
+                } else if (visShape === 'PSPWaves') {
+                    visualizerMesh.position.y = visYPos - 5;
+                }
+                visualizerMesh.scale.set(visDimension, visDimension, visDimension);
+            }
+
+            if (newShape !== visShape || newDetail !== visDetail || newSides !== visSides) {
+                visShape = newShape; visDetail = newDetail; visSides = newSides;
+                buildVisualizerMesh();
+            }
+        };
+
+        window.addEventListener('visualizer-update', handleSettingsUpdate);
+        const vertex = new THREE.Vector3();
+
+        const handleResize = () => {
+            if (!node || node.clientWidth === 0 || node.clientHeight === 0) return;
+            camera.aspect = node.clientWidth / node.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(node.clientWidth, node.clientHeight);
+        };
+        
+        window.addEventListener('resize', handleResize);
+        const resizeObserver = new ResizeObserver(() => handleResize());
+        resizeObserver.observe(node);
+
+        let time = 0; 
+
+        const animate = () => {
+            visualizerRafId = requestAnimationFrame(animate);
+            time += 0.01;
+            activeSpeedMultiplier = lerp(activeSpeedMultiplier, $isPlaying ? visSpeed : 0.05, 0.05);
+
+            if (visualizerMesh) {
+                
+                if (visShape === 'PSPWaves') {
+                    const targetTransition = $isPlaying ? 1.0 : 0.0;
+                    transitionFactor = lerp(transitionFactor, targetTransition, 0.03);
+
+                    if (visualizerMesh.material) {
+                        visualizerMesh.material.opacity = 0.75 + (transitionFactor * 0.25);
+                    }
+                }
+
+                let rawFftData = null;
+                try { rawFftData = getFftData(); } catch(e) {}
+                if (!rawFftData || rawFftData.length === 0) {
+                    rawFftData = new Uint8Array(256); 
+                }
+
+                if (rawFftData && (!smoothedFftData || smoothedFftData.length !== rawFftData.length)) {
+                    smoothedFftData = new Float32Array(rawFftData.length);
+                }
+
+                if (rawFftData && smoothedFftData) {
+                    let totalSum = 0; 
+                    let bassSum = 0; 
+                    const bassCutoff = Math.floor(rawFftData.length * 0.10); 
+
+                    let rawBassSum = 0;
+                    for (let i = 0; i < bassCutoff; i++) rawBassSum += rawFftData[i];
+                    const rawBass = (rawBassSum / bassCutoff) / 255.0;
+                    const dynamicBass = Math.max(0, rawBass - 0.35) * 1.6;
+
+                    for (let i = 0; i < rawFftData.length; i++) {
+                        const target = $isPlaying ? rawFftData[i] : 0;
+                        const smoothingFactor = $isPlaying ? 0.4 : 0.05; 
+                        smoothedFftData[i] = lerp(smoothedFftData[i], target, smoothingFactor);
+                        totalSum += smoothedFftData[i];
+                        if (i < bassCutoff) bassSum += smoothedFftData[i];
+                    }
+
+                    const audioIntensity = (totalSum / smoothedFftData.length) / 255.0; 
+                    const positions = visualizerMesh.geometry.attributes.position;
+                    
+                    if (visShape === 'Tunnel') {
+                        const targetTunnelSpeed = 0.15 + (dynamicBass * 1.1 * visIntensity);
+                        currentTunnelSpeed = targetTunnelSpeed > currentTunnelSpeed ? lerp(currentTunnelSpeed, targetTunnelSpeed, 0.8) : lerp(currentTunnelSpeed, targetTunnelSpeed, 0.05);
+                        camera.position.z -= (currentTunnelSpeed * activeSpeedMultiplier);
+                        if (camera.position.z <= -50) camera.position.z += 50; 
+                        const targetFov = 75 + (dynamicBass * 45 * visIntensity);
+                        camera.fov = lerp(camera.fov, targetFov, targetFov > camera.fov ? 0.9 : 0.1);
+                        camera.updateProjectionMatrix();
+
+                        for (let i = 0; i < positions.count; i++) {
+                            vertex.set(originalPositions[i*3], originalPositions[i*3+1], originalPositions[i*3+2]);
+                            const binIndex = (i * 2) % smoothedFftData.length; 
+                            const audioValue = (smoothedFftData[binIndex] / 255.0) * visIntensity * 0.1; 
+                            const expand = 1.0 + audioValue; 
+                            positions.setXYZ(i, vertex.x * expand, vertex.y * expand, vertex.z);
+                        }
+                        visualizerMesh.rotation.z += (0.002 * activeSpeedMultiplier);
+                    } 
+                    else if (visShape === 'PSPWaves') {
+                        // NEW: Much faster resting speed (0.45) so the strings flow beautifully on pause
+                        const baseWaveSpeed = 0.45 + (transitionFactor * 0.7);
+                        const dynamicSpeed = $isPlaying ? (dynamicBass * 8.0 * visIntensity) : 0;
+                        pspWavePhase += 0.01 * (baseWaveSpeed + dynamicSpeed);
+
+                        const segments = Math.max(160, visDetail * 5);
+                        const vertsPerRibbon = (segments + 1) * 2;
+                        const width = 240;
+
+                        for (let i = 0; i < positions.count; i++) {
+                            vertex.set(originalPositions[i*3], originalPositions[i*3+1], originalPositions[i*3+2]);
+                            
+                            const ribbonIdx = Math.floor(i / vertsPerRibbon);
+                            const isTop = i % 2 === 0; 
+                            const xMap = (vertex.x + width/2) / width; 
+                            
+                            const centerDist = Math.abs(xMap - 0.5) * 2.0; 
+                            const binIndex = Math.floor(centerDist * (smoothedFftData.length * 0.4)); 
+                            const localAudio = (smoothedFftData[binIndex] / 255.0);
+
+                            const speed = pspWavePhase * (1.2 + ribbonIdx * 0.4);
+                            const xVal = xMap * Math.PI * 2.0; 
+                            
+                            let waveY = 0;
+                            
+                            // NEW: Increased resting amplitude (3.5) for more prominent curves
+                            const baseAmp = 3.5; 
+                            const fullAmp = 6.0 * visIntensity; 
+                            const currentAmp = baseAmp + (transitionFactor * fullAmp);
+                            
+                            // Math for the 3 distinct ribbons so they cross over each other naturally
+                            if (ribbonIdx === 0) {
+                                waveY += Math.sin(xVal * 1.2 - speed * 1.0) * currentAmp;
+                                waveY += Math.cos(xVal * 2.2 - speed * 1.3) * (currentAmp * 0.35);
+                            } else if (ribbonIdx === 1) {
+                                waveY += Math.sin(xVal * 1.4 - speed * 0.9) * currentAmp;
+                                waveY += Math.cos(xVal * 2.5 - speed * 1.1) * (currentAmp * 0.25);
+                            } else {
+                                waveY += Math.sin(xVal * 1.1 - speed * 1.15) * currentAmp;
+                                waveY += Math.cos(xVal * 1.8 - speed * 0.8) * (currentAmp * 0.4);
+                            }
+
+                            const rippleAmp = Math.pow(localAudio, 2.0) * rippleIntensity * visIntensity * transitionFactor; 
+                            if (rippleAmp > 0.01) {
+                                waveY += Math.sin(xVal * 40.0 - speed * 3.5) * rippleAmp;
+                            }
+
+                            // NEW: Visibly thicker strings (2.0) so they look like solid glass bands
+                            const stringThickness = 2.0; 
+                            const dropDistance = 100.0 * transitionFactor; 
+                            
+                            if (isTop) {
+                                vertex.y = waveY + stringThickness; 
+                            } else {
+                                vertex.y = waveY - stringThickness - dropDistance; 
+                            }
+                            
+                            positions.setXYZ(i, vertex.x, vertex.y, vertex.z);
+                        }
+                        
+                        let targetRotX = Math.sin(time * 0.3) * 0.05; 
+                        let targetRotY = Math.cos(time * 0.2) * 0.04;
+                        let targetRotZ = 0;
+
+                        if (transitionFactor > 0.01 && dynamicBass > 0.05) {
+                            const maxRad = maxTiltDegrees * (Math.PI / 180.0);
+                            const sway = (Math.sin(time * 3.1) + Math.cos(time * 2.7)) * 0.5; 
+                            targetRotZ = sway * maxRad * Math.min(1.0, dynamicBass * 1.5) * transitionFactor;
+                        }
+
+                        visualizerMesh.rotation.x = lerp(visualizerMesh.rotation.x, targetRotX, 0.1);
+                        visualizerMesh.rotation.y = lerp(visualizerMesh.rotation.y, targetRotY, 0.1);
+                        visualizerMesh.rotation.z = lerp(visualizerMesh.rotation.z, targetRotZ, 0.08);
+
+                        // CRITICAL: Recompute normals dynamically so the glass lighting updates as the waves move!
+                        visualizerMesh.geometry.computeVertexNormals();
+                    }
+                    else if (visShape === 'DNA') {
+                        const targetTwist = 0.15 + (dynamicBass * 0.12 * visIntensity);
+                        currentDnaTwist = lerp(currentDnaTwist, targetTwist, targetTwist > currentDnaTwist ? 0.7 : 0.05);
+                        for (let i = 0; i < positions.count; i++) {
+                            vertex.set(originalPositions[i*3], originalPositions[i*3+1], originalPositions[i*3+2]);
+                            const theta = vertex.x * currentDnaTwist;
+                            const y = vertex.y * Math.cos(theta) - vertex.z * Math.sin(theta);
+                            const z = vertex.y * Math.sin(theta) + vertex.z * Math.cos(theta);
+                            const binIndex = (i * 2) % smoothedFftData.length; 
+                            const audioValue = (smoothedFftData[binIndex] / 255.0) * visIntensity * 0.2; 
+                            const expand = 1.0 + audioValue; 
+                            positions.setXYZ(i, vertex.x, y * expand, z * expand);
+                        }
+                        visualizerMesh.rotation.x += (0.005 * activeSpeedMultiplier);
+                    }
+                    else if (visShape === 'Synthwave') {
+                        for (let i = 0; i < positions.count; i++) {
+                            vertex.set(originalPositions[i*3], originalPositions[i*3+1], originalPositions[i*3+2]);
+                            let movingZ = vertex.z + (time * 50 * activeSpeedMultiplier);
+                            movingZ = movingZ % 200; 
+                            const binIndex = Math.floor((Math.abs(vertex.x) / 100) * smoothedFftData.length) % smoothedFftData.length;
+                            const audioValue = (smoothedFftData[binIndex] / 255.0) * visIntensity;
+                            const elevation = audioValue * 20.0;
+                            positions.setXYZ(i, vertex.x, vertex.y, movingZ - 100); 
+                            positions.setY(i, elevation); 
+                        }
+                        if (visMovement === 'Pulsate') visualizerMesh.position.y = -10 + (Math.sin(time*2) * audioIntensity * 5 * visDimension);
+                    }
+                    else {
+                        if (Math.abs(camera.fov - 75) > 0.1) {
+                            camera.fov = lerp(camera.fov, 75, 0.1); camera.updateProjectionMatrix();
+                        }
+                        for (let i = 0; i < positions.count; i++) {
+                            vertex.set(originalPositions[i*3], originalPositions[i*3+1], originalPositions[i*3+2]);
+                            const len = vertex.length();
+                            vertex.normalize(); 
+                            const binIndex = (i * 2) % smoothedFftData.length; 
+                            const audioValue = (smoothedFftData[binIndex] / 255.0) * visIntensity; 
+                            const displacement = audioValue * 6.0; 
+                            vertex.multiplyScalar(len + displacement);
+                            positions.setXYZ(i, vertex.x, vertex.y, vertex.z);
+                        }
+                        switch (visMovement) {
+                            case 'Hypnotic': visualizerMesh.rotation.x += (0.001 * activeSpeedMultiplier); visualizerMesh.rotation.y += (0.002 * activeSpeedMultiplier); break;
+                            case 'Pulsate': const standardScale = 12 * visDimension; const scaleOffset = Math.sin(time * 2) * audioIntensity * standardScale * 0.2; visualizerMesh.scale.setScalar(visDimension + scaleOffset / 12); break;
+                            case 'None': visualizerMesh.scale.setScalar(visDimension); break;
+                        }
+                    }
+                    positions.needsUpdate = true;
+                } else if (!$isPlaying && visualizerMesh) {
+                   if (visMovement === 'Pulsate' && !['Tunnel','Synthwave','PSPWaves'].includes(visShape)) { visualizerMesh.scale.setScalar(visDimension); }
+                   if (camera.fov > 75) { camera.fov -= 1.0; camera.updateProjectionMatrix(); }
+                }
+            }
+            renderer.render(scene, camera);
+        };
+        animate();
+
+        cleanup = () => {
+            cancelAnimationFrame(visualizerRafId);
+            window.removeEventListener('resize', handleResize);
+            resizeObserver.disconnect();
+            window.removeEventListener('visualizer-update', handleSettingsUpdate);
+            if (renderer) { node.removeChild(renderer.domElement); renderer.dispose(); }
+            if (visualizerMesh) { visualizerMesh.geometry.dispose(); if (visualizerMesh.material) visualizerMesh.material.dispose(); }
+        };
+    });
+
+    return { destroy() { isDestroyed = true; cleanup(); } };
+}
 
     function handleCoverClick(e) {
         const currentTime = new Date().getTime();
         const tapLength = currentTime - lastTapTime;
-        
         clearTimeout(tapTimeout);
 
         if (tapLength < 300 && tapLength > 0) {
@@ -7981,156 +8273,113 @@ export const playPrevGlobal = () => {
             toggleFavorite();
             e.preventDefault();
         } else {
-            tapTimeout = setTimeout(() => {
-                coverClick = !coverClick;
-            }, 300);
+            tapTimeout = setTimeout(() => { coverClick = !coverClick; }, 300);
         }
         lastTapTime = currentTime;
     }
 
     async function toggleFavorite() {
         if (!track || !track.id) return;
-
-        isFavorite = !isFavorite;
-        showHeartAnim = true;
+        isFavorite = !isFavorite; showHeartAnim = true;
         setTimeout(() => { showHeartAnim = false; }, 800);
-
         if (api.toggleFavorite) {
             const success = await api.toggleFavorite(track.id, isFavorite);
-            if (!success) {
-                isFavorite = !isFavorite;
-                console.error("[API] Failed to toggle favorite status");
-            }
+            if (!success) { isFavorite = !isFavorite; }
         }
     }
 
-    function handlePlayToggle() {
-        playToggle = !playToggle;
-    }
+    function handlePlayToggle() { playToggle = !playToggle; }
 
     const DEFAULT_PLACEHOLDER = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxIDEiPjxyZWN0IHdpZHRoPSIxIiBoZWlnaHQ9IjEiIGZpbGw9IiMzMzMiLz48L3N2Zz4=';
     const handleImageError = (ev) => { ev.target.src = DEFAULT_PLACEHOLDER; };
 
     $: isMobile = innerWidth <= 768;
 
-    let dragY = 0;
-    let isDragging = false;
-    let startY = 0;
+    let dragY = 0; let isDragging = false; let startY = 0;
 
     $: if (isOpen) {
-        isClosing = false; 
-        isClosingByDrag = false;
-        dragY = 0; 
-        startY = 0;
-        isDragging = false;
+        isClosing = false; isClosingByDrag = false;
+        dragY = 0; startY = 0; isDragging = false;
     }
 
     $: if (!isOpen && !isClosingByDrag) {
-        dragY = 0;
-        isDragging = false;
-        isClosing = true; 
+        dragY = 0; isDragging = false; isClosing = true; 
     }
 
     const onTouchStart = (e) => {
         if (isLyricsFullScreen || showQueue || isClosingByDrag) return;
-        isDragging = true;
-        startY = e.touches[0].clientY;
+        isDragging = true; startY = e.touches[0].clientY;
     };
 
     const onTouchMove = (e) => {
         if (!isDragging) return;
         const currentY = e.touches[0].clientY;
         const deltaY = currentY - startY;
-        
-        if (deltaY > 0) { dragY = deltaY; } 
-        else { dragY = deltaY * 0.25; }
+        if (deltaY > 0) { dragY = deltaY; } else { dragY = deltaY * 0.25; }
     };
 
     const onTouchEnd = () => {
         if (!isDragging) return;
         isDragging = false;
-
         if (dragY > 60) {
-            isClosing = true;
-            isClosingByDrag = true;
-            
-            const startYPos = dragY;
-            const targetY = window.innerHeight;
-            const duration = 250;
-            const startTime = Date.now(); 
-            
+            isClosing = true; isClosingByDrag = true;
+            const startYPos = dragY; const targetY = window.innerHeight;
+            const duration = 250; const startTime = Date.now(); 
             const fall = () => { 
                 const t = Math.min((Date.now() - startTime) / duration, 1);
                 dragY = startYPos + (targetY - startYPos) * t; 
-                
-                if (t < 1) {
-                    requestAnimationFrame(fall);
-                } else {
-                    handleClose();
-                }
+                if (t < 1) requestAnimationFrame(fall); else handleClose();
             };
             requestAnimationFrame(fall);
-        } else {
-            dragY = 0; 
-        }
+        } else { dragY = 0; }
         startY = 0;
     };
 
     const handleClose = () => {
-        isClosing = true;
-        dispatch('close');
+        isClosing = true; dispatch('close');
         if (!isClosingByDrag) dragY = 0; 
     };
 
     $: if (typeof document !== 'undefined') {
-        if (isOpen && isMobile) { document.body.classList.add('modal-open'); } 
-        else { document.body.classList.remove('modal-open'); }
+        if (isOpen && isMobile) document.body.classList.add('modal-open'); 
+        else document.body.classList.remove('modal-open'); 
     }
 
     let wasPlayerElPresent = false;
 
     const frameLoop = () => {
+        if (showDiagnostics) {
+            const liveData = getAudioDiagnostics();
+            diagData = { ...diagData, ...liveData };
+        }
+
         if (!isSeekingBar) {
             const current = $playerCurrentTime || 0;
             const duration = $playerDuration || 1;
             const pct = current / duration;
 
-            if (progressRef && !isNaN(pct)) {
-                progressRef.style.transform = `translateZ(0) scaleX(${pct})`;
-            }
+            if (progressRef && !isNaN(pct)) progressRef.style.transform = `translateZ(0) scaleX(${pct})`;
             if (currentTimeRef) {
                 const formatted = formatTime(current);
-                if (currentTimeRef.textContent !== formatted) {
-                    currentTimeRef.textContent = formatted;
-                }
+                if (currentTimeRef.textContent !== formatted) currentTimeRef.textContent = formatted;
             }
         }
 
-        // --- FIXED TRUE BUFFER BAR SYNCING ---
         let targetBuffer = 0;
-        
         if ($isBuffering && displayBufferPct < 95) {
             targetBuffer = Math.min(displayBufferPct + 1.5, 95); 
         } else if (track && activeDownloads[track] !== undefined) {
             targetBuffer = activeDownloads[track];
         } else {
-            // Fetch actual loaded percentage from audio engine
             const trueBuffer = getBufferedPct();
             const playheadPct = (($playerCurrentTime || 0) / ($playerDuration || 1)) * 100;
-            
-            // Show the highest of either the true buffer or the playhead to prevent visual snapping
             targetBuffer = Math.max(trueBuffer, playheadPct);
-            targetBuffer = Math.max(targetBuffer, displayBufferPct); // Prevent backward jumps
-            
+            targetBuffer = Math.max(targetBuffer, displayBufferPct); 
             if (targetBuffer >= 98.5) targetBuffer = 100; 
         }
 
         displayBufferPct = lerp(displayBufferPct, targetBuffer, 0.06);
-
-        if (bufferRef) {
-            bufferRef.style.transform = `scaleX(${displayBufferPct / 100})`;
-        }
-        // -------------------------------------
+        if (bufferRef) bufferRef.style.transform = `scaleX(${displayBufferPct / 100})`;
 
         if (typeof document !== 'undefined') {
             const appLayout = document.getElementById('app-layout');
@@ -8197,28 +8446,27 @@ export const playPrevGlobal = () => {
         }
     });
 
-    // Initialize springs with the saved values from our store
     let eqMaster = spring(0, { stiffness: 0.15, damping: 0.8 });
     let eqBands = spring($eqBandValues, { stiffness: 0.1, damping: 0.8 });
-
-    // Sync audio engine whenever the spring updates
     $: $eqBands.forEach((val, i) => setEqBand(i, val));
+
+    // --- OPTIMIZATION: Debounce heavy localStorage writes during slider drags ---
+    let eqSaveTimeout;
+    const saveEqDebounced = (bands) => {
+        clearTimeout(eqSaveTimeout);
+        eqSaveTimeout = setTimeout(() => {
+            eqBandValues.set(bands); // Saves to localStorage
+        }, 500); 
+    };
 
     const syncMasterEq = (event) => {
         const val = parseFloat(event.target.value);
-        eqPreset.set('Custom'); // Any movement makes it custom
+        eqPreset.set('Custom'); 
         eqMaster.set(val, { hard: true });
         
         const newBands = [val, val, val, val, val, val];
         eqBands.set(newBands, { hard: true });
-        eqBandValues.set(newBands); // Save to localStorage
-    };
-
-    const applyPreset = (name) => {
-        eqPreset.set(name);
-        const presetValues = [...presets[name]];
-        eqBands.set(presetValues);
-        eqBandValues.set(presetValues); // Save to localStorage
+        saveEqDebounced(newBands); 
     };
 
     const handleEqChange = (index, event) => {
@@ -8227,54 +8475,29 @@ export const playPrevGlobal = () => {
         
         eqBands.update(current => {
             current[index] = val;
-            // Update the persistent store with the new array
-            eqBandValues.set(current); 
+            saveEqDebounced(current); 
             return current;
         }, { hard: true }); 
     };
 
+    const applyPreset = (name) => {
+        eqPreset.set(name);
+        const presetValues = [...presets[name]];
+        eqBands.set(presetValues);
+        eqBandValues.set(presetValues); 
+    };
+
+
     const presets = {
-        'Flat': [0, 0, 0, 0, 0, 0],
-        'Full Blast': [12, 12, 12, 6, 12, 12],
-        'V-Shape': [5, 2, -2, 1, 4, 6],
-        'Bass Boost': [6, 4, 0, 0, 0, 0],
-        'Acoustic': [2, 1, 3, 1, 2, 1],
-        'Electronic': [5, 3, -1, 2, 4, 5],
+        'Flat': [0, 0, 0, 0, 0, 0], 'Full Blast': [12, 12, 12, 6, 12, 12],
+        'V-Shape': [5, 2, -2, 1, 4, 6], 'Bass Boost': [6, 4, 0, 0, 0, 0],
+        'Acoustic': [2, 1, 3, 1, 2, 1], 'Electronic': [5, 3, -1, 2, 4, 5],
         'Vocal Pop': [-1, -1, 3, 4, 2, 0]
     };
     let currentPreset = 'Flat';
 
-    let lyrics = [{ t: 0, text: "♪ (Music) ♪" }];
-
-    $: if (track && track.title && isOpen) {
-        const artistName = track.album?.artist?.name || album?.artistName || 'Unknown Artist';
-        
-        // Added track.id as the first parameter
-        fetchLyricsOnFrontend(track.id, artistName, track.title)
-            .then(data => {
-                if (data && data.length > 0) {
-                    lyrics = data;
-                } else {
-                    lyrics = [{ t: 0, text: "♪ (Instrumental) ♪" }];
-                }
-            })
-            .catch(() => {
-                lyrics = [{ t: 0, text: "♪ (Lyrics Unavailable) ♪" }];
-            });
-    }
-
-    $: hasSyncLyrics = lyrics.length > 0 &&
-                       lyrics[0].text !== "◆ LYRICS SYNC NOT AVAILABLE ◆" &&
-                       lyrics[0].text !== "♪ (Instrumental / No text) ♪" &&
-                       lyrics[0].text !== "♪ (Lyrics Unavailable) ♪" &&
-                       lyrics[0].text !== "♪ (Text not available) ♪" &&
-                       lyrics[0].text !== "♪ (Instrumental) ♪" &&
-                       lyrics[0].text !== "♪ (Music) ♪" &&
-                       lyrics[0].text !== "♪";
-
     const handleUserScroll = () => {
-        isUserScrolling = true;
-        clearTimeout(scrollTimeout);
+        isUserScrolling = true; clearTimeout(scrollTimeout);
         scrollTimeout = setTimeout(() => { isUserScrolling = false; lastScrolledIdx = -1; }, 3000);
     };
 
@@ -8289,115 +8512,60 @@ export const playPrevGlobal = () => {
             window.scrollTo({ top: 0, behavior: 'smooth' });
         };
         requestAnimationFrame(executeScroll);
-        setTimeout(executeScroll, 100);
-        setTimeout(executeScroll, 400); 
+        setTimeout(executeScroll, 100); setTimeout(executeScroll, 400); 
     };
 
     const goArtist = () => {
         if (album && album.artistId) {
-            handleClose();
-            window.location.hash = `#artist/${album.artistId}`;
-            triggerScrollToTop();
+            handleClose(); window.location.hash = `#artist/${album.artistId}`; triggerScrollToTop();
         }
     };
     
     const goAlbum = () => {
         if (track && track.albumId) {
-            handleClose();
-            window.location.hash = `#album/${track.albumId}`;
-            triggerScrollToTop();
+            handleClose(); window.location.hash = `#album/${track.albumId}`; triggerScrollToTop();
         }
     };
 
-    let pendingSeekTime = null;
-    let lastSeekX = 0;
-    let lastSeekTime = 0;
+    let pendingSeekTime = null; let lastSeekX = 0; let lastSeekTime = 0;
 
     const onSeekStart = (e) => { 
-        isSeekingBar = true; 
-        lastSeekX = e.touches ? e.touches[0].clientX : e.clientX;
-        lastSeekTime = Date.now();
-        if (isWebAudioMode) startScrubEffect();
+        isSeekingBar = true; lastSeekX = e.touches ? e.touches[0].clientX : e.clientX;
+        lastSeekTime = Date.now(); 
+        startScrubEffect(); // FIX: Fire universally
         updateSeek(e); 
     };
 
     const onSeekMove = (e) => { 
-        if (!isSeekingBar) return; 
-        e.preventDefault(); 
-        
-        const currentX = e.touches ? e.touches[0].clientX : e.clientX;
-        const now = Date.now();
-
-        if (isWebAudioMode) {
-            const dt = Math.max(1, now - lastSeekTime);
-            if (dt > 16) {
-                const dx = currentX - lastSeekX;
-                const speed = Math.abs(dx / dt);
-                const dir = dx >= 0 ? 1 : -1;
-                updateScrubEffect(speed, dir);
-                lastSeekX = currentX;
-                lastSeekTime = now;
-            }
+        if (!isSeekingBar) return; e.preventDefault(); 
+        const currentX = e.touches ? e.touches[0].clientX : e.clientX; const now = Date.now();
+        const dt = Math.max(1, now - lastSeekTime);
+        if (dt > 16) {
+            const dx = currentX - lastSeekX; const speed = Math.abs(dx / dt); const dir = dx >= 0 ? 1 : -1;
+            updateScrubEffect(speed, dir); lastSeekX = currentX; lastSeekTime = now;
         }
         updateSeek(e); 
     };
 
     const onSeekEnd = () => { 
-        if (isSeekingBar && isWebAudioMode) stopScrubEffect();
+        if (isSeekingBar) stopScrubEffect();
         isSeekingBar = false; 
-        if (pendingSeekTime !== null) {
-            activePlayer.currentTime = pendingSeekTime;
-            pendingSeekTime = null;
-        }
+        if (pendingSeekTime !== null) { activePlayer.currentTime = pendingSeekTime; pendingSeekTime = null; }
     };
 
     const updateSeek = (e) => {
         if (!$playerDuration || !progressContainerEl) return;
         const rect = progressContainerEl.getBoundingClientRect();
         const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-        
         const pct = Math.max(0, Math.min(0.990, (clientX - rect.left) / rect.width));
         pendingSeekTime = pct * $playerDuration;
-        
-        if (progressRef && !isNaN(pct)) {
-            progressRef.style.transform = `translateZ(0) scaleX(${pct})`;
-        }
-        if (currentTimeRef) {
-            currentTimeRef.textContent = formatTime(pendingSeekTime);
-        }
+        if (progressRef && !isNaN(pct)) progressRef.style.transform = `translateZ(0) scaleX(${pct})`;
+        if (currentTimeRef) currentTimeRef.textContent = formatTime(pendingSeekTime);
     };
-
-    $: effectiveLyricIdx = isSeekingBar && pendingSeekTime !== null
-        ? (lyrics ? lyrics.findLastIndex(l => pendingSeekTime >= l.t) : -1)
-        : (lyrics ? lyrics.findLastIndex(l => $playerCurrentTime >= l.t) : -1);
-
-    $: if (lyricsScrollEl && effectiveLyricIdx >= 0) {
-        if (isSeekingBar) {
-            const activeLine = lyricsScrollEl.querySelectorAll('.lyric-line')[effectiveLyricIdx];
-            if (activeLine) {
-                lyricsScrollEl.scrollTo({
-                    top: activeLine.offsetTop - lyricsScrollEl.clientHeight / 2 + activeLine.clientHeight / 2,
-                    behavior: 'auto'
-                });
-            }
-        } else if (!isUserScrolling && effectiveLyricIdx !== lastScrolledIdx) {
-            lastScrolledIdx = effectiveLyricIdx;
-            const activeLine = lyricsScrollEl.querySelectorAll('.lyric-line')[effectiveLyricIdx];
-            if (activeLine) {
-                lyricsScrollEl.scrollTo({
-                    top: activeLine.offsetTop - lyricsScrollEl.clientHeight / 2 + activeLine.clientHeight / 2,
-                    behavior: 'smooth'
-                });
-            }
-        }
-    }
 
     function getDynamicFontSize(text, isActive) {
         if (!isActive) return '10px';
-        const containerWidth = 380; 
-        const maxFontSize = 24;      
-        const minFontSize = 10;        
-        const glyphConstant = 0.70;  
+        const containerWidth = 380; const maxFontSize = 24; const minFontSize = 10; const glyphConstant = 0.70;  
         const calculatedSize = containerWidth / (text.length * glyphConstant);
         return `${Math.min(maxFontSize, Math.max(minFontSize, calculatedSize))}px`;
     }
@@ -8429,15 +8597,153 @@ export const playPrevGlobal = () => {
         e.currentTarget.style.setProperty('--m-y', `${e.clientY - rect.top}px`);
     };
 
+   // ─── STAGGERED NETWORK WATERFALL ──────────────────────────────────────────
     $: track = $currentPlaylist[$currentIndex];
     $: album = track ? $albumsMap.get(track.albumId) : null;
-    $: coverUrl = (album && album.coverPath) 
-        ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&v=${$appSessionVersion}` 
-        : DEFAULT_PLACEHOLDER;
     
+    // PRIORITY 1: Low-Res Image (Instant Reactivity)
+    $: lowResCoverUrl = (album && album.coverPath) 
+        ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&v=${$appSessionVersion}&quality=low` 
+        : DEFAULT_PLACEHOLDER;
+
     $: artistImageUrl = (artist && artist.imagePath) 
         ? `/api/Tracks/image?path=${encodeURIComponent(artist.imagePath)}&v=${$appSessionVersion}&quality=${$isLowQualityImages ? 'low' : 'high'}` 
         : DEFAULT_PLACEHOLDER;
+
+    // --- STATE FOR SYNCED LOADING ---
+    let currentAlbumId = null;
+    let currentTrackIdForLyrics = null;
+    let isHighResLoaded = false;
+    let activeHighResUrl = "";
+    let hiResImageObject = null;
+    let blurTimerFinished = false; // New flag for the 500ms minimum
+    let hiResReady = false; // Controls the CSS class for the fade
+
+    let lyrics = [{ t: 0, text: "♪ (Music) ♪" }];
+
+    // PRIORITY 3 & 4: High-Res Image & Lyrics (Updated with 500ms Minimum Blur)
+    function checkReveal(aId) {
+        if (currentAlbumId === aId && activeHighResUrl && blurTimerFinished) {
+            // We add a tiny 50ms buffer. This gives Svelte and the browser 
+            // just enough time to apply the new src to the DOM invisibly 
+            // before we trigger the CSS fade-in. This prevents the flash.
+            setTimeout(() => {
+                if (currentAlbumId === aId) hiResReady = true;
+            }, 50);
+        }
+    }
+
+    $: if (track && isOpen) {
+        const aId = album ? album.id : 'unknown';
+        
+        // Only trigger the blur sequence if the album actually changed
+        if (aId !== currentAlbumId) {
+            // --- ATOMIC RESET ---
+            currentAlbumId = aId;
+            currentTrackIdForLyrics = track.id;
+            
+            hiResReady = false;        // 1. Instantly hides high-res (thanks to new CSS)
+            blurTimerFinished = false; // 2. Reset the 500ms lock
+            activeHighResUrl = "";     // 3. Clear URL (safe because opacity is instantly 0)
+
+            // Start the minimum 500ms "Blur Lock"
+            setTimeout(() => {
+                if (currentAlbumId === aId) {
+                    blurTimerFinished = true;
+                    checkReveal(aId);
+                }
+            }, 500);
+
+            if (album?.coverPath) {
+                const hiRes = `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&v=${$appSessionVersion}&quality=${$isLowQualityImages ? 'low' : 'high'}`;
+                
+                const img = new Image();
+                img.onload = () => {
+                    if (currentAlbumId === aId) {
+                        activeHighResUrl = hiRes;
+                        checkReveal(aId);
+                    }
+                };
+                img.src = hiRes;
+            } else {
+                activeHighResUrl = DEFAULT_PLACEHOLDER;
+                checkReveal(aId);
+            }
+            triggerLyricsFetch(track);
+        } 
+        // If it's the SAME album but a DIFFERENT track, skip the blur entirely
+        else if (track.id !== currentTrackIdForLyrics) {
+            currentTrackIdForLyrics = track.id;
+            triggerLyricsFetch(track);
+        }
+    }
+
+    // --- DIAGNOSTICS STATE ---
+    let showDiagnostics = false;
+    let diagData = {};
+
+    const openDiagnostics = () => {
+        diagData = getAudioDiagnostics();
+        
+        // Scrape hardware network data if the browser supports it
+        if (navigator.connection) {
+            diagData.networkType = navigator.connection.effectiveType || 'Unknown';
+            diagData.downlink = navigator.connection.downlink ? `${navigator.connection.downlink} Mbps` : 'Unknown';
+            diagData.rtt = navigator.connection.rtt ? `${navigator.connection.rtt} ms` : 'Unknown';
+        } else {
+            diagData.networkType = 'Unsupported by browser';
+            diagData.downlink = 'N/A';
+            diagData.rtt = 'N/A';
+        }
+        
+        showDiagnostics = true;
+    };
+
+    function triggerLyricsFetch(t) {
+        if (!t) return;
+        lyrics = [{ t: 0, text: "♪ (Loading...) ♪" }];
+        const cid = t.id;
+        const artistName = t.album?.artist?.name || $albumsMap.get(t.albumId)?.artistName || 'Unknown Artist';
+        
+        fetchLyricsOnFrontend(cid, artistName, t.title)
+            .then(data => {
+                if (track.id !== cid) return;
+                lyrics = (data && data.length > 0) ? data : [{ t: 0, text: "♪ (Instrumental) ♪" }];
+            })
+            .catch(() => {
+                if (track.id !== cid) return;
+                lyrics = [{ t: 0, text: "♪ (Lyrics Unavailable) ♪" }];
+            });
+    }
+
+    $: effectiveLyricIdx = isSeekingBar && pendingSeekTime !== null
+        ? (lyrics ? lyrics.findLastIndex(l => pendingSeekTime >= l.t) : -1)
+        : (lyrics ? lyrics.findLastIndex(l => $playerCurrentTime >= l.t) : -1);
+
+    $: if (lyricsScrollEl && effectiveLyricIdx >= 0) {
+        if (isSeekingBar) {
+            const activeLine = lyricsScrollEl.querySelectorAll('.lyric-line')[effectiveLyricIdx];
+            if (activeLine) {
+                lyricsScrollEl.scrollTo({ top: activeLine.offsetTop - lyricsScrollEl.clientHeight / 2 + activeLine.clientHeight / 2, behavior: 'auto' });
+            }
+        } else if (!isUserScrolling && effectiveLyricIdx !== lastScrolledIdx) {
+            lastScrolledIdx = effectiveLyricIdx;
+            const activeLine = lyricsScrollEl.querySelectorAll('.lyric-line')[effectiveLyricIdx];
+            if (activeLine) {
+                lyricsScrollEl.scrollTo({ top: activeLine.offsetTop - lyricsScrollEl.clientHeight / 2 + activeLine.clientHeight / 2, behavior: 'smooth' });
+            }
+        }
+    }
+
+    $: hasSyncLyrics = lyrics.length > 0 &&
+                       lyrics[0].text !== "◆ LYRICS SYNC NOT AVAILABLE ◆" &&
+                       lyrics[0].text !== "♪ (Instrumental / No text) ♪" &&
+                       lyrics[0].text !== "♪ (Loading...) ♪" &&
+                       lyrics[0].text !== "♪ (Lyrics Unavailable) ♪" &&
+                       lyrics[0].text !== "♪ (Text not available) ♪" &&
+                       lyrics[0].text !== "♪ (Instrumental) ♪" &&
+                       lyrics[0].text !== "♪ (Music) ♪" &&
+                       lyrics[0].text !== "♪";
 </script>
 
 <svelte:window
@@ -8486,21 +8792,35 @@ export const playPrevGlobal = () => {
                 
                 <div class="fp-header">
                     <span class="fp-header-title">NOW PLAYING</span>
+                    <button class="btn-icon" style="padding: 0; margin-top: -10px; opacity: 0.5;" on:click={openDiagnostics} aria-label="Diagnostics">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <line x1="12" y1="16" x2="12" y2="12"></line>
+                            <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                        </svg>
+                    </button>
                 </div>
             </div>
 
             <div class="fp-scroll-content">
                 
                 <div class="fp-cover-container" class:shrink={hasSyncLyrics && !coverClick} on:click={handleCoverClick} role="button" tabindex="0">
-                    {#key coverUrl}
+                    
+                    <div class="sober-cover-wrapper">
                         <img 
-                            class="sober-cover" 
-                            src={coverUrl} 
-                            alt="Album Cover" 
-                            in:fade={{duration: 250}} 
+                            class="sober-cover low-res" 
+                            src={lowResCoverUrl} 
+                            alt="" 
                             on:error={handleImageError} 
                         />
-                    {/key}
+                        
+                        <img 
+                            class="sober-cover high-res" 
+                            class:is-visible={hiResReady}
+                            src={activeHighResUrl} 
+                            alt="" 
+                        />
+                    </div>
                     
                     {#if showHeartAnim}
                         <div class="heart-anim-overlay" in:scale={{duration: 200, easing: expoOut, start: 0.5}} out:fade={{duration: 300}}>
@@ -8636,16 +8956,6 @@ export const playPrevGlobal = () => {
                                 style="--val: {(( $eqBands[i] + 12) / 24) * 100}%">
                         </div>
                     {/each}
-
-                    {#each [60, 250, '1K', '4K', '8K', '14K'] as freq, i}
-                        <div class="fp-slider-row">
-                            <span class="label-freq">{freq}</span>
-                            <input class="sleek-slider" type="range" min="-12" max="12" step="0.1" 
-                                value={$eqBands[i]} 
-                                on:input={(e) => handleEqChange(i, e)} 
-                                style="--val: {(( $eqBands[i] + 12) / 24) * 100}%">
-                        </div>
-                    {/each}
                 </div>
 
                 <div class="full-lyrics-card">
@@ -8755,6 +9065,52 @@ export const playPrevGlobal = () => {
     {/if}
 {/if}
 
+{#if showDiagnostics}
+        <div class="lyrics-modal-popup" style="z-index: 9999999999;" use:portal={true} in:fly={{y: '100%', duration: 400, easing: expoOut}} out:fly={{y: '100%', duration: 200, easing: expoIn}}>
+            <div class="lyrics-modal-header">
+                <h3 class="modal-title">Engine Diagnostics</h3>
+                <button class="btn-icon" on:click={() => showDiagnostics = false}>
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
+            </div>
+            <div class="lyrics-scroll-box" style="padding: 24px; text-align: left; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: rgba(255,255,255,0.7); line-height: 1.8;">
+                
+                <div style="margin-bottom: 12px; padding: 12px; background: rgba(0,0,0,0.4); border-radius: 8px; border-left: 3px solid #60a5fa;">
+                    <strong style="color: #fff;">Network Profile:</strong><br>
+                    Connection: <span style="color: {diagData.networkType === '4g' || diagData.networkType === 'wifi' ? '#4ade80' : '#f87171'}">{diagData.networkType}</span><br>
+                    Bandwidth: <span style="color: #38bdf8">{diagData.downlink}</span><br>
+                    Latency (RTT): <span style="color: {parseInt(diagData.rtt) < 150 ? '#4ade80' : '#f87171'}">{diagData.rtt}</span>
+                </div>
+
+                <div style="margin-bottom: 12px; padding: 12px; background: rgba(0,0,0,0.4); border-radius: 8px; border-left: 3px solid var(--accent-color);">
+                    <strong style="color: #fff;">WebAudio Pipeline:</strong><br>
+                    Engine Mode: <span style="color: {diagData.mode === 'WebAudio API' ? '#c084fc' : '#facc15'}">{diagData.mode}</span><br>
+                    AudioCtx State: <span style="color: {diagData.ctxState === 'running' ? '#4ade80' : (diagData.ctxState === 'suspended' ? '#facc15' : '#f87171')}">{diagData.ctxState}</span><br>
+                    Track Load ID: <span style="color: #cbd5e1">{track?.id || 'None'}</span><br>
+                    UI Buffering Flag: <span style="color: {$isBuffering ? '#f87171' : '#4ade80'}">{$isBuffering.toString().toUpperCase()}</span>
+                </div>
+
+                <div style="margin-bottom: 12px; padding: 12px; background: rgba(0,0,0,0.4); border-radius: 8px; border-left: 3px solid #fbbf24;">
+                    <strong style="color: #fff;">Decoder & Cache:</strong><br>
+                    Current Track Decoded: <span style="color: {diagData.bufferDecoded ? '#4ade80' : '#f87171'}">{diagData.bufferDecoded ? 'READY' : 'WAITING'}</span><br>
+                    Active Decodes: <span style="color: {diagData.activeDecodes > 0 ? '#fbbf24' : '#a3a3a3'}">{diagData.activeDecodes} Threads</span><br>
+                    Decoded Buffer Cache: <span style="color: #38bdf8">{diagData.cacheSize} / 5</span>
+                </div>
+
+                <div style="padding: 12px; background: rgba(0,0,0,0.4); border-radius: 8px; border-left: 3px solid #34d399;">
+                    <strong style="color: #fff;">MSE Network Stream:</strong><br>
+                    Stream Complete: <span style="color: {diagData.mseFetchComplete ? '#4ade80' : '#fbbf24'}">{diagData.mseFetchComplete ? 'YES' : 'STREAMING...'}</span><br>
+                    Bytes Downloaded: <span style="color: #38bdf8">{(diagData.mseLoadedBytes / 1024 / 1024).toFixed(2)} MB</span><br>
+                    MSE ReadyState: <span style="color: {diagData.mseReadyState === 'open' ? '#4ade80' : '#facc15'}">{diagData.mseReadyState}</span><br>
+                    MSE Connected to Output: <span style="color: {diagData.mseWired ? '#4ade80' : '#f87171'}">{diagData.mseWired ? 'YES' : 'NO'}</span><br><br>
+
+                    <strong style="color: #fff;">HTML5 Background Keep-Alive:</strong><br>
+                    <span style="color: #a3a3a3">{diagData.html5Status}</span>
+                </div>
+            </div>
+        </div>
+    {/if}
+
 <style>
    /* --- NEW VISUALIZER STYLES --- */
     .visualizer-bg {
@@ -8779,80 +9135,75 @@ export const playPrevGlobal = () => {
     }
     /* ----------------------------- */
 
-    /* --- ARTIST PROFILE CARD (FIXED FROST & HEIGHT) --- */
+    /* --- ARTIST PROFILE CARD --- */
     .artist-profile-card {
         position: relative;
-        overflow: hidden;    /* Required to clip the -1px overhang */
-        /* 1. INCREASE HEIGHT: Changed from 280px to 350px (adjust as needed) */
         height: 350px; 
         border-radius: 28px;
-        overflow: hidden;
         margin-top: 24px;
-        flex-shrink: 0;
         cursor: pointer;
-        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4), inset 0 1px 1px rgba(255, 255, 255, 0.1);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        background: #111;
-        transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
-        -webkit-transform: translateZ(0);
-        isolation: isolate;
+        overflow: hidden; /* Clips everything inside */
         
-        /* 2. OPTIONAL: Ensure the card itself stretches to its container width */
-        width: 100%; 
+        /* FIX 1: Remove solid background. Use a dark semi-transparent fill 
+        to ensure the browser doesn't "occlude" the layers underneath. */
+        background: rgba(17, 17, 17, 0.01); 
+        
+        /* FIX 2: Force a new composite layer for the entire card */
+        transform: translateZ(0);
+        -webkit-transform: translateZ(0);
     }
 
     .artist-bg-img {
-        /* 3. FULL COVERAGE: This ensures the image fills 100% of the card 
-        regardless of the image's original aspect ratio */
+        position: absolute;
+        inset: 0; /* Shorthand for top/left/right/bottom: 0 */
         width: 100%;
         height: 100%;
-        object-fit: cover; 
-        
-        position: absolute;
-        top: 0; 
-        left: 0;
-        z-index: 0;
-        
-        /* Keeping your zoom effect */
+        object-fit: cover;
+        z-index: 1; /* Lowest layer */
         transform: scale(1.05);
-        /* Ensure the transform centers properly */
-        transform-origin: center; 
     }
 
+    /* --- THE FROSTED OVERLAY --- */
     .artist-frosted-overlay {
         position: absolute;
-        /* 1. THE OVERHANG: Move it 1px outside the left and bottom edges */
-        left: -1px;
-        bottom: -1px;
-        /* 2. CALC WIDTH: Make it 2px wider to cover both left and right edges */
-        width: calc(100% + 2px);
+        left: 0;
+        bottom: 0;
+        width: 100%;
         height: 35%; 
+        z-index: 2; /* Sits above image */
         
-        box-sizing: border-box; 
-        
-        background: linear-gradient(
-            to bottom, 
-            rgba(255, 255, 255, 0.15) 0%, 
-            rgba(0, 0, 0, 0.85) 100%
-        );
-
-        /* 3. RADIUS MATCH: Match the parent card's radius exactly */
-        border-bottom-left-radius: 26px;
-        border-bottom-right-radius: 26px;
-
-        /* 4. REMOVE ALL BORDERS: Explicitly stripping them */
-        border: none !important;
-
-        /* 5. BLUR EFFECT */
-        backdrop-filter: blur(15px) saturate(160%);
-        -webkit-backdrop-filter: blur(15px) saturate(160%);
-        
-        z-index: 1;
         display: flex;
         flex-direction: column;
         justify-content: center;
         padding: 0 24px;
-        overflow: hidden; 
+        box-sizing: border-box;
+        
+        /* FIX 3: Gradient must be semi-transparent to see the blur */
+        background: linear-gradient(
+            to bottom, 
+            rgba(255, 255, 255, 0.1) 0%, 
+            rgba(0, 0, 0, 0.7) 100%
+        );
+        
+        /* Important: Hide overflow so the blur pseudo-element doesn't leak */
+        overflow: hidden;
+        border-bottom-left-radius: 28px;
+        border-bottom-right-radius: 28px;
+    }
+
+    /* FIX 4: The actual Blur Layer (Pseudo-element) */
+    .artist-frosted-overlay::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        z-index: -1; /* Behind the text, but inside the overlay */
+        
+        /* The Blur */
+        backdrop-filter: blur(20px) saturate(160%);
+        -webkit-backdrop-filter: blur(20px) saturate(160%);
+        
+        /* FIX 5: Force hardware acceleration on the blur specifically */
+        will-change: backdrop-filter;
     }
 
     .artist-name {
@@ -9273,34 +9624,87 @@ export const playPrevGlobal = () => {
         justify-content: center; 
         width: 100%; 
         max-width: 350px; 
-        
         margin: 0 auto 24px auto; 
         
-        transition: max-width 0.4s cubic-bezier(0.25, 1, 0.5, 1),
+        /* OPTIMIZATION: We moved the shadow and border HERE, away from the overflow:hidden wrapper */
+        border-radius: 12px;
+        box-shadow: 0 15px 40px rgba(0,0,0,0.5);
+        border: 1px solid rgba(255,255,255,0.1);
+        
+        /* OPTIMIZATION: Use transform instead of max-width */
+        transition: transform 0.4s cubic-bezier(0.25, 1, 0.5, 1),
                     margin-bottom 0.4s cubic-bezier(0.25, 1, 0.5, 1); 
         
-        will-change: max-width, margin-bottom;
+        transform-origin: top center;
+        will-change: transform;
         -webkit-transform: translate3d(0,0,0);
         transform: translate3d(0,0,0);
     }
 
     .fp-cover-container.shrink {
-        max-width: 262px; 
-        margin-bottom: 16px; 
+        /* Scale mathematically simulates shrinking to 262px, negative margin pulls the lyrics up */
+        transform: scale(0.748) translate3d(0,0,0); 
+        margin-bottom: -70px; 
     }
 
-    .sober-cover { 
-        width: 100%; 
-        height: auto; 
-        aspect-ratio: 1/1; 
-        object-fit: cover; 
-        border-radius: 12px; 
-        box-shadow: 0 15px 40px rgba(0,0,0,0.5); 
-        pointer-events: none; 
-        -webkit-backface-visibility: hidden;
-        backface-visibility: hidden;
-        -webkit-transform: translate3d(0,0,0);
-        transform: translate3d(0,0,0);
+    /* --- NEW SOBER COVER SYSTEM (GPU OPTIMIZED) --- */
+    .sober-cover-wrapper {
+        position: relative;
+        width: 100%;
+        aspect-ratio: 1/1;
+        background: #000; /* Pure black background prevents white flashes */
+        border-radius: 12px;
+        overflow: hidden;
+        transform: translateZ(0); /* GPU acceleration */
+    }
+
+    .sober-cover {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+    }
+
+    .low-res {
+        z-index: 1;
+        filter: blur(15px) saturate(1.5); /* Deep blur */
+        transform: scale(1.1); /* Prevents blurred edges from showing container background */
+        transition: opacity 0.3s ease;
+    }
+
+    .high-res {
+        z-index: 2;
+        opacity: 0;
+        /* INSTANT hide when the album changes (prevents the old cover from ghosting out) */
+        transition: opacity 0s;
+        will-change: opacity;
+    }
+
+    .high-res.is-visible {
+        opacity: 1;
+        /* VERY SMOOTH fade-in once the 500ms has passed and the new image is loaded */
+        transition: opacity 1.2s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+
+    /* Hardware optimized animation (Removed filter: brightness) */
+    @keyframes iosInstallPopFast {
+        0% {
+            transform: scale(0.95);
+            opacity: 0;
+        }
+        60% {
+            transform: scale(1.02);
+            opacity: 1;
+        }
+        100% {
+            transform: scale(1);
+            opacity: 1;
+        }
+    }
+
+    .installed-pop {
+        animation: iosInstallPopFast 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
     }
 
     .fp-info, 
@@ -9589,7 +9993,6 @@ export const playPrevGlobal = () => {
     loadAndPlayUrl, activePlayer, preloadNextUrl, setGlobalVolume
   } from './audio.js';
   
-  // NEW IMPORTS FOR AUDIO ROUTING
   import { connectedDevices, thisDeviceName, targetDeviceId, myDeviceId, selectTargetDevice } from './sync.js'; 
   
   import { api } from './api.js';
@@ -9611,7 +10014,7 @@ export const playPrevGlobal = () => {
   let mouseX = 0;
   let mouseY = 0;
   
-  let showSyncModal = false; // Modal State
+  let showSyncModal = false; 
 
   const handleMouseMove = (e) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -9623,7 +10026,7 @@ export const playPrevGlobal = () => {
   $: album = track ? $albumsMap.get(track.albumId) : null;
   $: streamUrl = track ? `/api/Tracks/stream/${track.id}` : '';
   $: coverUrl = (album && album.coverPath)
-    ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&v=${$appSessionVersion}`
+    ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&v=${$appSessionVersion}&quality=low`
     : DEFAULT_PLACEHOLDER;
   $: progressPct = $playerDuration > 0 ? ($playerCurrentTime / $playerDuration) * 100 : 0;
   $: fileExt = track ? track.filePath.split('.').pop().toUpperCase() : 'UNK';
@@ -9644,18 +10047,6 @@ export const playPrevGlobal = () => {
       seek: (time) => { activePlayer.currentTime = time; },
       seekRelative: (offset) => { activePlayer.currentTime = Math.max(0, Math.min(activePlayer.duration, activePlayer.currentTime + offset)); }
     });
-  }
-
-  $: if (typeof navigator !== 'undefined' && navigator.serviceWorker && navigator.serviceWorker.controller && $currentPlaylist.length > 0) {
-    const nextTracks = $currentPlaylist
-      .slice($currentIndex + 1, $currentIndex + 6)
-      .map(t => t.id);
-    if (nextTracks.length > 0) {
-      navigator.serviceWorker.controller.postMessage({
-        type: 'PRELOAD_TRACKS',
-        trackIds: nextTracks
-      });
-    }
   }
 
   const safeSetStorage = (k, v) => { try { localStorage.setItem(k, v); } catch(e) {} };
@@ -9797,6 +10188,8 @@ export const playPrevGlobal = () => {
   }
 
   let lastUrl = '';
+
+  // --- PRIORITY 2: Audio stream starts instantly on change ---
   $: if (streamUrl && streamUrl !== lastUrl) {
     lastUrl = streamUrl;
     if (isRestoringState) {
@@ -9832,9 +10225,30 @@ export const playPrevGlobal = () => {
   $: nextTrackIndex = $isRepeat && $currentIndex === $currentPlaylist.length - 1 ? 0 : $currentIndex + 1;
   $: nextTrack = $currentPlaylist[nextTrackIndex];
 
+  // --- PRIORITY 5: Delay Next Track Preload Buffer ---
+  let preloadNextTimeout;
   $: if (nextTrack && isEngineInitialized) {
+      clearTimeout(preloadNextTimeout);
       const nextUrl = `/api/Tracks/stream/${nextTrack.id}`;
-      setTimeout(() => preloadNextUrl(nextUrl), 1000);
+      // Wait 1.5s to ensure active track and images had priority
+      preloadNextTimeout = setTimeout(() => preloadNextUrl(nextUrl), 1500); 
+  }
+
+  // --- PRIORITY 6: Delay Service Worker Offline Caching ---
+  let swPreloadTimeout;
+  $: if (typeof navigator !== 'undefined' && navigator.serviceWorker && navigator.serviceWorker.controller && $currentPlaylist.length > 0) {
+    clearTimeout(swPreloadTimeout);
+    swPreloadTimeout = setTimeout(() => {
+      const nextTracks = $currentPlaylist
+        .slice($currentIndex + 1, $currentIndex + 6)
+        .map(t => t.id);
+      if (nextTracks.length > 0) {
+        navigator.serviceWorker.controller.postMessage({
+          type: 'PRELOAD_TRACKS',
+          trackIds: nextTracks
+        });
+      }
+    }, 3000); // 3s delay yields to Preload Next track stream
   }
 </script>
 
@@ -12887,17 +13301,17 @@ const getStorageString = (key, defaultVal) => {
 };
 
 export const isCacheDebugActive = writable(getStorageBool('psyzx_cache_debug', false));
-export const isGaplessModeActive = writable(getStorageBool('psyzx_gapless', true));
+export const isGaplessModeActive = writable(getStorageBool('psyzx_gapless', false));
 export const isGlobalColorActive = writable(getStorageBool('psyzx_global_color', false));
 export const isMaxGlassActive = writable(getStorageBool('psyzx_max_glass', true));
 export const isDesktopSwapActive = writable(getStorageBool('psyzx_desktop_swap', true));
 
 // Visualizer Stores (Moved from component to global state)
 export const visEnabled = writable(getStorageBool('psyzx_vis_enabled', true));
-export const visIntensity = writable(getStorageString('psyzx_vis_intensity', '1.0'));
-export const visShape = writable(getStorageString('psyzx_vis_shape', 'Tunnel'));
+export const visIntensity = writable(getStorageString('psyzx_vis_intensity', '3.0'));
+export const visShape = writable(getStorageString('psyzx_vis_shape', 'PSP Waves'));
 export const visMovement = writable(getStorageString('psyzx_vis_movement', 'Hypnotic'));
-export const visYPos = writable(getStorageString('psyzx_vis_ypos', '11'));
+export const visYPos = writable(getStorageString('psyzx_vis_ypos', '10'));
 export const visDimension = writable(getStorageString('psyzx_vis_dimension', '1.0'));
 export const visDetail = writable(getStorageString('psyzx_vis_detail', '16'));
 export const visSides = writable(getStorageString('psyzx_vis_sides', 'Default'));

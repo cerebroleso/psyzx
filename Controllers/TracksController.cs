@@ -123,7 +123,7 @@ public class TracksController : ControllerBase
             // Use ImageSharp to resize on the fly and compress (or serve a pre-generated thumbnail)
             using var image = SixLabors.ImageSharp.Image.Load(fullPath);
             image.Mutate(x => x.Resize(new ResizeOptions {
-                Size = new Size(150, 150),
+                Size = new Size(300, 300),
                 Mode = ResizeMode.Crop
             }));
             

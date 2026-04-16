@@ -40,6 +40,8 @@
     let loginErrorMsg = '';
     let isLoggingIn = false;
 
+    $: routeKey = currentHash.startsWith('#search/') ? '#search' : currentHash;
+
     $: navContextTitle = currentHash.startsWith('#album/') ? 'Album' 
                        : currentHash.startsWith('#artist/') ? 'Artist'
                        : currentHash.startsWith('#search/') ? 'Search'
@@ -440,7 +442,7 @@
                     on:refresh={handleRefresh} 
                 />                
                 <div id="main-content" style="flex: 1; display: grid;">
-                    {#key currentHash}
+                    {#key routeKey}
                     <div in:fade={{duration: 250, delay: 100}} out:fade={{duration: 100}} style="grid-area: 1 / 1; display: flex; flex-direction: column; min-height: 100%;">
                         
                         <div style="flex-grow: 1;">

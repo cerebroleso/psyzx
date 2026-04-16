@@ -31,18 +31,16 @@
         getFftData,
         loadAndPlayUrl,
         preloadNextUrl,
-        getBufferedPct
+        getBufferedPct,
+        getAudioDiagnostics
     } from './audio.js';
     import { api, fetchLyricsOnFrontend } from './api.js';
     import { quintOut, expoIn, expoOut, linear } from 'svelte/easing';
     import { spring } from 'svelte/motion';
     import { get } from 'svelte/store';
 
-
     export let artistId;
-
     $: artist = album ? $artistsMap.get(album.artistId) : null;
-
 
     export let isOpen = false;
     const dispatch = createEventDispatcher();
@@ -76,68 +74,40 @@
     let displayBufferPct = 0;
     const lerp = (start, end, amt) => (1 - amt) * start + amt * end;
 
-
-
     let isVisEnabled = typeof localStorage !== 'undefined' ? localStorage.getItem('psyzx_vis_enabled') !== 'false' : true;
     
     const handleGlobalVisUpdate = () => {
         isVisEnabled = localStorage.getItem('psyzx_vis_enabled') !== 'false';
     };
 
-    const playTrackPriorityFlow = async (track, nextTrack) => {
-        // 1. HIGHEST PRIORITY: Audio Stream
-        const kbps = localStorage.getItem('psyzx_bitrate') || '320';
-        await loadAndPlayUrl(`/api/Tracks/stream/${track.id}?kbps=${kbps}`);
-
-        // 2. SECOND PRIORITY: Lyrics (Lightweight text, fast fetch)
-        // Don't await this so it doesn't block the cover, but trigger it immediately after audio starts
-        fetchLyricsOnFrontend(track).catch(console.error);
-
-        // 3. THIRD PRIORITY: Album Cover (Heavy payload)
-        const img = new Image();
-        img.src = `/api/Tracks/image?path=${encodeURIComponent(track.album.coverPath)}&quality=${$isLowQualityImages ? 'low' : 'high'}`;
-        await new Promise(resolve => {
-            img.onload = resolve;
-            img.onerror = resolve; 
-        });
-        currentCover = img.src;
-
-        // 4. FOURTH PRIORITY: Next Track Buffer
-        if (nextTrack) {
-            preloadNextUrl(`/api/Tracks/stream/${nextTrack.id}?kbps=${kbps}`);
-        }
-
-        // 5. LOWEST PRIORITY: Pre-fetch Queue Metadata to Service Worker
-        if ('serviceWorker' in navigator) {
-            const upcomingIds = get(currentPlaylist).slice(get(currentIndex) + 2, get(currentIndex) + 6).map(t => t.id);
-            navigator.serviceWorker.controller.postMessage({
-                type: 'PRELOAD_METADATA',
-                trackIds: upcomingIds
-            });
-        }
-    };
-
-// --- THREE.JS VISUALIZER ACTION (OPTIMIZED) ---
+ // --- THREE.JS VISUALIZER ACTION (OPTIMIZED) ---
     function threeVisualizer(node) {
         let isDestroyed = false;
         let cleanup = () => {}; 
 
-        // 1. DYNAMIC IMPORT: Only load Three.js when this element mounts
         import('three').then((THREE) => {
             if (isDestroyed) return;
 
             let scene, camera, renderer, visualizerMesh;
             let visualizerRafId;
             
-            // 2. TYPED ARRAY: Pre-allocate memory instead of standard arrays
             let originalPositions = new Float32Array(0); 
             let smoothedFftData = null; 
             let activeSpeedMultiplier = 0; 
             let currentTunnelSpeed = 0.15;  
-            let currentDnaTwist = 0.15;    
+            let currentDnaTwist = 0.15;
+            
+            // --- CUSTOMIZABLE PSP SETTINGS ---
+            let rippleIntensity = 0.1; // Modify this to make the micro-ripples larger or smaller
+            let maxTiltDegrees = 10.0; // The maximum rotation angle during heavy bass
+            
+            // PSP Wave States
+            let transitionFactor = 0; 
+            let lastPlayState_PSP = null;
+            let pspWavePhase = 0; 
+
             let isPointsCloud = false; 
 
-            // 3. CACHE LOCAL STORAGE: Prevent reading DOM/Storage at 60fps
             let visSpeed = 1.0;
             let visIntensity = 1.0;
 
@@ -157,7 +127,6 @@
             
             let visSides = localStorage.getItem('psyzx_vis_sides') || 'Default';
 
-            // Init cached performance variables
             const rawSpd = parseFloat(localStorage.getItem('psyzx_vis_speed'));
             visSpeed = isNaN(rawSpd) ? 1.0 : rawSpd;
             const rawInt = parseFloat(localStorage.getItem('psyzx_vis_intensity'));
@@ -191,9 +160,37 @@
                 isPointsCloud = false; 
 
                 switch (visShape) {
-                    case 'Dodecahedron':
-                        geometry = new THREE.DodecahedronGeometry(12, Math.min(visDetail, 5)); 
+                    case 'PSPWaves': {
+                        const segments = Math.max(160, visDetail * 5); 
+                        const width = 240;
+                        geometry = new THREE.BufferGeometry();
+                        const vertsPerRibbon = (segments + 1) * 2;
+                        const points = new Float32Array(vertsPerRibbon * 2 * 3);
+                        const indices = [];
+
+                        for (let r = 0; r < 2; r++) {
+                            const zOffset = r === 0 ? 3.0 : -3.0; 
+                            for (let i = 0; i <= segments; i++) {
+                                const x = (i / segments) * width - width / 2;
+                                const vIdx = r * vertsPerRibbon + i * 2;
+                                
+                                points[vIdx * 3] = x;     
+                                points[vIdx * 3 + 1] = 0;  
+                                points[vIdx * 3 + 2] = zOffset;
+                                
+                                points[(vIdx+1) * 3] = x; 
+                                points[(vIdx+1) * 3 + 1] = 0; 
+                                points[(vIdx+1) * 3 + 2] = zOffset;
+
+                                if (i < segments) {
+                                    indices.push(vIdx, vIdx+1, vIdx+3, vIdx, vIdx+3, vIdx+2);
+                                }
+                            }
+                        }
+                        geometry.setAttribute('position', new THREE.BufferAttribute(points, 3));
+                        geometry.setIndex(indices);
                         break;
+                    }
                     case 'Tunnel':
                         geometry = new THREE.CylinderGeometry(15, 15, 300, getRadialSegments(), visDetail * 3, true); 
                         geometry.rotateX(Math.PI / 2); 
@@ -205,120 +202,63 @@
                         geometry = new THREE.CylinderGeometry(2.0, 2.0, 220, 3, visDetail * 5, true);
                         geometry.rotateZ(Math.PI / 2); 
                         break;
-                    case 'Shell':
-                        geometry = new THREE.CylinderGeometry(0.1, 15, 40, getRadialSegments(), visDetail * 2, true);
-                        const shellPos = geometry.attributes.position;
-                        const shellVec = new THREE.Vector3();
-                        for (let i = 0; i < shellPos.count; i++) {
-                            shellVec.fromBufferAttribute(shellPos, i);
-                            const twist = shellVec.y * 0.2;
-                            const x = shellVec.x * Math.cos(twist) - shellVec.z * Math.sin(twist);
-                            const z = shellVec.x * Math.sin(twist) + shellVec.z * Math.cos(twist);
-                            const asymmetry = (shellVec.y + 20) * 0.1;
-                            shellPos.setXYZ(i, x + asymmetry, shellVec.y, z);
-                        }
-                        geometry.computeVertexNormals();
-                        break;
                     case 'Synthwave':
                         geometry = new THREE.PlaneGeometry(200, 200, Math.min(visDetail*2, 64), Math.min(visDetail*2, 64));
                         geometry.rotateX(-Math.PI / 2);
                         break;
-                    case 'Galaxy':
-                        geometry = new THREE.BufferGeometry();
-                        const particleCount = visDetail * 200;
-                        const points = new Float32Array(particleCount * 3);
-                        for (let i = 0; i < particleCount; i++) {
-                            const angle = i * 0.1;
-                            const radius = (i / particleCount) * 40;
-                            points[i*3] = Math.cos(angle) * radius;
-                            points[i*3+1] = (Math.random() - 0.5) * 4; 
-                            points[i*3+2] = Math.sin(angle) * radius;
-                        }
-                        geometry.setAttribute('position', new THREE.BufferAttribute(points, 3));
-                        isPointsCloud = true;
-                        break;
-                    case 'Wormhole':
-                        geometry = new THREE.CylinderGeometry(40, 1, 150, getRadialSegments(), visDetail * 2, true);
-                        geometry.rotateX(Math.PI / 2);
-                        break;
-                    case 'Fractal':
-                        geometry = new THREE.CylinderGeometry(0.1, 10, 40, getRadialSegments(), visDetail * 2, false);
-                        const fracPos = geometry.attributes.position;
-                        const fracVec = new THREE.Vector3();
-                        for (let i = 0; i < fracPos.count; i++) {
-                            fracVec.fromBufferAttribute(fracPos, i);
-                            if (Math.sin(fracVec.y * 10) > 0.6) {
-                                fracVec.x *= 1.8;
-                                fracVec.z *= 1.8;
-                            }
-                            fracPos.setXYZ(i, fracVec.x, fracVec.y, fracVec.z);
-                        }
-                        geometry.computeVertexNormals();
-                        break;
-                    case 'Icosahedron':
                     default:
                         geometry = new THREE.IcosahedronGeometry(12, Math.min(visDetail, 32)); 
-                        visShape = 'Icosahedron'; 
                         break;
                 }
 
                 if (isPointsCloud) {
-                    const material = new THREE.PointsMaterial({
-                        color: 0xffffff,
-                        size: 0.2,
-                        transparent: true,
-                        opacity: 0.8
-                    });
+                    const material = new THREE.PointsMaterial({ color: 0xffffff, size: 0.2, transparent: true, opacity: 0.8 });
                     visualizerMesh = new THREE.Points(geometry, material);
                 } else {
+                    const isPSP = visShape === 'PSPWaves';
                     const material = new THREE.MeshBasicMaterial({
                         color: 0xffffff,
-                        wireframe: true,
+                        wireframe: !isPSP,
                         transparent: true,
-                        opacity: visShape === 'Tunnel' || visShape === 'Wormhole' ? 0.25 : 0.15,
-                        side: THREE.DoubleSide
+                        opacity: isPSP ? 0.5 : (visShape === 'Tunnel' || visShape === 'Wormhole' ? 0.25 : 0.15),
+                        blending: isPSP ? THREE.NormalBlending : THREE.NormalBlending,
+                        side: THREE.DoubleSide,
+                        depthWrite: !isPSP, 
+                        vertexColors: false 
                     });
                     visualizerMesh = new THREE.Mesh(geometry, material);
                 }
                 
                 scene.add(visualizerMesh);
-
                 camera.rotation.set(0, 0, 0); 
 
-                if (visShape === 'Tunnel') {
-                    camera.position.set(0, 0, 50); 
-                    visualizerMesh.position.set(0, 0, 0); 
-                } else if (visShape === 'Synthwave') {
-                    camera.position.set(0, 15, 80); 
-                    camera.lookAt(0, 0, 0);
-                    visualizerMesh.position.set(0, -10, 0); 
-                } else if (visShape === 'Wormhole') {
+                if (visShape === 'Tunnel') { camera.position.set(0, 0, 50); visualizerMesh.position.set(0, 0, 0); } 
+                else if (visShape === 'Synthwave') { camera.position.set(0, 15, 80); camera.lookAt(0, 0, 0); visualizerMesh.position.set(0, -10, 0); } 
+                else if (visShape === 'PSPWaves') { 
                     camera.position.set(0, 0, 60); 
-                    visualizerMesh.position.set(0, 0, 0);
-                } else {
-                    camera.position.set(0, 0, 35);
-                    camera.fov = 75; 
-                    camera.updateProjectionMatrix();
-                    visualizerMesh.position.y = visYPos;
+                    camera.fov = 60; 
+                    camera.updateProjectionMatrix(); 
+                    visualizerMesh.position.y = visYPos - 5; 
                 }
+                else { camera.position.set(0, 0, 35); camera.fov = 75; camera.updateProjectionMatrix(); visualizerMesh.position.y = visYPos; }
 
                 visualizerMesh.scale.set(visDimension, visDimension, visDimension);
-
                 const positionAttribute = geometry.attributes.position;
                 
-                // USE FLOAT32ARRAY FOR OPTIMIZED MEMORY
                 originalPositions = new Float32Array(positionAttribute.count * 3);
                 for (let i = 0; i < positionAttribute.count; i++) {
                     originalPositions[i*3] = positionAttribute.getX(i);
                     originalPositions[i*3+1] = positionAttribute.getY(i);
                     originalPositions[i*3+2] = positionAttribute.getZ(i);
                 }
+                
+                lastPlayState_PSP = null;
             };
 
             buildVisualizerMesh(); 
 
             const handleSettingsUpdate = () => {
-                const newShape = localStorage.getItem('psyzx_vis_shape') || 'Icosahedron';
+                const newShape = localStorage.getItem('psyzx_vis_shape') || 'PSPWaves';
                 let nDet = parseInt(localStorage.getItem('psyzx_vis_detail'));
                 const newDetail = isNaN(nDet) ? 16 : nDet;
                 const newSides = localStorage.getItem('psyzx_vis_sides') || 'Default';
@@ -331,29 +271,27 @@
                 let nDim = parseFloat(localStorage.getItem('psyzx_vis_dimension'));
                 visDimension = isNaN(nDim) ? 1.0 : nDim;
 
-                // Update cached loop variables
                 const nSpeed = parseFloat(localStorage.getItem('psyzx_vis_speed'));
                 visSpeed = isNaN(nSpeed) ? 1.0 : nSpeed;
                 const nInt = parseFloat(localStorage.getItem('psyzx_vis_intensity'));
                 visIntensity = isNaN(nInt) ? 1.0 : nInt;
 
                 if (visualizerMesh) {
-                    if (!['Tunnel', 'Synthwave', 'Wormhole'].includes(visShape)) {
+                    if (!['Tunnel', 'Synthwave', 'PSPWaves'].includes(visShape)) {
                         visualizerMesh.position.y = visYPos;
+                    } else if (visShape === 'PSPWaves') {
+                        visualizerMesh.position.y = visYPos - 5;
                     }
                     visualizerMesh.scale.set(visDimension, visDimension, visDimension);
                 }
 
                 if (newShape !== visShape || newDetail !== visDetail || newSides !== visSides) {
-                    visShape = newShape;
-                    visDetail = newDetail;
-                    visSides = newSides;
+                    visShape = newShape; visDetail = newDetail; visSides = newSides;
                     buildVisualizerMesh();
                 }
             };
 
             window.addEventListener('visualizer-update', handleSettingsUpdate);
-
             const vertex = new THREE.Vector3();
 
             const handleResize = () => {
@@ -369,25 +307,41 @@
 
             let time = 0; 
 
-            // Render Loop
             const animate = () => {
                 visualizerRafId = requestAnimationFrame(animate);
                 time += 0.01;
-                
-                // Using cached memory values instead of localStorage lookups
                 activeSpeedMultiplier = lerp(activeSpeedMultiplier, $isPlaying ? visSpeed : 0.05, 0.05);
 
                 if (visualizerMesh) {
-                    const rawFftData = getFftData();
                     
+                    if (visShape === 'PSPWaves') {
+                        if ($isPlaying) {
+                            transitionFactor = lerp(transitionFactor, 1.0, 0.06);
+                        } else {
+                            transitionFactor = lerp(transitionFactor, 0.0, 0.4); 
+                        }
+
+                        if (lastPlayState_PSP !== $isPlaying) {
+                            lastPlayState_PSP = $isPlaying;
+                            visualizerMesh.material.blending = $isPlaying ? THREE.AdditiveBlending : THREE.NormalBlending;
+                            visualizerMesh.material.opacity = 0.5; 
+                            visualizerMesh.material.depthWrite = !$isPlaying; 
+                            visualizerMesh.material.needsUpdate = true;
+                        }
+                    }
+
+                    let rawFftData = null;
+                    try { rawFftData = getFftData(); } catch(e) {}
+                    if (!rawFftData || rawFftData.length === 0) {
+                        rawFftData = new Uint8Array(256); 
+                    }
+
                     if (rawFftData && (!smoothedFftData || smoothedFftData.length !== rawFftData.length)) {
                         smoothedFftData = new Float32Array(rawFftData.length);
                     }
 
                     if (rawFftData && smoothedFftData) {
-                        let totalSum = 0;
-                        let bassSum = 0;
-                        let trebleSum = 0;
+                        let totalSum = 0; let bassSum = 0; let trebleSum = 0;
                         const bassCutoff = Math.floor(rawFftData.length * 0.10); 
                         const trebleStart = Math.floor(rawFftData.length * 0.60); 
 
@@ -400,7 +354,6 @@
                             const target = $isPlaying ? rawFftData[i] : 0;
                             const smoothingFactor = $isPlaying ? 0.4 : 0.05; 
                             smoothedFftData[i] = lerp(smoothedFftData[i], target, smoothingFactor);
-                            
                             totalSum += smoothedFftData[i];
                             if (i < bassCutoff) bassSum += smoothedFftData[i];
                             if (i > trebleStart) trebleSum += smoothedFftData[i];
@@ -408,21 +361,13 @@
 
                         const audioIntensity = (totalSum / smoothedFftData.length) / 255.0; 
                         const trebleIntensity = (trebleSum / (rawFftData.length - trebleStart)) / 255.0;
-
                         const positions = visualizerMesh.geometry.attributes.position;
                         
                         if (visShape === 'Tunnel') {
                             const targetTunnelSpeed = 0.15 + (dynamicBass * 1.1 * visIntensity);
-                            
-                            if (targetTunnelSpeed > currentTunnelSpeed) {
-                                currentTunnelSpeed = lerp(currentTunnelSpeed, targetTunnelSpeed, 0.8); 
-                            } else {
-                                currentTunnelSpeed = lerp(currentTunnelSpeed, targetTunnelSpeed, 0.05); 
-                            }
-
+                            currentTunnelSpeed = targetTunnelSpeed > currentTunnelSpeed ? lerp(currentTunnelSpeed, targetTunnelSpeed, 0.8) : lerp(currentTunnelSpeed, targetTunnelSpeed, 0.05);
                             camera.position.z -= (currentTunnelSpeed * activeSpeedMultiplier);
                             if (camera.position.z <= -50) camera.position.z += 50; 
-
                             const targetFov = 75 + (dynamicBass * 45 * visIntensity);
                             camera.fov = lerp(camera.fov, targetFov, targetFov > camera.fov ? 0.9 : 0.1);
                             camera.updateProjectionMatrix();
@@ -435,155 +380,137 @@
                                 positions.setXYZ(i, vertex.x * expand, vertex.y * expand, vertex.z);
                             }
                             visualizerMesh.rotation.z += (0.002 * activeSpeedMultiplier);
-
                         } 
+                        else if (visShape === 'PSPWaves') {
+                            const currentWaveSpeed = $isPlaying ? (1.0 + dynamicBass * 8.0 * visIntensity) : 1.0;
+                            pspWavePhase += 0.01 * currentWaveSpeed;
+
+                            const segments = Math.max(160, visDetail * 5);
+                            const vertsPerRibbon = (segments + 1) * 2;
+                            const width = 240;
+
+                            for (let i = 0; i < positions.count; i++) {
+                                vertex.set(originalPositions[i*3], originalPositions[i*3+1], originalPositions[i*3+2]);
+                                
+                                const ribbonIdx = Math.floor(i / vertsPerRibbon);
+                                const isTop = i % 2 === 0; 
+                                const xMap = (vertex.x + width/2) / width; 
+                                
+                                const centerDist = Math.abs(xMap - 0.5) * 2.0; 
+                                const binIndex = Math.floor(centerDist * (smoothedFftData.length * 0.4)); 
+                                const localAudio = (smoothedFftData[binIndex] / 255.0);
+
+                                const speed = pspWavePhase * (1.2 + ribbonIdx * 0.4);
+                                const xVal = xMap * Math.PI * 2.0; 
+                                
+                                let waveY = 0;
+                                const baseAmp = 1.5; 
+                                
+                                // Significantly reduced the main amplitude so the ocean doesn't "rise"
+                                const fullAmp = 4.0 * visIntensity; 
+                                const currentAmp = baseAmp + (transitionFactor * fullAmp);
+                                
+                                if (ribbonIdx === 0) {
+                                    waveY += Math.sin(xVal * 1.2 - speed * 1.0) * currentAmp;
+                                    waveY += Math.cos(xVal * 2.2 - speed * 1.3) * (currentAmp * 0.35);
+                                } else {
+                                    waveY += Math.sin(xVal * 1.4 - speed * 0.9) * currentAmp;
+                                    waveY += Math.cos(xVal * 2.5 - speed * 1.1) * (currentAmp * 0.25);
+                                }
+
+                                // MICRO-RIPPLE LOGIC
+                                // Tiny, high-frequency details that ride on top of the main crests
+                                if ($isPlaying) {
+                                    const rippleAmp = Math.pow(localAudio, 2.0) * rippleIntensity * visIntensity * transitionFactor; 
+                                    if (rippleAmp > 0.01) {
+                                        waveY += Math.sin(xVal * 40.0 - speed * 3.5) * rippleAmp;
+                                    }
+                                }
+
+                                const stringThickness = 0.3; 
+                                const dropDistance = 120.0 * transitionFactor; 
+                                
+                                if (isTop) {
+                                    vertex.y = waveY + stringThickness; 
+                                } else {
+                                    vertex.y = waveY - stringThickness - dropDistance; 
+                                }
+                                
+                                positions.setXYZ(i, vertex.x, vertex.y, vertex.z);
+                            }
+                            
+                            // SUBTLE, DYNAMIC TILT LOGIC (-15 to +15 Degrees)
+                            let targetRotX = Math.sin(time * 0.3) * 0.05; // Base ambient tilt
+                            let targetRotY = Math.cos(time * 0.2) * 0.04;
+                            let targetRotZ = 0;
+
+                            if ($isPlaying && dynamicBass > 0.05) {
+                                // maxTiltDegrees converted to radians is ~0.261 for 15 degrees
+                                const maxRad = maxTiltDegrees * (Math.PI / 180.0);
+                                // Pseudo-random organic sway mapped to the beat
+                                const sway = (Math.sin(time * 3.1) + Math.cos(time * 2.7)) * 0.5; 
+                                targetRotZ = sway * maxRad * Math.min(1.0, dynamicBass * 1.5);
+                            }
+
+                            // Smoothly ease into the target rotation so it looks natural
+                            visualizerMesh.rotation.x = lerp(visualizerMesh.rotation.x, targetRotX, 0.1);
+                            visualizerMesh.rotation.y = lerp(visualizerMesh.rotation.y, targetRotY, 0.1);
+                            visualizerMesh.rotation.z = lerp(visualizerMesh.rotation.z, targetRotZ, 0.08);
+                        }
                         else if (visShape === 'DNA') {
                             const targetTwist = 0.15 + (dynamicBass * 0.12 * visIntensity);
                             currentDnaTwist = lerp(currentDnaTwist, targetTwist, targetTwist > currentDnaTwist ? 0.7 : 0.05);
-
                             for (let i = 0; i < positions.count; i++) {
                                 vertex.set(originalPositions[i*3], originalPositions[i*3+1], originalPositions[i*3+2]);
                                 const theta = vertex.x * currentDnaTwist;
                                 const y = vertex.y * Math.cos(theta) - vertex.z * Math.sin(theta);
                                 const z = vertex.y * Math.sin(theta) + vertex.z * Math.cos(theta);
-
                                 const binIndex = (i * 2) % smoothedFftData.length; 
                                 const audioValue = (smoothedFftData[binIndex] / 255.0) * visIntensity * 0.2; 
                                 const expand = 1.0 + audioValue; 
                                 positions.setXYZ(i, vertex.x, y * expand, z * expand);
                             }
                             visualizerMesh.rotation.x += (0.005 * activeSpeedMultiplier);
-
                         }
                         else if (visShape === 'Synthwave') {
                             for (let i = 0; i < positions.count; i++) {
                                 vertex.set(originalPositions[i*3], originalPositions[i*3+1], originalPositions[i*3+2]);
-                                
                                 let movingZ = vertex.z + (time * 50 * activeSpeedMultiplier);
                                 movingZ = movingZ % 200; 
-                                
                                 const binIndex = Math.floor((Math.abs(vertex.x) / 100) * smoothedFftData.length) % smoothedFftData.length;
                                 const audioValue = (smoothedFftData[binIndex] / 255.0) * visIntensity;
-                                
                                 const elevation = audioValue * 20.0;
                                 positions.setXYZ(i, vertex.x, vertex.y, movingZ - 100); 
                                 positions.setY(i, elevation); 
                             }
-                            
-                            if (visMovement === 'Pulsate') {
-                               visualizerMesh.position.y = -10 + (Math.sin(time*2) * audioIntensity * 5 * visDimension);
-                            }
-
-                        }
-                        else if (visShape === 'Galaxy') {
-                            for (let i = 0; i < positions.count; i++) {
-                                vertex.set(originalPositions[i*3], originalPositions[i*3+1], originalPositions[i*3+2]);
-                                const binIndex = (i * 3) % smoothedFftData.length; 
-                                const audioValue = (smoothedFftData[binIndex] / 255.0) * visIntensity; 
-                                
-                                vertex.multiplyScalar(1.0 + (audioValue * 0.6));
-                                positions.setXYZ(i, vertex.x, vertex.y, vertex.z);
-                            }
-                            visualizerMesh.rotation.y += (0.003 * activeSpeedMultiplier);
-                            if (visMovement === 'Pulsate') {
-                                visualizerMesh.scale.setScalar(visDimension + (audioIntensity * 0.2));
-                            } else {
-                                visualizerMesh.scale.setScalar(visDimension);
-                            }
-                        }
-                        else if (visShape === 'Wormhole') {
-                            const targetFov = 75 + (dynamicBass * 30 * visIntensity);
-                            camera.fov = lerp(camera.fov, targetFov, targetFov > camera.fov ? 0.9 : 0.1);
-                            camera.updateProjectionMatrix();
-
-                            for (let i = 0; i < positions.count; i++) {
-                                vertex.set(originalPositions[i*3], originalPositions[i*3+1], originalPositions[i*3+2]);
-                                const binIndex = (i * 2) % smoothedFftData.length; 
-                                const audioValue = (smoothedFftData[binIndex] / 255.0) * visIntensity * 0.3; 
-                                const expand = 1.0 + audioValue; 
-                                positions.setXYZ(i, vertex.x * expand, vertex.y * expand, vertex.z);
-                            }
-                            visualizerMesh.rotation.z += (0.005 * activeSpeedMultiplier);
-                        }
-                        else if (visShape === 'Fractal') {
-                            for (let i = 0; i < positions.count; i++) {
-                                vertex.set(originalPositions[i*3], originalPositions[i*3+1], originalPositions[i*3+2]);
-                                const len = vertex.length();
-                                vertex.normalize(); 
-                                
-                                const spike = trebleIntensity * visIntensity * 12.0; 
-                                vertex.multiplyScalar(len + spike);
-                                positions.setXYZ(i, vertex.x, vertex.y, vertex.z);
-                            }
-                            visualizerMesh.rotation.y += (0.004 * activeSpeedMultiplier);
-                            if (visMovement === 'Pulsate') visualizerMesh.scale.setScalar(visDimension + (audioIntensity * 0.1));
-                        }
-                        else if (visShape === 'Shell') {
-                            for (let i = 0; i < positions.count; i++) {
-                                vertex.set(originalPositions[i*3], originalPositions[i*3+1], originalPositions[i*3+2]);
-                                const len = vertex.length();
-                                vertex.normalize(); 
-                                
-                                const binIndex = (i * 2) % smoothedFftData.length; 
-                                const audioValue = (smoothedFftData[binIndex] / 255.0) * visIntensity; 
-                                
-                                vertex.x *= (1.0 + audioValue * 0.5);
-                                vertex.z *= (1.0 + audioValue * 0.5);
-                                vertex.multiplyScalar(len);
-
-                                positions.setXYZ(i, vertex.x, vertex.y, vertex.z);
-                            }
-                            visualizerMesh.rotation.y += (0.002 * activeSpeedMultiplier);
-                            visualizerMesh.rotation.x = Math.sin(time) * 0.1; 
+                            if (visMovement === 'Pulsate') visualizerMesh.position.y = -10 + (Math.sin(time*2) * audioIntensity * 5 * visDimension);
                         }
                         else {
                             if (Math.abs(camera.fov - 75) > 0.1) {
-                                camera.fov = lerp(camera.fov, 75, 0.1);
-                                camera.updateProjectionMatrix();
+                                camera.fov = lerp(camera.fov, 75, 0.1); camera.updateProjectionMatrix();
                             }
-
                             for (let i = 0; i < positions.count; i++) {
                                 vertex.set(originalPositions[i*3], originalPositions[i*3+1], originalPositions[i*3+2]);
                                 const len = vertex.length();
                                 vertex.normalize(); 
-                                
                                 const binIndex = (i * 2) % smoothedFftData.length; 
                                 const audioValue = (smoothedFftData[binIndex] / 255.0) * visIntensity; 
                                 const displacement = audioValue * 6.0; 
-                                
                                 vertex.multiplyScalar(len + displacement);
                                 positions.setXYZ(i, vertex.x, vertex.y, vertex.z);
                             }
-
                             switch (visMovement) {
-                                case 'Hypnotic':
-                                    visualizerMesh.rotation.x += (0.001 * activeSpeedMultiplier);
-                                    visualizerMesh.rotation.y += (0.002 * activeSpeedMultiplier);
-                                    break;
-                                case 'Pulsate':
-                                    const standardScale = 12 * visDimension; 
-                                    const scaleOffset = Math.sin(time * 2) * audioIntensity * standardScale * 0.2; 
-                                    visualizerMesh.scale.setScalar(visDimension + scaleOffset / 12); 
-                                    break;
-                                case 'None':
-                                    visualizerMesh.scale.setScalar(visDimension);
-                                    break;
+                                case 'Hypnotic': visualizerMesh.rotation.x += (0.001 * activeSpeedMultiplier); visualizerMesh.rotation.y += (0.002 * activeSpeedMultiplier); break;
+                                case 'Pulsate': const standardScale = 12 * visDimension; const scaleOffset = Math.sin(time * 2) * audioIntensity * standardScale * 0.2; visualizerMesh.scale.setScalar(visDimension + scaleOffset / 12); break;
+                                case 'None': visualizerMesh.scale.setScalar(visDimension); break;
                             }
                         }
-                        
                         positions.needsUpdate = true;
-
                     } else if (!$isPlaying && visualizerMesh) {
-                       if (visMovement === 'Pulsate' && !['Tunnel','Wormhole','Synthwave','Galaxy'].includes(visShape)) {
-                           visualizerMesh.scale.setScalar(visDimension);
-                       }
-                       if (camera.fov > 75) {
-                           camera.fov -= 1.0;
-                           camera.updateProjectionMatrix();
-                       }
+                       if (visMovement === 'Pulsate' && !['Tunnel','Synthwave','PSPWaves'].includes(visShape)) { visualizerMesh.scale.setScalar(visDimension); }
+                       if (camera.fov > 75) { camera.fov -= 1.0; camera.updateProjectionMatrix(); }
                     }
                 }
-
                 renderer.render(scene, camera);
             };
             animate();
@@ -593,30 +520,17 @@
                 window.removeEventListener('resize', handleResize);
                 resizeObserver.disconnect();
                 window.removeEventListener('visualizer-update', handleSettingsUpdate);
-                if (renderer) {
-                    node.removeChild(renderer.domElement);
-                    renderer.dispose();
-                }
-                if (visualizerMesh) {
-                    visualizerMesh.geometry.dispose();
-                    if (visualizerMesh.material) visualizerMesh.material.dispose();
-                }
+                if (renderer) { node.removeChild(renderer.domElement); renderer.dispose(); }
+                if (visualizerMesh) { visualizerMesh.geometry.dispose(); if (visualizerMesh.material) visualizerMesh.material.dispose(); }
             };
         });
 
-        return {
-            destroy() {
-                isDestroyed = true;
-                cleanup();
-            }
-        };
+        return { destroy() { isDestroyed = true; cleanup(); } };
     }
-    // ----------------------------------
 
     function handleCoverClick(e) {
         const currentTime = new Date().getTime();
         const tapLength = currentTime - lastTapTime;
-        
         clearTimeout(tapTimeout);
 
         if (tapLength < 300 && tapLength > 0) {
@@ -624,156 +538,113 @@
             toggleFavorite();
             e.preventDefault();
         } else {
-            tapTimeout = setTimeout(() => {
-                coverClick = !coverClick;
-            }, 300);
+            tapTimeout = setTimeout(() => { coverClick = !coverClick; }, 300);
         }
         lastTapTime = currentTime;
     }
 
     async function toggleFavorite() {
         if (!track || !track.id) return;
-
-        isFavorite = !isFavorite;
-        showHeartAnim = true;
+        isFavorite = !isFavorite; showHeartAnim = true;
         setTimeout(() => { showHeartAnim = false; }, 800);
-
         if (api.toggleFavorite) {
             const success = await api.toggleFavorite(track.id, isFavorite);
-            if (!success) {
-                isFavorite = !isFavorite;
-                console.error("[API] Failed to toggle favorite status");
-            }
+            if (!success) { isFavorite = !isFavorite; }
         }
     }
 
-    function handlePlayToggle() {
-        playToggle = !playToggle;
-    }
+    function handlePlayToggle() { playToggle = !playToggle; }
 
     const DEFAULT_PLACEHOLDER = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxIDEiPjxyZWN0IHdpZHRoPSIxIiBoZWlnaHQ9IjEiIGZpbGw9IiMzMzMiLz48L3N2Zz4=';
     const handleImageError = (ev) => { ev.target.src = DEFAULT_PLACEHOLDER; };
 
     $: isMobile = innerWidth <= 768;
 
-    let dragY = 0;
-    let isDragging = false;
-    let startY = 0;
+    let dragY = 0; let isDragging = false; let startY = 0;
 
     $: if (isOpen) {
-        isClosing = false; 
-        isClosingByDrag = false;
-        dragY = 0; 
-        startY = 0;
-        isDragging = false;
+        isClosing = false; isClosingByDrag = false;
+        dragY = 0; startY = 0; isDragging = false;
     }
 
     $: if (!isOpen && !isClosingByDrag) {
-        dragY = 0;
-        isDragging = false;
-        isClosing = true; 
+        dragY = 0; isDragging = false; isClosing = true; 
     }
 
     const onTouchStart = (e) => {
         if (isLyricsFullScreen || showQueue || isClosingByDrag) return;
-        isDragging = true;
-        startY = e.touches[0].clientY;
+        isDragging = true; startY = e.touches[0].clientY;
     };
 
     const onTouchMove = (e) => {
         if (!isDragging) return;
         const currentY = e.touches[0].clientY;
         const deltaY = currentY - startY;
-        
-        if (deltaY > 0) { dragY = deltaY; } 
-        else { dragY = deltaY * 0.25; }
+        if (deltaY > 0) { dragY = deltaY; } else { dragY = deltaY * 0.25; }
     };
 
     const onTouchEnd = () => {
         if (!isDragging) return;
         isDragging = false;
-
         if (dragY > 60) {
-            isClosing = true;
-            isClosingByDrag = true;
-            
-            const startYPos = dragY;
-            const targetY = window.innerHeight;
-            const duration = 250;
-            const startTime = Date.now(); 
-            
+            isClosing = true; isClosingByDrag = true;
+            const startYPos = dragY; const targetY = window.innerHeight;
+            const duration = 250; const startTime = Date.now(); 
             const fall = () => { 
                 const t = Math.min((Date.now() - startTime) / duration, 1);
                 dragY = startYPos + (targetY - startYPos) * t; 
-                
-                if (t < 1) {
-                    requestAnimationFrame(fall);
-                } else {
-                    handleClose();
-                }
+                if (t < 1) requestAnimationFrame(fall); else handleClose();
             };
             requestAnimationFrame(fall);
-        } else {
-            dragY = 0; 
-        }
+        } else { dragY = 0; }
         startY = 0;
     };
 
     const handleClose = () => {
-        isClosing = true;
-        dispatch('close');
+        isClosing = true; dispatch('close');
         if (!isClosingByDrag) dragY = 0; 
     };
 
     $: if (typeof document !== 'undefined') {
-        if (isOpen && isMobile) { document.body.classList.add('modal-open'); } 
-        else { document.body.classList.remove('modal-open'); }
+        if (isOpen && isMobile) document.body.classList.add('modal-open'); 
+        else document.body.classList.remove('modal-open'); 
     }
 
     let wasPlayerElPresent = false;
 
     const frameLoop = () => {
+        if (showDiagnostics) {
+            const liveData = getAudioDiagnostics();
+            diagData = { ...diagData, ...liveData };
+        }
+
         if (!isSeekingBar) {
             const current = $playerCurrentTime || 0;
             const duration = $playerDuration || 1;
             const pct = current / duration;
 
-            if (progressRef && !isNaN(pct)) {
-                progressRef.style.transform = `translateZ(0) scaleX(${pct})`;
-            }
+            if (progressRef && !isNaN(pct)) progressRef.style.transform = `translateZ(0) scaleX(${pct})`;
             if (currentTimeRef) {
                 const formatted = formatTime(current);
-                if (currentTimeRef.textContent !== formatted) {
-                    currentTimeRef.textContent = formatted;
-                }
+                if (currentTimeRef.textContent !== formatted) currentTimeRef.textContent = formatted;
             }
         }
 
-        // --- FIXED TRUE BUFFER BAR SYNCING ---
         let targetBuffer = 0;
-        
         if ($isBuffering && displayBufferPct < 95) {
             targetBuffer = Math.min(displayBufferPct + 1.5, 95); 
         } else if (track && activeDownloads[track] !== undefined) {
             targetBuffer = activeDownloads[track];
         } else {
-            // Fetch actual loaded percentage from audio engine
             const trueBuffer = getBufferedPct();
             const playheadPct = (($playerCurrentTime || 0) / ($playerDuration || 1)) * 100;
-            
-            // Show the highest of either the true buffer or the playhead to prevent visual snapping
             targetBuffer = Math.max(trueBuffer, playheadPct);
-            targetBuffer = Math.max(targetBuffer, displayBufferPct); // Prevent backward jumps
-            
+            targetBuffer = Math.max(targetBuffer, displayBufferPct); 
             if (targetBuffer >= 98.5) targetBuffer = 100; 
         }
 
         displayBufferPct = lerp(displayBufferPct, targetBuffer, 0.06);
-
-        if (bufferRef) {
-            bufferRef.style.transform = `scaleX(${displayBufferPct / 100})`;
-        }
-        // -------------------------------------
+        if (bufferRef) bufferRef.style.transform = `scaleX(${displayBufferPct / 100})`;
 
         if (typeof document !== 'undefined') {
             const appLayout = document.getElementById('app-layout');
@@ -840,28 +711,27 @@
         }
     });
 
-    // Initialize springs with the saved values from our store
     let eqMaster = spring(0, { stiffness: 0.15, damping: 0.8 });
     let eqBands = spring($eqBandValues, { stiffness: 0.1, damping: 0.8 });
-
-    // Sync audio engine whenever the spring updates
     $: $eqBands.forEach((val, i) => setEqBand(i, val));
+
+    // --- OPTIMIZATION: Debounce heavy localStorage writes during slider drags ---
+    let eqSaveTimeout;
+    const saveEqDebounced = (bands) => {
+        clearTimeout(eqSaveTimeout);
+        eqSaveTimeout = setTimeout(() => {
+            eqBandValues.set(bands); // Saves to localStorage
+        }, 500); 
+    };
 
     const syncMasterEq = (event) => {
         const val = parseFloat(event.target.value);
-        eqPreset.set('Custom'); // Any movement makes it custom
+        eqPreset.set('Custom'); 
         eqMaster.set(val, { hard: true });
         
         const newBands = [val, val, val, val, val, val];
         eqBands.set(newBands, { hard: true });
-        eqBandValues.set(newBands); // Save to localStorage
-    };
-
-    const applyPreset = (name) => {
-        eqPreset.set(name);
-        const presetValues = [...presets[name]];
-        eqBands.set(presetValues);
-        eqBandValues.set(presetValues); // Save to localStorage
+        saveEqDebounced(newBands); 
     };
 
     const handleEqChange = (index, event) => {
@@ -870,54 +740,29 @@
         
         eqBands.update(current => {
             current[index] = val;
-            // Update the persistent store with the new array
-            eqBandValues.set(current); 
+            saveEqDebounced(current); 
             return current;
         }, { hard: true }); 
     };
 
+    const applyPreset = (name) => {
+        eqPreset.set(name);
+        const presetValues = [...presets[name]];
+        eqBands.set(presetValues);
+        eqBandValues.set(presetValues); 
+    };
+
+
     const presets = {
-        'Flat': [0, 0, 0, 0, 0, 0],
-        'Full Blast': [12, 12, 12, 6, 12, 12],
-        'V-Shape': [5, 2, -2, 1, 4, 6],
-        'Bass Boost': [6, 4, 0, 0, 0, 0],
-        'Acoustic': [2, 1, 3, 1, 2, 1],
-        'Electronic': [5, 3, -1, 2, 4, 5],
+        'Flat': [0, 0, 0, 0, 0, 0], 'Full Blast': [12, 12, 12, 6, 12, 12],
+        'V-Shape': [5, 2, -2, 1, 4, 6], 'Bass Boost': [6, 4, 0, 0, 0, 0],
+        'Acoustic': [2, 1, 3, 1, 2, 1], 'Electronic': [5, 3, -1, 2, 4, 5],
         'Vocal Pop': [-1, -1, 3, 4, 2, 0]
     };
     let currentPreset = 'Flat';
 
-    let lyrics = [{ t: 0, text: "♪ (Music) ♪" }];
-
-    $: if (track && track.title && isOpen) {
-        const artistName = track.album?.artist?.name || album?.artistName || 'Unknown Artist';
-        
-        // Added track.id as the first parameter
-        fetchLyricsOnFrontend(track.id, artistName, track.title)
-            .then(data => {
-                if (data && data.length > 0) {
-                    lyrics = data;
-                } else {
-                    lyrics = [{ t: 0, text: "♪ (Instrumental) ♪" }];
-                }
-            })
-            .catch(() => {
-                lyrics = [{ t: 0, text: "♪ (Lyrics Unavailable) ♪" }];
-            });
-    }
-
-    $: hasSyncLyrics = lyrics.length > 0 &&
-                       lyrics[0].text !== "◆ LYRICS SYNC NOT AVAILABLE ◆" &&
-                       lyrics[0].text !== "♪ (Instrumental / No text) ♪" &&
-                       lyrics[0].text !== "♪ (Lyrics Unavailable) ♪" &&
-                       lyrics[0].text !== "♪ (Text not available) ♪" &&
-                       lyrics[0].text !== "♪ (Instrumental) ♪" &&
-                       lyrics[0].text !== "♪ (Music) ♪" &&
-                       lyrics[0].text !== "♪";
-
     const handleUserScroll = () => {
-        isUserScrolling = true;
-        clearTimeout(scrollTimeout);
+        isUserScrolling = true; clearTimeout(scrollTimeout);
         scrollTimeout = setTimeout(() => { isUserScrolling = false; lastScrolledIdx = -1; }, 3000);
     };
 
@@ -932,115 +777,60 @@
             window.scrollTo({ top: 0, behavior: 'smooth' });
         };
         requestAnimationFrame(executeScroll);
-        setTimeout(executeScroll, 100);
-        setTimeout(executeScroll, 400); 
+        setTimeout(executeScroll, 100); setTimeout(executeScroll, 400); 
     };
 
     const goArtist = () => {
         if (album && album.artistId) {
-            handleClose();
-            window.location.hash = `#artist/${album.artistId}`;
-            triggerScrollToTop();
+            handleClose(); window.location.hash = `#artist/${album.artistId}`; triggerScrollToTop();
         }
     };
     
     const goAlbum = () => {
         if (track && track.albumId) {
-            handleClose();
-            window.location.hash = `#album/${track.albumId}`;
-            triggerScrollToTop();
+            handleClose(); window.location.hash = `#album/${track.albumId}`; triggerScrollToTop();
         }
     };
 
-    let pendingSeekTime = null;
-    let lastSeekX = 0;
-    let lastSeekTime = 0;
+    let pendingSeekTime = null; let lastSeekX = 0; let lastSeekTime = 0;
 
     const onSeekStart = (e) => { 
-        isSeekingBar = true; 
-        lastSeekX = e.touches ? e.touches[0].clientX : e.clientX;
-        lastSeekTime = Date.now();
-        if (isWebAudioMode) startScrubEffect();
+        isSeekingBar = true; lastSeekX = e.touches ? e.touches[0].clientX : e.clientX;
+        lastSeekTime = Date.now(); 
+        startScrubEffect(); // FIX: Fire universally
         updateSeek(e); 
     };
 
     const onSeekMove = (e) => { 
-        if (!isSeekingBar) return; 
-        e.preventDefault(); 
-        
-        const currentX = e.touches ? e.touches[0].clientX : e.clientX;
-        const now = Date.now();
-
-        if (isWebAudioMode) {
-            const dt = Math.max(1, now - lastSeekTime);
-            if (dt > 16) {
-                const dx = currentX - lastSeekX;
-                const speed = Math.abs(dx / dt);
-                const dir = dx >= 0 ? 1 : -1;
-                updateScrubEffect(speed, dir);
-                lastSeekX = currentX;
-                lastSeekTime = now;
-            }
+        if (!isSeekingBar) return; e.preventDefault(); 
+        const currentX = e.touches ? e.touches[0].clientX : e.clientX; const now = Date.now();
+        const dt = Math.max(1, now - lastSeekTime);
+        if (dt > 16) {
+            const dx = currentX - lastSeekX; const speed = Math.abs(dx / dt); const dir = dx >= 0 ? 1 : -1;
+            updateScrubEffect(speed, dir); lastSeekX = currentX; lastSeekTime = now;
         }
         updateSeek(e); 
     };
 
     const onSeekEnd = () => { 
-        if (isSeekingBar && isWebAudioMode) stopScrubEffect();
+        if (isSeekingBar) stopScrubEffect();
         isSeekingBar = false; 
-        if (pendingSeekTime !== null) {
-            activePlayer.currentTime = pendingSeekTime;
-            pendingSeekTime = null;
-        }
+        if (pendingSeekTime !== null) { activePlayer.currentTime = pendingSeekTime; pendingSeekTime = null; }
     };
 
     const updateSeek = (e) => {
         if (!$playerDuration || !progressContainerEl) return;
         const rect = progressContainerEl.getBoundingClientRect();
         const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-        
         const pct = Math.max(0, Math.min(0.990, (clientX - rect.left) / rect.width));
         pendingSeekTime = pct * $playerDuration;
-        
-        if (progressRef && !isNaN(pct)) {
-            progressRef.style.transform = `translateZ(0) scaleX(${pct})`;
-        }
-        if (currentTimeRef) {
-            currentTimeRef.textContent = formatTime(pendingSeekTime);
-        }
+        if (progressRef && !isNaN(pct)) progressRef.style.transform = `translateZ(0) scaleX(${pct})`;
+        if (currentTimeRef) currentTimeRef.textContent = formatTime(pendingSeekTime);
     };
-
-    $: effectiveLyricIdx = isSeekingBar && pendingSeekTime !== null
-        ? (lyrics ? lyrics.findLastIndex(l => pendingSeekTime >= l.t) : -1)
-        : (lyrics ? lyrics.findLastIndex(l => $playerCurrentTime >= l.t) : -1);
-
-    $: if (lyricsScrollEl && effectiveLyricIdx >= 0) {
-        if (isSeekingBar) {
-            const activeLine = lyricsScrollEl.querySelectorAll('.lyric-line')[effectiveLyricIdx];
-            if (activeLine) {
-                lyricsScrollEl.scrollTo({
-                    top: activeLine.offsetTop - lyricsScrollEl.clientHeight / 2 + activeLine.clientHeight / 2,
-                    behavior: 'auto'
-                });
-            }
-        } else if (!isUserScrolling && effectiveLyricIdx !== lastScrolledIdx) {
-            lastScrolledIdx = effectiveLyricIdx;
-            const activeLine = lyricsScrollEl.querySelectorAll('.lyric-line')[effectiveLyricIdx];
-            if (activeLine) {
-                lyricsScrollEl.scrollTo({
-                    top: activeLine.offsetTop - lyricsScrollEl.clientHeight / 2 + activeLine.clientHeight / 2,
-                    behavior: 'smooth'
-                });
-            }
-        }
-    }
 
     function getDynamicFontSize(text, isActive) {
         if (!isActive) return '10px';
-        const containerWidth = 380; 
-        const maxFontSize = 24;      
-        const minFontSize = 10;        
-        const glyphConstant = 0.70;  
+        const containerWidth = 380; const maxFontSize = 24; const minFontSize = 10; const glyphConstant = 0.70;  
         const calculatedSize = containerWidth / (text.length * glyphConstant);
         return `${Math.min(maxFontSize, Math.max(minFontSize, calculatedSize))}px`;
     }
@@ -1072,41 +862,156 @@
         e.currentTarget.style.setProperty('--m-y', `${e.clientY - rect.top}px`);
     };
 
+   // ─── STAGGERED NETWORK WATERFALL ──────────────────────────────────────────
     $: track = $currentPlaylist[$currentIndex];
     $: album = track ? $albumsMap.get(track.albumId) : null;
+    
+    // PRIORITY 1: Low-Res Image (Instant Reactivity)
     $: lowResCoverUrl = (album && album.coverPath) 
         ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&v=${$appSessionVersion}&quality=low` 
         : DEFAULT_PLACEHOLDER;
 
-    $: highResCoverUrl = (album && album.coverPath) 
-        ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&v=${$appSessionVersion}&quality=high` 
-        : DEFAULT_PLACEHOLDER;
-
-    let isHighResLoaded = false;
-    let activeHighResUrl = null;
-
-    // Background Image Preloader
-    $: if (highResCoverUrl) {
-        if (highResCoverUrl === DEFAULT_PLACEHOLDER) {
-            isHighResLoaded = true;
-            activeHighResUrl = DEFAULT_PLACEHOLDER;
-        } else {
-            isHighResLoaded = false;
-            const img = new Image();
-            img.onload = () => {
-                // Ensure we only trigger if the user hasn't skipped to another track already
-                if (img.src.includes(encodeURIComponent(album?.coverPath || ''))) {
-                    activeHighResUrl = highResCoverUrl;
-                    isHighResLoaded = true;
-                }
-            };
-            img.src = highResCoverUrl;
-        }
-    }
-    
     $: artistImageUrl = (artist && artist.imagePath) 
         ? `/api/Tracks/image?path=${encodeURIComponent(artist.imagePath)}&v=${$appSessionVersion}&quality=${$isLowQualityImages ? 'low' : 'high'}` 
         : DEFAULT_PLACEHOLDER;
+
+    // --- STATE FOR SYNCED LOADING ---
+    let currentAlbumId = null;
+    let currentTrackIdForLyrics = null;
+    let isHighResLoaded = false;
+    let activeHighResUrl = "";
+    let hiResImageObject = null;
+    let blurTimerFinished = false; // New flag for the 500ms minimum
+    let hiResReady = false; // Controls the CSS class for the fade
+
+    let lyrics = [{ t: 0, text: "♪ (Music) ♪" }];
+
+    // PRIORITY 3 & 4: High-Res Image & Lyrics (Updated with 500ms Minimum Blur)
+    function checkReveal(aId) {
+        if (currentAlbumId === aId && activeHighResUrl && blurTimerFinished) {
+            // We add a tiny 50ms buffer. This gives Svelte and the browser 
+            // just enough time to apply the new src to the DOM invisibly 
+            // before we trigger the CSS fade-in. This prevents the flash.
+            setTimeout(() => {
+                if (currentAlbumId === aId) hiResReady = true;
+            }, 50);
+        }
+    }
+
+    $: if (track && isOpen) {
+        const aId = album ? album.id : 'unknown';
+        
+        // Only trigger the blur sequence if the album actually changed
+        if (aId !== currentAlbumId) {
+            // --- ATOMIC RESET ---
+            currentAlbumId = aId;
+            currentTrackIdForLyrics = track.id;
+            
+            hiResReady = false;        // 1. Instantly hides high-res (thanks to new CSS)
+            blurTimerFinished = false; // 2. Reset the 500ms lock
+            activeHighResUrl = "";     // 3. Clear URL (safe because opacity is instantly 0)
+
+            // Start the minimum 500ms "Blur Lock"
+            setTimeout(() => {
+                if (currentAlbumId === aId) {
+                    blurTimerFinished = true;
+                    checkReveal(aId);
+                }
+            }, 500);
+
+            if (album?.coverPath) {
+                const hiRes = `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&v=${$appSessionVersion}&quality=${$isLowQualityImages ? 'low' : 'high'}`;
+                
+                const img = new Image();
+                img.onload = () => {
+                    if (currentAlbumId === aId) {
+                        activeHighResUrl = hiRes;
+                        checkReveal(aId);
+                    }
+                };
+                img.src = hiRes;
+            } else {
+                activeHighResUrl = DEFAULT_PLACEHOLDER;
+                checkReveal(aId);
+            }
+            triggerLyricsFetch(track);
+        } 
+        // If it's the SAME album but a DIFFERENT track, skip the blur entirely
+        else if (track.id !== currentTrackIdForLyrics) {
+            currentTrackIdForLyrics = track.id;
+            triggerLyricsFetch(track);
+        }
+    }
+
+    // --- DIAGNOSTICS STATE ---
+    let showDiagnostics = false;
+    let diagData = {};
+
+    const openDiagnostics = () => {
+        diagData = getAudioDiagnostics();
+        
+        // Scrape hardware network data if the browser supports it
+        if (navigator.connection) {
+            diagData.networkType = navigator.connection.effectiveType || 'Unknown';
+            diagData.downlink = navigator.connection.downlink ? `${navigator.connection.downlink} Mbps` : 'Unknown';
+            diagData.rtt = navigator.connection.rtt ? `${navigator.connection.rtt} ms` : 'Unknown';
+        } else {
+            diagData.networkType = 'Unsupported by browser';
+            diagData.downlink = 'N/A';
+            diagData.rtt = 'N/A';
+        }
+        
+        showDiagnostics = true;
+    };
+
+    function triggerLyricsFetch(t) {
+        if (!t) return;
+        lyrics = [{ t: 0, text: "♪ (Loading...) ♪" }];
+        const cid = t.id;
+        const artistName = t.album?.artist?.name || $albumsMap.get(t.albumId)?.artistName || 'Unknown Artist';
+        
+        fetchLyricsOnFrontend(cid, artistName, t.title)
+            .then(data => {
+                if (track.id !== cid) return;
+                lyrics = (data && data.length > 0) ? data : [{ t: 0, text: "♪ (Instrumental) ♪" }];
+            })
+            .catch(() => {
+                if (track.id !== cid) return;
+                lyrics = [{ t: 0, text: "♪ (Lyrics Unavailable) ♪" }];
+            });
+    }
+
+    $: effectiveLyricIdx = (() => {
+        const time = (isSeekingBar && pendingSeekTime !== null) ? pendingSeekTime : $playerCurrentTime;
+        if (!lyrics || lyrics.length === 0) return -1;
+        if (time < lyrics[0].t) return -1;
+        return lyrics.findLastIndex(l => time >= l.t);
+    })();
+
+    $: if (lyricsScrollEl && effectiveLyricIdx >= 0) {
+        if (isSeekingBar) {
+            const activeLine = lyricsScrollEl.querySelectorAll('.lyric-line')[effectiveLyricIdx];
+            if (activeLine) {
+                lyricsScrollEl.scrollTo({ top: activeLine.offsetTop - lyricsScrollEl.clientHeight / 2 + activeLine.clientHeight / 2, behavior: 'auto' });
+            }
+        } else if (!isUserScrolling && effectiveLyricIdx !== lastScrolledIdx) {
+            lastScrolledIdx = effectiveLyricIdx;
+            const activeLine = lyricsScrollEl.querySelectorAll('.lyric-line')[effectiveLyricIdx];
+            if (activeLine) {
+                lyricsScrollEl.scrollTo({ top: activeLine.offsetTop - lyricsScrollEl.clientHeight / 2 + activeLine.clientHeight / 2, behavior: 'smooth' });
+            }
+        }
+    }
+
+    $: hasSyncLyrics = lyrics.length > 0 &&
+                       lyrics[0].text !== "◆ LYRICS SYNC NOT AVAILABLE ◆" &&
+                       lyrics[0].text !== "♪ (Instrumental / No text) ♪" &&
+                       lyrics[0].text !== "♪ (Loading...) ♪" &&
+                       lyrics[0].text !== "♪ (Lyrics Unavailable) ♪" &&
+                       lyrics[0].text !== "♪ (Text not available) ♪" &&
+                       lyrics[0].text !== "♪ (Instrumental) ♪" &&
+                       lyrics[0].text !== "♪ (Music) ♪" &&
+                       lyrics[0].text !== "♪";
 </script>
 
 <svelte:window
@@ -1155,6 +1060,13 @@
                 
                 <div class="fp-header">
                     <span class="fp-header-title">NOW PLAYING</span>
+                    <button class="btn-icon" style="padding: 0; margin-top: -10px; opacity: 0.5;" on:click={openDiagnostics} aria-label="Diagnostics">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <line x1="12" y1="16" x2="12" y2="12"></line>
+                            <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                        </svg>
+                    </button>
                 </div>
             </div>
 
@@ -1163,24 +1075,19 @@
                 <div class="fp-cover-container" class:shrink={hasSyncLyrics && !coverClick} on:click={handleCoverClick} role="button" tabindex="0">
                     
                     <div class="sober-cover-wrapper">
-                        {#key lowResCoverUrl}
-                            <img 
-                                class="sober-cover low-res" 
-                                src={lowResCoverUrl} 
-                                alt="Album Cover" 
-                                on:error={handleImageError} 
-                            />
-                        {/key}
+                        <img 
+                            class="sober-cover low-res" 
+                            src={lowResCoverUrl} 
+                            alt="" 
+                            on:error={handleImageError} 
+                        />
                         
-                        {#if isHighResLoaded && activeHighResUrl}
-                            {#key activeHighResUrl}
-                                <img 
-                                    class="sober-cover high-res installed-pop" 
-                                    src={activeHighResUrl} 
-                                    alt="Album Cover" 
-                                />
-                            {/key}
-                        {/if}
+                        <img 
+                            class="sober-cover high-res" 
+                            class:is-visible={hiResReady}
+                            src={activeHighResUrl} 
+                            alt="" 
+                        />
                     </div>
                     
                     {#if showHeartAnim}
@@ -1426,6 +1333,52 @@
     {/if}
 {/if}
 
+{#if showDiagnostics}
+        <div class="lyrics-modal-popup" style="z-index: 9999999999;" use:portal={true} in:fly={{y: '100%', duration: 400, easing: expoOut}} out:fly={{y: '100%', duration: 200, easing: expoIn}}>
+            <div class="lyrics-modal-header">
+                <h3 class="modal-title">Engine Diagnostics</h3>
+                <button class="btn-icon" on:click={() => showDiagnostics = false}>
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
+            </div>
+            <div class="lyrics-scroll-box" style="padding: 24px; text-align: left; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: rgba(255,255,255,0.7); line-height: 1.8;">
+                
+                <div style="margin-bottom: 12px; padding: 12px; background: rgba(0,0,0,0.4); border-radius: 8px; border-left: 3px solid #60a5fa;">
+                    <strong style="color: #fff;">Network Profile:</strong><br>
+                    Connection: <span style="color: {diagData.networkType === '4g' || diagData.networkType === 'wifi' ? '#4ade80' : '#f87171'}">{diagData.networkType}</span><br>
+                    Bandwidth: <span style="color: #38bdf8">{diagData.downlink}</span><br>
+                    Latency (RTT): <span style="color: {parseInt(diagData.rtt) < 150 ? '#4ade80' : '#f87171'}">{diagData.rtt}</span>
+                </div>
+
+                <div style="margin-bottom: 12px; padding: 12px; background: rgba(0,0,0,0.4); border-radius: 8px; border-left: 3px solid var(--accent-color);">
+                    <strong style="color: #fff;">WebAudio Pipeline:</strong><br>
+                    Engine Mode: <span style="color: {diagData.mode === 'WebAudio API' ? '#c084fc' : '#facc15'}">{diagData.mode}</span><br>
+                    AudioCtx State: <span style="color: {diagData.ctxState === 'running' ? '#4ade80' : (diagData.ctxState === 'suspended' ? '#facc15' : '#f87171')}">{diagData.ctxState}</span><br>
+                    Track Load ID: <span style="color: #cbd5e1">{track?.id || 'None'}</span><br>
+                    UI Buffering Flag: <span style="color: {$isBuffering ? '#f87171' : '#4ade80'}">{$isBuffering.toString().toUpperCase()}</span>
+                </div>
+
+                <div style="margin-bottom: 12px; padding: 12px; background: rgba(0,0,0,0.4); border-radius: 8px; border-left: 3px solid #fbbf24;">
+                    <strong style="color: #fff;">Decoder & Cache:</strong><br>
+                    Current Track Decoded: <span style="color: {diagData.bufferDecoded ? '#4ade80' : '#f87171'}">{diagData.bufferDecoded ? 'READY' : 'WAITING'}</span><br>
+                    Active Decodes: <span style="color: {diagData.activeDecodes > 0 ? '#fbbf24' : '#a3a3a3'}">{diagData.activeDecodes} Threads</span><br>
+                    Decoded Buffer Cache: <span style="color: #38bdf8">{diagData.cacheSize} / 5</span>
+                </div>
+
+                <div style="padding: 12px; background: rgba(0,0,0,0.4); border-radius: 8px; border-left: 3px solid #34d399;">
+                    <strong style="color: #fff;">MSE Network Stream:</strong><br>
+                    Stream Complete: <span style="color: {diagData.mseFetchComplete ? '#4ade80' : '#fbbf24'}">{diagData.mseFetchComplete ? 'YES' : 'STREAMING...'}</span><br>
+                    Bytes Downloaded: <span style="color: #38bdf8">{(diagData.mseLoadedBytes / 1024 / 1024).toFixed(2)} MB</span><br>
+                    MSE ReadyState: <span style="color: {diagData.mseReadyState === 'open' ? '#4ade80' : '#facc15'}">{diagData.mseReadyState}</span><br>
+                    MSE Connected to Output: <span style="color: {diagData.mseWired ? '#4ade80' : '#f87171'}">{diagData.mseWired ? 'YES' : 'NO'}</span><br><br>
+
+                    <strong style="color: #fff;">HTML5 Background Keep-Alive:</strong><br>
+                    <span style="color: #a3a3a3">{diagData.html5Status}</span>
+                </div>
+            </div>
+        </div>
+    {/if}
+
 <style>
    /* --- NEW VISUALIZER STYLES --- */
     .visualizer-bg {
@@ -1450,80 +1403,75 @@
     }
     /* ----------------------------- */
 
-    /* --- ARTIST PROFILE CARD (FIXED FROST & HEIGHT) --- */
+    /* --- ARTIST PROFILE CARD --- */
     .artist-profile-card {
         position: relative;
-        overflow: hidden;    /* Required to clip the -1px overhang */
-        /* 1. INCREASE HEIGHT: Changed from 280px to 350px (adjust as needed) */
         height: 350px; 
         border-radius: 28px;
-        overflow: hidden;
         margin-top: 24px;
-        flex-shrink: 0;
         cursor: pointer;
-        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4), inset 0 1px 1px rgba(255, 255, 255, 0.1);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        background: #111;
-        transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
-        -webkit-transform: translateZ(0);
-        isolation: isolate;
+        overflow: hidden; /* Clips everything inside */
         
-        /* 2. OPTIONAL: Ensure the card itself stretches to its container width */
-        width: 100%; 
+        /* FIX 1: Remove solid background. Use a dark semi-transparent fill 
+        to ensure the browser doesn't "occlude" the layers underneath. */
+        background: rgba(17, 17, 17, 0.01); 
+        
+        /* FIX 2: Force a new composite layer for the entire card */
+        transform: translateZ(0);
+        -webkit-transform: translateZ(0);
     }
 
     .artist-bg-img {
-        /* 3. FULL COVERAGE: This ensures the image fills 100% of the card 
-        regardless of the image's original aspect ratio */
+        position: absolute;
+        inset: 0; /* Shorthand for top/left/right/bottom: 0 */
         width: 100%;
         height: 100%;
-        object-fit: cover; 
-        
-        position: absolute;
-        top: 0; 
-        left: 0;
-        z-index: 0;
-        
-        /* Keeping your zoom effect */
+        object-fit: cover;
+        z-index: 1; /* Lowest layer */
         transform: scale(1.05);
-        /* Ensure the transform centers properly */
-        transform-origin: center; 
     }
 
+    /* --- THE FROSTED OVERLAY --- */
     .artist-frosted-overlay {
         position: absolute;
-        /* 1. THE OVERHANG: Move it 1px outside the left and bottom edges */
-        left: -1px;
-        bottom: -1px;
-        /* 2. CALC WIDTH: Make it 2px wider to cover both left and right edges */
-        width: calc(100% + 2px);
+        left: 0;
+        bottom: 0;
+        width: 100%;
         height: 35%; 
+        z-index: 2; /* Sits above image */
         
-        box-sizing: border-box; 
-        
-        background: linear-gradient(
-            to bottom, 
-            rgba(255, 255, 255, 0.15) 0%, 
-            rgba(0, 0, 0, 0.85) 100%
-        );
-
-        /* 3. RADIUS MATCH: Match the parent card's radius exactly */
-        border-bottom-left-radius: 26px;
-        border-bottom-right-radius: 26px;
-
-        /* 4. REMOVE ALL BORDERS: Explicitly stripping them */
-        border: none !important;
-
-        /* 5. BLUR EFFECT */
-        backdrop-filter: blur(15px) saturate(160%);
-        -webkit-backdrop-filter: blur(15px) saturate(160%);
-        
-        z-index: 1;
         display: flex;
         flex-direction: column;
         justify-content: center;
         padding: 0 24px;
-        overflow: hidden; 
+        box-sizing: border-box;
+        
+        /* FIX 3: Gradient must be semi-transparent to see the blur */
+        background: linear-gradient(
+            to bottom, 
+            rgba(255, 255, 255, 0.1) 0%, 
+            rgba(0, 0, 0, 0.7) 100%
+        );
+        
+        /* Important: Hide overflow so the blur pseudo-element doesn't leak */
+        overflow: hidden;
+        border-bottom-left-radius: 28px;
+        border-bottom-right-radius: 28px;
+    }
+
+    /* FIX 4: The actual Blur Layer (Pseudo-element) */
+    .artist-frosted-overlay::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        z-index: -1; /* Behind the text, but inside the overlay */
+        
+        /* The Blur */
+        backdrop-filter: blur(20px) saturate(160%);
+        -webkit-backdrop-filter: blur(20px) saturate(160%);
+        
+        /* FIX 5: Force hardware acceleration on the blur specifically */
+        will-change: backdrop-filter;
     }
 
     .artist-name {
@@ -1944,78 +1892,87 @@
         justify-content: center; 
         width: 100%; 
         max-width: 350px; 
-        
         margin: 0 auto 24px auto; 
         
-        transition: max-width 0.4s cubic-bezier(0.25, 1, 0.5, 1),
+        /* OPTIMIZATION: We moved the shadow and border HERE, away from the overflow:hidden wrapper */
+        border-radius: 12px;
+        box-shadow: 0 15px 40px rgba(0,0,0,0.5);
+        border: 1px solid rgba(255,255,255,0.1);
+        
+        /* OPTIMIZATION: Use transform instead of max-width */
+        transition: transform 0.4s cubic-bezier(0.25, 1, 0.5, 1),
                     margin-bottom 0.4s cubic-bezier(0.25, 1, 0.5, 1); 
         
-        will-change: max-width, margin-bottom;
+        transform-origin: top center;
+        will-change: transform;
         -webkit-transform: translate3d(0,0,0);
         transform: translate3d(0,0,0);
     }
 
     .fp-cover-container.shrink {
-        max-width: 262px; 
-        margin-bottom: 16px; 
+        /* Scale mathematically simulates shrinking to 262px, negative margin pulls the lyrics up */
+        transform: scale(0.748) translate3d(0,0,0); 
+        margin-bottom: -70px; 
     }
 
-    /* --- NEW SOBER COVER SYSTEM --- */
+    /* --- NEW SOBER COVER SYSTEM (GPU OPTIMIZED) --- */
     .sober-cover-wrapper {
         position: relative;
         width: 100%;
         aspect-ratio: 1/1;
+        background: #000; /* Pure black background prevents white flashes */
         border-radius: 12px;
-        box-shadow: 0 15px 40px rgba(0,0,0,0.5);
-        border: 1px solid rgba(255,255,255,0.1);
-        overflow: hidden; /* Essential to clip the low-res blur bleed */
-        -webkit-backface-visibility: hidden;
-        backface-visibility: hidden;
-        -webkit-transform: translate3d(0,0,0);
-        transform: translate3d(0,0,0);
+        overflow: hidden;
+        transform: translateZ(0); /* GPU acceleration */
     }
 
-    .sober-cover { 
-        width: 100%; 
-        height: 100%; 
-        object-fit: cover; 
+    .sober-cover {
         position: absolute;
-        top: 0;
-        left: 0;
-        pointer-events: none; 
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
     }
 
     .low-res {
-        filter: blur(15px) saturate(1.2);
-        /* Scale up slightly to prevent blurred white edges from bleeding into the frame */
-        transform: scale(1.1); 
+        z-index: 1;
+        filter: blur(15px) saturate(1.5); /* Deep blur */
+        transform: scale(1.1); /* Prevents blurred edges from showing container background */
+        transition: opacity 0.3s ease;
     }
 
     .high-res {
         z-index: 2;
+        opacity: 0;
+        /* INSTANT hide when the album changes (prevents the old cover from ghosting out) */
+        transition: opacity 0s;
+        will-change: opacity;
     }
 
-    /* The distinct iOS "App just finished downloading on Homescreen" animation */
-    @keyframes iosInstallPop {
+    .high-res.is-visible {
+        opacity: 1;
+        /* VERY SMOOTH fade-in once the 500ms has passed and the new image is loaded */
+        transition: opacity 1.2s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+
+    /* Hardware optimized animation (Removed filter: brightness) */
+    @keyframes iosInstallPopFast {
         0% {
-            transform: scale(0.92);
-            filter: brightness(1.5); /* The bright flash */
+            transform: scale(0.95);
             opacity: 0;
         }
-        50% {
-            transform: scale(1.03); /* The bounce overshoot */
-            filter: brightness(1.1);
+        60% {
+            transform: scale(1.02);
             opacity: 1;
         }
         100% {
             transform: scale(1);
-            filter: brightness(1);
             opacity: 1;
         }
     }
 
     .installed-pop {
-        animation: iosInstallPop 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+        animation: iosInstallPopFast 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
     }
 
     .fp-info, 

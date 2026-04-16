@@ -8,6 +8,13 @@
     
     let searchQuery = '';
 
+    $: if (currentHash.startsWith('#search/')) {
+        const fromUrl = decodeURIComponent(currentHash.substring(8));
+        if (fromUrl !== searchQuery.trim()) searchQuery = fromUrl;
+    } else if (currentHash === '' || currentHash === '#') {
+        searchQuery = '';
+    }
+
     const handleSearch = () => {
         if (searchQuery.trim().length > 0) {
             window.location.hash = `#search/${encodeURIComponent(searchQuery.trim())}`;

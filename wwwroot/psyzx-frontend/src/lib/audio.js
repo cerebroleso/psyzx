@@ -29,7 +29,7 @@ import {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const MAX_CACHE_SIZE        = 5;
+const MAX_CACHE_SIZE        = 3;
 const FFT_SIZE              = 256;
 const EQ_FREQS              = [60, 250, 1000, 4000, 8000, 14000];
 const MIN_MSE_BUFFER_SECS   = 3;      
@@ -127,6 +127,60 @@ const dataArray = typeof window !== 'undefined' ? new Uint8Array(FFT_SIZE / 2) :
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+const safeDecodeAudioData = (buffer) => {
+    return new Promise((resolve, reject) => {
+        // FIX: Lazily instantiate audioCtx if a gapless preload triggers 
+        // before the engine is formally unlocked by a user gesture.
+        if (!audioCtx) {
+            const Ctor = window.AudioContext || window['webkitAudioContext'];
+            if (Ctor) {
+                audioCtx = new Ctor();
+            } else {
+                return reject(new Error('WebAudio API is not supported in this browser.'));
+            }
+        }
+
+        let settled = false;
+        const done = (decoded) => { if (!settled) { settled = true; resolve(decoded); } };
+        const fail = (error) => { if (!settled) { settled = true; reject(error || new Error('Decode failed')); } };
+
+        try {
+            const promise = audioCtx.decodeAudioData(buffer, done, fail);
+            // Crucial for Firefox: hook into the returned Promise if it exists
+            if (promise && typeof promise.catch === 'function') {
+                promise.then(done).catch(fail);
+            }
+        } catch (e) {
+            fail(e);
+        }
+    });
+};
+
+// --- DIAGNOSTIC TELEMETRY ---
+let activeDecodes       = 0;
+let mseLoadedBytes      = 0;
+let mseFetchComplete    = false;
+
+export const getAudioDiagnostics = () => {
+    return {
+        mode: isWebAudioMode ? 'WebAudio API' : 'HTML5 Fallback',
+        ctxState: audioCtx ? audioCtx.state : 'Uninitialized',
+        mseActive: mseActive,
+        mseReadyState: mseMediaSource ? mseMediaSource.readyState : 'N/A',
+        mseWired: mseWired,
+        bufferDecoded: !!currentBuffer,
+        cacheSize: decodeCache.size,
+        activeSources: activeSources.size,
+        html5Status: html5ActivePlayer 
+            ? `readyState: ${html5ActivePlayer.readyState}, netState: ${html5ActivePlayer.networkState}` 
+            : 'Uninitialized',
+        // New Telemetry
+        mseLoadedBytes,
+        mseFetchComplete,
+        activeDecodes
+    };
+};
+
 const buildStreamUrl = (url, useMse = false) => {
     const kbps = typeof window !== 'undefined' ? (localStorage.getItem('psyzx_bitrate') || '320') : '320';
     const separator = url.includes('?') ? '&' : '?';
@@ -151,7 +205,7 @@ const srcMatchesUrl = (elementSrc, trackUrl) => {
 // ─── FFT ──────────────────────────────────────────────────────────────────────
 
 export const getFftData = () => {
-    if (analyserNode && isWebAudioMode && audioCtx?.state === 'running') {
+    if (analyserNode && audioCtx?.state === 'running') {
         analyserNode.getByteFrequencyData(dataArray);
         return dataArray;
     }
@@ -287,7 +341,11 @@ const teardownMse = () => {
     if (mseAbortCtrl) { mseAbortCtrl.abort(); mseAbortCtrl = null; }
     if (msePlayer) {
         msePlayer._earlyEndFired = true; 
-        try { msePlayer.pause(); } catch {}
+        try { 
+            msePlayer.pause(); 
+            msePlayer.removeAttribute('src'); 
+            msePlayer.load();
+        } catch {}
     }
     if (mseGain && audioCtx) {
         const now = audioCtx.currentTime;
@@ -306,6 +364,9 @@ const streamViaMse = async (url, loadId) => {
 
     const abortCtrl = new AbortController();
     mseAbortCtrl    = abortCtrl;
+
+    mseLoadedBytes = 0;
+    mseFetchComplete = false;
 
     try {
         const streamUrl = buildStreamUrl(url, true);
@@ -384,6 +445,7 @@ const streamViaMse = async (url, loadId) => {
 
             allChunks.push(value);
             totalBytes += value.byteLength;
+            mseLoadedBytes = totalBytes;
             await appendChunk(value);
 
             if (!playStarted && msePlayer.buffered.length > 0 &&
@@ -404,6 +466,8 @@ const streamViaMse = async (url, loadId) => {
                 updateMediaPositionState(0, msePlayer.duration || 0);
             }
         }
+
+        mseFetchComplete = true;
 
         if (totalBytes === 0) {
             teardownMse();
@@ -428,18 +492,12 @@ const streamViaMse = async (url, loadId) => {
 
         // ── Background decode for gapless cache ───────────────────────────────
         if (loadId === pendingLoadId && allChunks.length > 0 && audioCtx) {
+            activeDecodes++;
             const combined = new Uint8Array(totalBytes);
             let off = 0;
             for (const c of allChunks) { combined.set(c, off); off += c.byteLength; }
 
-            // FIX: Safari requires a clean slice and callback syntax
-            new Promise((resolve, reject) => {
-                audioCtx.decodeAudioData(
-                    combined.buffer.slice(0),
-                    (decoded) => resolve(decoded),
-                    (error) => reject(error)
-                );
-            })
+            safeDecodeAudioData(combined.buffer.slice(0))
             .then(buf => {
                 if (loadId !== pendingLoadId) return;
                 if (decodeCache.size >= MAX_CACHE_SIZE) {
@@ -448,11 +506,12 @@ const streamViaMse = async (url, loadId) => {
                     if (old?.controller) old.controller.abort();
                     decodeCache.delete(oldest);
                 }
-                decodeCache.set(url, { promise: Promise.resolve(buf), controller: null });
+                decodeCache.set(url, { promise: Promise.resolve(buf), controller: null, resolved: true });
                 currentBuffer = buf;
                 playerDuration.set(buf.duration);
             })
-            .catch(() => { /* non-fatal: MSE is still playing */ });
+            .catch(() => { /* non-fatal: MSE is still playing, Firefox just didn't like the chunks */ })
+            .finally(() => { activeDecodes--; }); 
         }
 
         return true;
@@ -540,29 +599,28 @@ const fetchAndDecode = async (url) => {
     }
 
     const controller = new AbortController();
+    activeDecodes++;
     const p = (async () => {
         try {
             const resp = await fetch(buildStreamUrl(url, false), { signal: controller.signal });
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
             const ab = await resp.arrayBuffer();
             
-            // FIX: iOS Safari throws an error when decodeAudioData receives a promise OR 
-            // an ArrayBuffer directly from a Service Worker cache. 
-            // We must slice it and use the callback syntax to guarantee decoding.
-            return await new Promise((resolve, reject) => {
-                audioCtx.decodeAudioData(
-                    ab.slice(0), 
-                    (decoded) => resolve(decoded), 
-                    (error) => reject(error)
-                );
-            });
+            const decoded = await safeDecodeAudioData(ab.slice(0));
+            
+            // FIX: Mark the cache entry as fully resolved
+            const entry = decodeCache.get(url);
+            if (entry) entry.resolved = true;
+            
+            return decoded;
         } catch (e) {
             if (e.name !== 'AbortError') console.error('Audio decode error:', e);
             return null;
         }
-    })();
+    })().finally(() => { activeDecodes--; });
 
-    decodeCache.set(url, { promise: p, controller });
+    // FIX: Add resolved: false initially
+    decodeCache.set(url, { promise: p, controller, resolved: false });
     return p;
 };
 
@@ -800,20 +858,24 @@ export const unlockAudioContext = () => {
     audioCtx.onstatechange = () => {
         const s = audioCtx.state;
         if ((s === 'interrupted' || s === 'suspended') && get(isPlaying)) {
-            if (!interruptionPolling) {
-                interruptionPolling = setInterval(() => {
-                    if (audioCtx.state === 'running' || !get(isPlaying)) {
-                        clearInterval(interruptionPolling);
-                        interruptionPolling = null;
-                    } else {
-                        audioCtx.resume().then(() => {
-                            if (isWebAudioMode && currentBuffer && activeSources.size === 0 && !mseActive) playWebAudio();
-                            else if (mseActive && msePlayer?.paused) { const p = msePlayer.play(); if(p) p.catch(()=>{}); }
-                            else if (!isWebAudioMode && html5ActivePlayer?.paused) { const p = html5ActivePlayer.play(); if(p) p.catch(()=>{}); }
-                        }).catch(() => {});
-                    }
-                }, 1000);
-            }
+            // FIX 1: Instant resume instead of waiting 1000ms. Restores the 10ms gap.
+            audioCtx.resume().then(() => {
+                if (isWebAudioMode && currentBuffer && activeSources.size === 0 && !mseActive) playWebAudio();
+                else if (mseActive && msePlayer?.paused) { const p = msePlayer.play(); if(p) p.catch(()=>{}); }
+                else if (!isWebAudioMode && html5ActivePlayer?.paused) { const p = html5ActivePlayer.play(); if(p) p.catch(()=>{}); }
+            }).catch(() => {
+                // Only fall back to polling if the instant resume fails
+                if (!interruptionPolling) {
+                    interruptionPolling = setInterval(() => {
+                        if (audioCtx.state === 'running' || !get(isPlaying)) {
+                            clearInterval(interruptionPolling);
+                            interruptionPolling = null;
+                        } else {
+                            audioCtx.resume().catch(() => {});
+                        }
+                    }, 100); // Sped up fallback polling to 100ms
+                }
+            });
         } else if (s === 'running') {
             if (interruptionPolling) { clearInterval(interruptionPolling); interruptionPolling = null; }
             if (get(isPlaying)) {
@@ -829,6 +891,13 @@ export const unlockAudioContext = () => {
 
     buildWebAudioGraph();
     tryWireAudioNodes();
+
+    if (msePlayer) {
+        msePlayer.src = SILENCE_B64;
+        const p = msePlayer.play(); if (p) p.catch(() => {});
+        msePlayer.pause();
+        msePlayer.removeAttribute('src');
+    }
 
     if (playerA && playerB) {
         for (const el of [playerA, playerB]) {
@@ -850,9 +919,8 @@ export const unlockAudioContext = () => {
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState !== 'visible' || !audioCtx) return;
             
-            if (get(isPlaying)) {
-                audioCtx.suspend().then(() => audioCtx.resume()).catch(() => {});
-            }
+            // FIX 2: Removed the forced `audioCtx.suspend()` here which was causing 
+            // a heavy stutter whenever the user reopened the app from the background.
 
             if (audioCtx.state !== 'running') {
                 audioCtx.resume().then(() => {
@@ -1048,13 +1116,26 @@ export const loadAndPlayUrl = async (url) => {
         isBuffering.set(true);
         startBufferSound();
 
-        if (!decodeCache.has(url)) {
+        const cacheEntry = decodeCache.get(url);
+        
+        // FIX: If it's cached but NOT fully resolved yet, abort it and prefer MSE fast-start
+        if (!cacheEntry || !cacheEntry.resolved) {
+            if (cacheEntry && cacheEntry.controller) {
+                cacheEntry.controller.abort();
+                decodeCache.delete(url);
+            }
             const mseDone = await streamViaMse(url, currentLoadId);
             if (currentLoadId !== pendingLoadId) return;
             if (mseDone) return; 
         }
     } else {
-        activeSources.forEach(s => { try { s.onended = null; } catch {} });
+        activeSources.forEach(s => { 
+            try { 
+                s.onended = () => { 
+                    try { s.disconnect(); s.buffer = null; } catch {} 
+                }; 
+            } catch {} 
+        });
         activeSources.clear();
         if (syntheticClockInterval) clearInterval(syntheticClockInterval);
         isBuffering.set(true);
@@ -1307,7 +1388,7 @@ export const stopBufferSound = () => {
 // ─── Scrub effect ─────────────────────────────────────────────────────────────
 
 export const startScrubEffect = async () => {
-    if (!audioCtx || !isWebAudioMode) return;
+    if (!audioCtx) return;
     if (audioCtx.state === 'suspended') await audioCtx.resume().catch(() => {});
     const soundType = typeof window !== 'undefined'
         ? (localStorage.getItem('psyzx_scrub_sound') || 'speed') : 'speed';
@@ -1324,19 +1405,26 @@ export const startScrubEffect = async () => {
 };
 
 export const updateScrubEffect = (speed, dir) => {
-    if (!isWebAudioMode || !audioCtx) return;
+    if (!audioCtx) return; // FIX: Removed !isWebAudioMode
     const soundType = typeof window !== 'undefined'
         ? (localStorage.getItem('psyzx_scrub_sound') || 'speed') : 'speed';
     if (soundType === 'none') return;
 
     if (soundType === 'vinyl') {
+        const rate = dir > 0 ? Math.min(2.5, 1 + speed * 4) : Math.max(0.2, 1 - speed * 3);
+        
+        // Scrub WebAudio Buffers
         activeSources.forEach(src => {
             if (src.playbackRate) {
-                const rate = dir > 0 ? Math.min(2.5, 1 + speed * 4) : Math.max(0.2, 1 - speed * 3);
                 src.playbackRate.cancelScheduledValues(audioCtx.currentTime);
                 src.playbackRate.setTargetAtTime(rate, audioCtx.currentTime, 0.01);
             }
         });
+        
+        // FIX: Scrub HTML5 Fallback
+        if (!isWebAudioMode && html5ActivePlayer) {
+            html5ActivePlayer.playbackRate = rate;
+        }
         return;
     }
 
@@ -1365,6 +1453,11 @@ export const stopScrubEffect = () => {
             src.playbackRate.value = 1.0;
         }
     });
+    
+    if (!isWebAudioMode && html5ActivePlayer) {
+        html5ActivePlayer.playbackRate = 1.0;
+    }
+    
     if (!scrubGain) return;
 
     scrubGain.gain.cancelScheduledValues(audioCtx.currentTime);

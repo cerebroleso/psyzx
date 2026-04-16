@@ -159,7 +159,11 @@
     {#if tracks.length > 0}
         <div class="list-container active-view" in:fade={{duration: 200}}>
             <div class="list-header">
-                <div style="text-align:center;">#</div><div>Title</div><div style="text-align:right;"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg></div>
+                <div style="text-align:center;">#</div>
+                <div>Title</div>
+                <div style="text-align:right;">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                </div>
             </div>
             
             {#each tracks as track, index}
@@ -167,13 +171,14 @@
                     <div class="swipe-bg"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg></div>
                     <div class="list-item-content" role="button" tabindex="0" use:swipeToQueue={track} on:click={() => playSpecificTrack(index)} on:keydown={(e) => e.key === 'Enter' && playSpecificTrack(index)}>
                         <div class="list-item-num">{index + 1}</div>
-                        <div style="min-width: 0; display: flex; align-items: center; gap: 16px; flex-grow: 1;">
+                        <div class="track-details-wrapper">
                             <img 
+                                class="track-cover"
                                 src={`/api/Tracks/image?path=${encodeURIComponent(track.album?.coverPath)}&quality=${$isLowQualityImages ? 'low' : 'high'}`} 
                                 alt="Cover" 
                                 loading="lazy" 
                             />
-                            <div style="min-width: 0;">
+                            <div class="track-text-info">
                                 <div class="list-item-title">{track.title}</div>
                                 <div class="list-item-artist">{track.album?.artist?.name || 'Unknown Artist'}</div>
                             </div>
@@ -192,17 +197,41 @@
 {/if}
 
 <style>
-    .view-wrapper { position: relative; min-height: 100%; padding-bottom: 120px; }
+    /* View Layout */
+    .view-wrapper { 
+        position: relative; 
+        min-height: 100%; 
+        padding: 24px;
+    }
     
-    .album-header-block { display: flex; flex-direction: column; gap: 0; margin-bottom: 24px; background: rgba(255, 255, 255, 0.03); backdrop-filter: blur(32px) saturate(150%); -webkit-backdrop-filter: blur(32px) saturate(150%); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 24px; padding: 20px; box-shadow: 0 8px 32px rgba(0,0,0,0.2), inset 1px 1px 0 rgba(255,255,255,0.05); }
-    .album-hero { display: flex; gap: 24px; align-items: flex-end; margin-bottom: 0; }
-    .action-bar { display: flex; align-items: center; gap: 16px; margin-bottom: 0; }
-    .header-separator { height: 1px; background: rgba(255,255,255,0.1); margin: 16px 0; width: 100%; }
+    /* Header Block */
+    .album-header-block { 
+        display: flex; 
+        flex-direction: column; 
+        gap: 0; 
+        margin-bottom: 32px; 
+        background: var(--surface-color);
+        border: 1px solid rgba(255, 255, 255, 0.05); 
+        border-radius: 16px; 
+        padding: 32px; 
+        box-shadow: 0 16px 40px rgba(0,0,0,0.3); 
+    }
+    .album-hero { 
+        display: flex; 
+        gap: 32px; 
+        align-items: flex-end; 
+        margin-bottom: 0; 
+    }
     
     .playlist-cover-wrapper.playlist-hero-cover {
-        width: 232px; height: 232px; border-radius: 12px; background: rgba(0,0,0,0.4); 
-        display: flex; align-items: center; justify-content: center; color: rgba(255,255,255,0.3); 
-        border: 1px solid rgba(255,255,255,0.05); box-shadow: 0 16px 32px rgba(0,0,0,0.4); overflow: hidden;
+        width: 232px; height: 232px; 
+        border-radius: 8px; 
+        background: rgba(0,0,0,0.4); 
+        display: flex; align-items: center; justify-content: center; 
+        color: var(--text-secondary); 
+        border: 1px solid rgba(255,255,255,0.05); 
+        box-shadow: 0 16px 32px rgba(0,0,0,0.4); 
+        overflow: hidden;
     }
     
     .dynamic-grid-cover {
@@ -213,45 +242,93 @@
     }
     .dynamic-grid-cover img { width: 100%; height: 100%; object-fit: cover; }
     .single-cover { width: 100%; height: 100%; object-fit: cover; }
-    .empty-cover { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: rgba(255,255,255,0.2); }
+    .empty-cover { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); }
 
     .album-type { font-size: 12px; font-weight: 800; letter-spacing: 2px; text-transform: uppercase; color: var(--accent-color); margin-bottom: 8px; }
-    .album-title { font-size: clamp(32px, 5vw, 64px); font-weight: 900; line-height: 1.1; margin-bottom: 12px; letter-spacing: -2px; color: white; text-shadow: 0 4px 24px rgba(0,0,0,0.4); }
-    .album-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 14px; font-weight: 600; color: rgba(255,255,255,0.7); }
+    .album-title { font-size: clamp(32px, 5vw, 64px); font-weight: 900; line-height: 1.1; margin-bottom: 12px; letter-spacing: -2px; color: var(--text-primary); text-shadow: 0 4px 24px rgba(0,0,0,0.4); }
+    .album-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 14px; font-weight: 600; color: var(--text-secondary); }
     .dot { font-size: 10px; opacity: 0.5; }
-    .duration-highlight { color: rgba(255,255,255,0.95); font-weight: 800;}
+    .duration-highlight { color: var(--text-primary); font-weight: 800;}
     
-    .list-container { background: rgba(255, 255, 255, 0.03); backdrop-filter: blur(32px) saturate(150%); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 24px; padding: 16px; }
-    .list-header { display: grid; grid-template-columns: 40px 1fr 60px; padding: 0 16px 12px 16px; border-bottom: 1px solid rgba(255,255,255,0.1); color: rgba(255,255,255,0.5); font-size: 12px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 8px; }
-    .list-item { position: relative; overflow: hidden; border-radius: 12px; transition: background 0.2s; }
-    .list-item:hover { background: rgba(255, 255, 255, 0.08); }
-    .list-item.active { background: rgba(255,255,255,0.1); }
+    .header-separator { height: 1px; background: rgba(255,255,255,0.1); margin: 24px 0; width: 100%; }
+    .action-bar { display: flex; align-items: center; gap: 24px; margin-bottom: 0; }
+    
+    /* List Container */
+    .list-container { 
+        display: flex; 
+        flex-direction: column; 
+    }
+    .list-header { 
+        display: grid; 
+        grid-template-columns: 40px 1fr 60px; 
+        gap: 16px;
+        padding: 0 16px 12px 16px; 
+        border-bottom: 1px solid rgba(255,255,255,0.1); 
+        color: var(--text-secondary); 
+        font-size: 12px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; 
+        margin-bottom: 12px; 
+    }
+
+    /* List Items */
+    .list-item { 
+        position: relative; 
+        overflow: hidden; 
+        border-radius: 8px; 
+        margin-bottom: 4px;
+        transition: background-color 0.2s ease; 
+    }
+    .list-item:hover { background-color: var(--surface-hover); }
+    .list-item.active { background-color: rgba(255,255,255,0.1); }
     .list-item.active .list-item-num, .list-item.active .list-item-title { color: var(--accent-color); }
     
-    .swipe-bg { position: absolute; top: 0; left: 0; height: 100%; width: 0; background: rgba(181, 52, 209, 0.5); z-index: 1; display: flex; align-items: center; border-radius: 8px; overflow: hidden; }
+    .swipe-bg { position: absolute; top: 0; left: 0; height: 100%; width: 0; background: var(--accent-dark); z-index: 1; display: flex; align-items: center; border-radius: 8px 0 0 8px; overflow: hidden; }
     .swipe-bg svg { position: absolute; left: 30px; top: 50%; transform: translate(-50%, -50%); transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1); }
     
-    .list-item-content { position: relative; z-index: 2; display: grid; grid-template-columns: 40px 1fr 60px; align-items: center; padding: 12px 16px; cursor: pointer; outline: none; }
-    .list-item-num { text-align: center; color: rgba(255,255,255,0.5); font-weight: 600; font-size: 14px; }
-    .list-item-title { color: white; font-weight: 700; font-size: 15px; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .list-item-artist { color: rgba(255,255,255,0.5); font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .list-item-time { text-align: right; color: rgba(255,255,255,0.5); font-size: 14px; font-variant-numeric: tabular-nums; }
+    .list-item-content { position: relative; z-index: 2; display: grid; grid-template-columns: 40px 1fr 60px; gap: 16px; align-items: center; padding: 10px 16px; cursor: pointer; outline: none; }
+    .list-item-num { text-align: center; color: var(--text-secondary); font-weight: 500; font-size: 16px; font-variant-numeric: tabular-nums; }
     
-    .tiny-cover { width: 40px; height: 40px; border-radius: 6px; object-fit: cover; background: rgba(0,0,0,0.5); flex-shrink: 0; }
+    /* Missing Image CSS Added Here */
+    .track-details-wrapper { min-width: 0; display: flex; align-items: center; gap: 16px; flex-grow: 1; }
+    .track-cover { 
+        width: 48px; 
+        height: 48px; 
+        border-radius: 4px; 
+        object-fit: cover; 
+        background: rgba(255,255,255,0.05); 
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        flex-shrink: 0;
+    }
+    .track-text-info { min-width: 0; flex: 1; }
+    
+    .list-item-title { color: var(--text-primary); font-weight: 600; font-size: 15px; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .list-item-artist { color: var(--text-secondary); font-size: 13px; font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .list-item-time { text-align: right; color: var(--text-secondary); font-size: 14px; font-variant-numeric: tabular-nums; }
 
+    /* Buttons */
     .hoverable { transition: transform 0.2s, background 0.2s, color 0.2s; cursor: pointer; }
-    .btn-main-play { width: 56px; height: 56px; border-radius: 50%; background: white; color: black; border: none; display: flex; align-items: center; justify-content: center; box-shadow: 0 8px 16px rgba(0,0,0,0.3); }
-    .btn-main-play.hoverable:hover { transform: scale(1.05); background: var(--accent-color); color: black; }
+    .btn-main-play { width: 56px; height: 56px; border-radius: 50%; background: var(--accent-color); color: #000; border: none; display: flex; align-items: center; justify-content: center; box-shadow: 0 8px 16px rgba(0,0,0,0.3); transition: transform 0.15s cubic-bezier(0.4, 0, 0.2, 1); }
+    .btn-main-play.hoverable:hover { transform: scale(1.05); }
+    .btn-main-play.hoverable:active { transform: scale(0.95); }
     .btn-main-play:disabled { opacity: 0.5; filter: grayscale(1); cursor: not-allowed; transform: none !important; }
-    .btn-icon-bar { background: none; border: none; color: rgba(255,255,255,0.5); padding: 8px; }
+    
+    .btn-icon-bar { background: none; border: none; color: var(--text-secondary); padding: 8px; transition: color 0.2s ease; }
     .btn-icon-bar.active { color: var(--accent-color); }
-    .btn-icon-bar.hoverable:hover:not(:disabled) { color: white; transform: scale(1.1); }
+    .btn-icon-bar.hoverable:hover:not(:disabled) { color: var(--text-primary); transform: scale(1.1); }
     .btn-icon-bar:disabled { opacity: 0.3; cursor: not-allowed; }
 
-    .empty-state { text-align: center; padding: 64px 24px; color: rgba(255,255,255,0.4); font-size: 16px; font-weight: bold; background: rgba(255,255,255,0.02); border-radius: 24px; border: 1px dashed rgba(255,255,255,0.1); }
+    .empty-state { text-align: center; padding: 64px 24px; color: var(--text-secondary); font-size: 16px; font-weight: 600; background: var(--surface-color); border-radius: 16px; border: 1px dashed rgba(255,255,255,0.1); }
 
+    /* Mobile Adjustments */
     @media (max-width: 768px) {
-        .album-hero { flex-direction: column; align-items: center; gap: 16px; text-align: center; }
+        .view-wrapper { padding: 16px; }
+        .album-header-block { padding: 24px; }
+        .album-hero { flex-direction: column; align-items: center; gap: 24px; text-align: center; }
         .action-bar { justify-content: center; }
+        .playlist-cover-wrapper.playlist-hero-cover { width: 200px; height: 200px; }
+        
+        .list-header { grid-template-columns: 30px 1fr 40px; padding: 8px 12px; font-size: 10px; gap: 12px; }
+        .list-item-content { grid-template-columns: 30px 1fr 40px; padding: 10px 12px; gap: 12px; }
+        .track-cover { width: 40px; height: 40px; }
+        .list-item-num { font-size: 14px; }
     }
 </style>

@@ -98,17 +98,17 @@ const getStorageString = (key, defaultVal) => {
 };
 
 export const isCacheDebugActive = writable(getStorageBool('psyzx_cache_debug', false));
-export const isGaplessModeActive = writable(getStorageBool('psyzx_gapless', true));
+export const isGaplessModeActive = writable(getStorageBool('psyzx_gapless', false));
 export const isGlobalColorActive = writable(getStorageBool('psyzx_global_color', false));
 export const isMaxGlassActive = writable(getStorageBool('psyzx_max_glass', true));
 export const isDesktopSwapActive = writable(getStorageBool('psyzx_desktop_swap', true));
 
 // Visualizer Stores (Moved from component to global state)
 export const visEnabled = writable(getStorageBool('psyzx_vis_enabled', true));
-export const visIntensity = writable(getStorageString('psyzx_vis_intensity', '1.0'));
-export const visShape = writable(getStorageString('psyzx_vis_shape', 'Tunnel'));
+export const visIntensity = writable(getStorageString('psyzx_vis_intensity', '3.0'));
+export const visShape = writable(getStorageString('psyzx_vis_shape', 'PSP Waves'));
 export const visMovement = writable(getStorageString('psyzx_vis_movement', 'Hypnotic'));
-export const visYPos = writable(getStorageString('psyzx_vis_ypos', '11'));
+export const visYPos = writable(getStorageString('psyzx_vis_ypos', '10'));
 export const visDimension = writable(getStorageString('psyzx_vis_dimension', '1.0'));
 export const visDetail = writable(getStorageString('psyzx_vis_detail', '16'));
 export const visSides = writable(getStorageString('psyzx_vis_sides', 'Default'));
