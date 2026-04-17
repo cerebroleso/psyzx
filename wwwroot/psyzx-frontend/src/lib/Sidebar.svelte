@@ -85,6 +85,7 @@
     const menu = [
         { id: '#/', icon: 'M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z', text: 'Home' },
         { id: '#top', icon: 'M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6', text: 'Top Played' },
+        { id: '#wrapped', icon: 'M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2M15 2H9v4h6V2zM12 11v8M9 14l3-3 3 3', text: 'My Wrapped' },
         { id: '#all', icon: 'M4 22h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2zm10-20v20', text: 'The Pool' },
         { id: '#playlists', icon: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01', text: 'Playlists' },
         { id: '#offline', icon: 'M12 17V3M6 11l6 6 6-6M19 21H5', text: 'Available Offline' },

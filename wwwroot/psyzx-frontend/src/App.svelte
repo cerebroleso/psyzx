@@ -14,6 +14,7 @@
     import Album from './lib/views/Album.svelte';
     import Settings from './lib/views/Settings.svelte';
     import TopPlayed from './lib/views/TopPlayed.svelte';
+    import Wrapped from './lib/views/Wrapped.svelte';
     import Search from './lib/views/Search.svelte';
     import ThePool from './lib/views/ThePool.svelte';
     import Offline from './lib/views/Offline.svelte';
@@ -50,6 +51,7 @@
                        : currentHash === '#account' ? 'My Account'
                        : currentHash === '#settings' ? 'Settings' 
                        : currentHash === '#top' ? 'Top Played'
+                       : currentHash === '#wrapped' ? 'My Wrapped'
                        : currentHash === '#all' ? 'The Pool'
                        : currentHash === '#offline' ? 'Available Offline'
                        : currentHash === '#downloader' ? 'Downloader'
@@ -441,9 +443,9 @@
                     on:toggleSidebar={() => isMobileSidebarOpen = !isMobileSidebarOpen} 
                     on:refresh={handleRefresh} 
                 />                
-                <div id="main-content" style="flex: 1; display: grid;">
+                <div id="main-content" style="flex: 1; display: grid; min-width: 0; overflow-x: hidden;">
                     {#key routeKey}
-                    <div in:fade={{duration: 250, delay: 100}} out:fade={{duration: 100}} style="grid-area: 1 / 1; display: flex; flex-direction: column; min-height: 100%;">
+                    <div in:fade={{duration: 250, delay: 100}} out:fade={{duration: 100}} style="grid-area: 1 / 1; display: flex; flex-direction: column; min-height: 100%; min-width: 0;">
                         
                         <div style="flex-grow: 1;">
                             {#if currentHash === '' || currentHash === '#' || currentHash === '#/'}
@@ -462,6 +464,8 @@
                                 <Account />
                             {:else if currentHash === '#top'}
                                 <TopPlayed />
+                            {:else if currentHash === '#wrapped'}
+                                <Wrapped />
                             {:else if currentHash === '#all'}
                                 <ThePool />
                             {:else if currentHash === '#offline'}
@@ -591,7 +595,7 @@
         }
     }
 
-    :global(main#main-view) { flex: 1; overflow-y: auto; position: relative; }
+    :global(main#main-view) { flex: 1; overflow-y: auto; position: relative; min-width: 0; overflow-x: hidden; }
     :global(#topbar) { 
         position: sticky !important; 
         top: 0 !important; 
@@ -849,7 +853,8 @@
     :global(.max-glass-layout .album-card), 
     :global(.max-glass-layout .artist-card), 
     :global(.max-glass-layout .playlist-card), 
-    :global(.max-glass-layout .grid-item) {
+    :global(.max-glass-layout .grid-item),
+    :global(.max-glass-layout .track-item) {
         background: var(--surface-color) !important;
         backdrop-filter: blur(24px) saturate(120%) !important;
         -webkit-backdrop-filter: blur(24px) saturate(120%) !important;
@@ -860,7 +865,8 @@
         transition: transform 0.3s ease, background-color 0.3s ease;
     }
 
-    :global(.max-glass-layout .card:hover) {
+    :global(.max-glass-layout .card:hover),
+    :global(.max-glass-layout .track-item:hover) {
         background: rgba(255, 255, 255, 0.1) !important;
     }
 

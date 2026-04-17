@@ -368,10 +368,32 @@ export const api = {
         }
     },
 
+    async deletePlaylist(id) {
+        try {
+            const res = await this.fetchWithTimeout(`/Playlists/${id}`, { method: 'DELETE' });
+            return res.ok;
+        } catch {
+            return false;
+        }
+    },
+
     async addToPlaylist(playlistId, trackId) {
         try {
             const res = await this.fetchWithTimeout(`/Playlists/${playlistId}/tracks`, {
                 method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ trackId })
+            });
+            return res.ok;
+        } catch {
+            return false;
+        }
+    },
+
+    async removeTrackFromPlaylist(playlistId, trackId) {
+        try {
+            const res = await this.fetchWithTimeout(`/Playlists/${playlistId}/tracks`, {
+                method: 'DELETE',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ trackId })
             });
@@ -500,11 +522,28 @@ export const api = {
         }
     },
 
-    async recordPlay(trackId) {
+    async recordPlay(trackId, payload = {}) {
         try {
-            this.fetchWithTimeout(`/Tracks/${trackId}/play`, { method: 'POST' });
+            // Use native fetch with keepalive to survive page unloads
+            fetch(`${this.baseUrl}/Tracks/${trackId}/play`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+                keepalive: true
+            }).catch(e => console.error("[API] Failed to record play:", e));
         } catch (e) {
             console.error("[API] Failed to record play:", e);
+        }
+    },
+
+    async getWrappedStats(duration = 'month') {
+        try {
+            const res = await this.fetchWithTimeout(`/Tracks/wrapped?duration=${duration}`);
+            if (!res.ok) throw new Error('Failed to load wrapped stats');
+            return await res.json();
+        } catch (e) {
+            console.error("[API] getWrappedStats error:", e);
+            return null;
         }
     },
 

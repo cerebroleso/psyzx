@@ -1,7 +1,7 @@
 <script>
     import { get } from 'svelte/store';
     import { fade, scale } from 'svelte/transition';
-    import { albumsMap, currentPlaylist, currentIndex, isPlaying, isShuffle, isRepeat, shuffleHistory, accentColor, isGlobalColorActive, isMaxGlassActive, appSessionVersion, isLowQualityImages } from '../../store.js';
+    import { albumsMap, currentPlaylist, currentIndex, isPlaying, isShuffle, isRepeat, shuffleHistory, shuffleFuture, userQueue, accentColor, isGlobalColorActive, isMaxGlassActive, appSessionVersion, isLowQualityImages } from '../../store.js';
     import { formatTime } from '../utils.js';
     import { api } from '../api.js';
     
@@ -16,7 +16,7 @@
     export let albumId; 
 
     $: album = $albumsMap.get(parseInt(albumId));
-    $: tracks = album ? [...album.tracks].sort((a, b) => {
+    $: tracks = (album && album.tracks) ? [...album.tracks].sort((a, b) => {
         const discA = a.discNumber || 1; const discB = b.discNumber || 1;
         if (discA !== discB) return discA - discB;
         if (a.trackNumber !== b.trackNumber && a.trackNumber > 0) return a.trackNumber - b.trackNumber;
@@ -117,6 +117,8 @@
             await unlockAudioContext(); // Await the unified setup/prime
         }
         shuffleHistory.set([]); 
+        shuffleFuture.set([]);
+        userQueue.set([]); // Clear queue explicitly when picking a specific track to play immediately
         currentPlaylist.set(tracks); 
         currentIndex.set(index); 
     };
@@ -167,35 +169,39 @@
     const handleGlobalClick = () => { if (contextMenu.show) closeContextMenu(); };
 
     const addToQueueContext = (track) => {
-        currentPlaylist.update(currentList => {
-            if (!currentList || currentList.length === 0) { currentIndex.set(0); return [track]; }
-            const newList = [...currentList]; 
-            let cIdx = 0; currentIndex.subscribe(v => cIdx = v)();
-            newList.splice(cIdx + 1, 0, track); 
-            return newList;
-        });
+        userQueue.update(q => [...q, track]);
         showToast('Added to Queue');
         closeContextMenu();
     };
 
     function swipeToQueue(node, track) {
-        let startX = 0, currentX = 0, isSwiping = false, hasVibrated = false;
+        let startX = 0, startY = 0, currentX = 0, isSwiping = false, hasVibrated = false, blockSwipe = false;
         const bgLeft = node.parentElement.querySelector('.swipe-bg-left'); 
         const bgRight = node.parentElement.querySelector('.swipe-bg-right'); 
         
         const onStart = e => { 
             startX = e.touches[0].clientX; 
+            startY = e.touches[0].clientY;
             isSwiping = false; 
             hasVibrated = false; 
+            blockSwipe = false;
             node.style.transition = 'none'; 
             bgLeft.style.transition = 'none'; 
             bgRight.style.transition = 'none'; 
         };
 
         const onMove = e => {
-            let rawX = e.touches[0].clientX - startX;
+            if (blockSwipe) return;
 
-            currentX = Math.max(-120, Math.min(120, rawX));
+            let deltaX = e.touches[0].clientX - startX;
+            let deltaY = e.touches[0].clientY - startY;
+
+            if (!isSwiping && Math.abs(deltaY) > Math.abs(deltaX) * 0.8) {
+                blockSwipe = true;
+                return;
+            }
+
+            currentX = Math.max(-120, Math.min(120, deltaX));
 
             if (Math.abs(currentX) > 10) isSwiping = true;
             
@@ -243,18 +249,14 @@
             bgRight.style.transition = 'width 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), background-color 0.3s'; 
             bgRight.style.width = '0px';
 
-            if (currentX > 60) {
-                currentPlaylist.update(currentList => {
-                    if (!currentList || currentList.length === 0) { currentIndex.set(0); return [track]; }
-                    const newList = [...currentList]; let cIdx = 0; currentIndex.subscribe(v => cIdx = v)();
-                    newList.splice(cIdx + 1, 0, track); return newList;
-                });
+            if (currentX > 60 && !blockSwipe) {
+                userQueue.update(q => [...q, track]);
                 showToast(`Added to queue`); 
-            } else if (currentX < -60) {
+            } else if (currentX < -60 && !blockSwipe) {
                 openPlaylistSelector(track);
             }
             
-            setTimeout(() => { isSwiping = false; currentX = 0; }, 50);
+            setTimeout(() => { isSwiping = false; currentX = 0; blockSwipe = false; }, 50);
         };
 
         node.addEventListener('touchstart', onStart, {passive: true}); 

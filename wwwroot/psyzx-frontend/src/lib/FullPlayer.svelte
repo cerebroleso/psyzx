@@ -864,7 +864,17 @@
 
    // ─── STAGGERED NETWORK WATERFALL ──────────────────────────────────────────
     $: track = $currentPlaylist[$currentIndex];
-    $: album = track ? $albumsMap.get(track.albumId) : null;
+    // Prefer albumsMap (full library), fall back to inline track.album data (playlist tracks carry this)
+    $: album = track
+        ? ($albumsMap.get(track.albumId) || (track.album ? {
+            id: track.album.id,
+            title: track.album.title,
+            coverPath: track.album.coverPath,
+            artistId: track.album.artist?.id,
+            artistName: track.album.artist?.name || 'Unknown Artist',
+            tracks: []
+          } : null))
+        : null;
     
     // PRIORITY 1: Low-Res Image (Instant Reactivity)
     $: lowResCoverUrl = (album && album.coverPath) 

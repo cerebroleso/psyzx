@@ -30,7 +30,7 @@
     };
 
     $: artist = $artistsMap.get(parseInt(artistId));
-    $: artistAlbums = artist ? Array.from(artist.albums).map(id => $albumsMap.get(id)) : [];
+    $: artistAlbums = (artist && artist.albums) ? Array.from(artist.albums).map(id => $albumsMap.get(id)).filter(Boolean) : [];
     
     let isEditing = false;
     let editName = '';
@@ -256,7 +256,7 @@
     <div class="album-info">
         <div class="album-type">Artist</div>
         <div class="album-title">{artist.name}</div>
-        <div class="album-meta"><span>{artist.albums.size} albums</span></div>
+        <div class="album-meta"><span>{artistAlbums.length} albums</span></div>
         
         <div class="artist-actions">
             <button class="btn-primary" on:click={shuffleArtist} aria-label="Shuffle Artist">

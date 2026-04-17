@@ -23,7 +23,7 @@
 import { get } from 'svelte/store';
 import {
     currentPlaylist, currentIndex, isShuffle, isRepeat,
-    shuffleHistory, isPlaying, isBuffering,
+    shuffleHistory, shuffleFuture, userQueue, isPlaying, isBuffering,
     playerCurrentTime, playerDuration,
 } from '../store.js';
 
@@ -1487,6 +1487,8 @@ export const playNextGlobal = async (api, forceManualCue = false) => {
     const shuffle  = get(isShuffle);
     const repeat   = get(isRepeat);
     const history  = get(shuffleHistory);
+    const future   = get(shuffleFuture);
+    const queue    = get(userQueue);
 
     if (!playlist.length) return;
 
@@ -1496,7 +1498,27 @@ export const playNextGlobal = async (api, forceManualCue = false) => {
 
     if (isWebAudioMode && (!isAutoAdvance || forceManualCue)) playSkipCue('next');
 
-    if (!repeat && index === playlist.length - 1) {
+    // Process Explicit Queue 
+    if (queue.length > 0) {
+        const nextTrack = queue[0];
+        userQueue.update(q => q.slice(1));
+        
+        // Inject into currentPlaylist 
+        let targetIndex = index + 1;
+        const updatedList = [...playlist];
+        updatedList.splice(targetIndex, 0, nextTrack);
+        currentPlaylist.set(updatedList);
+        
+        if (shuffle) {
+            shuffleHistory.update(h => [...h, index]);
+            shuffleFuture.set([]); // Invalidate forward history when manually queued
+        }
+        
+        currentIndex.set(targetIndex);
+        return;
+    }
+
+    if (!repeat && index === playlist.length - 1 && queue.length === 0) {
         const newTracks = await api.getRadioMix(playlist[index].id, playlist.map(t => t.id));
         if (newTracks.length) currentPlaylist.update(l => [...l, ...newTracks]);
         else {
@@ -1508,14 +1530,21 @@ export const playNextGlobal = async (api, forceManualCue = false) => {
     if (shuffle) {
         const updated  = [...history, index];
         shuffleHistory.set(updated);
-        const recent   = updated.slice(-Math.floor(playlist.length / 2));
-        let unplayed   = Array.from({ length: playlist.length }, (_, i) => i)
-            .filter(i => !recent.includes(i) && i !== index);
-        if (!unplayed.length) {
-            shuffleHistory.set([]);
-            unplayed = Array.from({ length: playlist.length }, (_, i) => i).filter(i => i !== index);
+        
+        if (future.length > 0) {
+            const nextIdx = future[0];
+            shuffleFuture.update(f => f.slice(1));
+            currentIndex.set(nextIdx);
+        } else {
+            const recent   = updated.slice(-Math.floor(playlist.length / 2));
+            let unplayed   = Array.from({ length: playlist.length }, (_, i) => i)
+                .filter(i => !recent.includes(i) && i !== index);
+            if (!unplayed.length) {
+                shuffleHistory.set([]);
+                unplayed = Array.from({ length: playlist.length }, (_, i) => i).filter(i => i !== index);
+            }
+            currentIndex.set(unplayed[Math.floor(Math.random() * unplayed.length)]);
         }
-        currentIndex.set(unplayed[Math.floor(Math.random() * unplayed.length)]);
     } else {
         currentIndex.set((index + 1) % playlist.length);
     }
@@ -1538,6 +1567,7 @@ export const playPrevGlobal = () => {
         if (isWebAudioMode) playSkipCue('prev');
         if (shuffle && history.length > 0) {
             const prev = history[history.length - 1];
+            shuffleFuture.update(f => [index, ...f]); // Save memory of where we were
             shuffleHistory.update(h => h.slice(0, -1));
             currentIndex.set(prev);
         } else {

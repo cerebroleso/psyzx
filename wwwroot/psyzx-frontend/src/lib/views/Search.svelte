@@ -62,7 +62,9 @@
                         const fetchedAlbums = data.albums || [];
 
                         albumsMap.update(m => {
-                            fetchedAlbums.forEach(a => m.set(a.id, a));
+                            fetchedAlbums.forEach(a => {
+                                if (!m.has(a.id)) m.set(a.id, a);
+                            });
                             fetchedTracks.forEach(t => {
                                 if (t.album && !m.has(t.album.id)) m.set(t.album.id, t.album);
                             });
@@ -70,7 +72,9 @@
                         });
 
                         artistsMap.update(m => {
-                            fetchedArtists.forEach(a => m.set(a.id, a));
+                            fetchedArtists.forEach(a => {
+                                if (!m.has(a.id)) m.set(a.id, a);
+                            });
                             fetchedTracks.forEach(t => {
                                 if (t.album?.artist && !m.has(t.album.artist.id)) m.set(t.album.artist.id, t.album.artist);
                             });
@@ -90,10 +94,14 @@
         }
     }
 
+    import { userQueue, shuffleFuture } from '../../store.js';
+
     const playTrack = (track) => {
         const indexInResults = resultsTracks.findIndex(t => t.id === track.id);
         if (indexInResults !== -1) {
             shuffleHistory.set([]);
+            shuffleFuture.set([]);
+            userQueue.set([]); // Added explicit wipe if starting fresh context 
             currentPlaylist.set(resultsTracks);
             currentIndex.set(indexInResults);
         }
@@ -119,6 +127,13 @@
         contextMenuItem = null;
         contextMenuType = null;
     }
+
+    const addToQueue = () => {
+        if (contextMenuType === 'track') {
+            userQueue.update(q => [...q, contextMenuItem]);
+        }
+        closeContextMenu();
+    };
 </script>
 
 <svelte:window on:click={closeContextMenu} />
@@ -126,13 +141,15 @@
 {#if contextMenuOpen}
     <div use:portal>
         <div class="context-menu" style="top: {contextMenuY}px; left: {contextMenuX}px;" in:scale={{ start: 0.95, duration: 100 }} out:fade={{ duration: 100 }} on:click|stopPropagation>
-            <button class="context-item" on:click={() => { if(contextMenuType === 'track') playTrack(contextMenuItem); closeContextMenu(); }}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polygon points="5 3 19 12 5 21 5 3"></polygon>
-                </svg>
-                Play Now
-            </button>
-            <button class="context-item" on:click={closeContextMenu}>
+            {#if contextMenuType === 'track'}
+                <button class="context-item" on:click={() => { playTrack(contextMenuItem); closeContextMenu(); }}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                    </svg>
+                    Play Now
+                </button>
+            {/if}
+            <button class="context-item" on:click={addToQueue}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <line x1="12" y1="5" x2="12" y2="19"></line>
                     <line x1="5" y1="12" x2="19" y2="12"></line>
@@ -252,16 +269,33 @@
 
 <style>
     .search-view {
-        padding: 24px;
-        padding-bottom: 24px; 
+        padding: 20px;
+        padding-bottom: 20px; 
+        box-sizing: border-box;
+        width: 100%;
+        max-width: 100%;
+        overflow-x: hidden;
+    }
+
+    @media (max-width: 768px) {
+        .search-view {
+            padding: 10px 8px;
+        }
     }
 
     h2 {
         color: var(--text-primary, white);
-        margin: 32px 0 16px 0;
-        font-size: 24px;
+        margin: 24px 0 12px 0;
+        font-size: 22px;
         font-weight: 800;
         letter-spacing: -0.5px;
+    }
+
+    @media (max-width: 768px) {
+        h2 {
+            margin: 12px 0 6px 4px;
+            font-size: 18px;
+        }
     }
 
     h2:first-of-type {
@@ -272,6 +306,8 @@
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
         gap: 24px;
+        width: 100%;
+        box-sizing: border-box;
     }
 
     .card {
@@ -285,6 +321,8 @@
         border-radius: 12px;
         transition: background 0.2s ease;
         outline: none;
+        box-sizing: border-box;
+        max-width: 100%;
     }
 
     .card-link-overlay {
@@ -324,6 +362,7 @@
         align-items: center; 
         justify-content: space-between; 
         min-height: 24px;
+        min-width: 0;
     }
 
     .card-info-stack {
@@ -331,6 +370,7 @@
         flex-direction: column;
         flex-grow: 1;
         overflow: hidden;
+        min-width: 0;
     }
 
     .card-title { 
@@ -381,18 +421,34 @@
         display: flex;
         flex-direction: column;
         gap: 8px;
+        width: 100%;
+        box-sizing: border-box;
+    }
+
+    @media (max-width: 768px) {
+        .track-list {
+            gap: 2px;
+        }
     }
 
     .track-item {
         position: relative;
         display: flex;
         align-items: center;
-        padding: 10px 16px;
+        padding: 12px 16px;
         background: rgba(255,255,255,0.03);
         border-radius: 8px;
         transition: background 0.2s ease;
         cursor: pointer;
         outline: none;
+        box-sizing: border-box;
+        max-width: 100%;
+    }
+
+    @media (max-width: 768px) {
+        .track-item {
+            padding: 6px 10px;
+        }
     }
 
     .track-item:hover {
@@ -413,6 +469,7 @@
         gap: 4px;
         flex: 1;
         overflow: hidden;
+        min-width: 0;
     }
 
     .track-title {
@@ -504,5 +561,103 @@
         mask-image: linear-gradient(to bottom, black 0%, transparent 100%);
         -webkit-mask-image: linear-gradient(to bottom, black 0%, transparent 100%);
         pointer-events: none;
+    }
+
+    @media (max-width: 768px) {
+        .grid-container {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            width: 100%;
+            max-width: 100%;
+        }
+
+        .card {
+            display: flex;
+            flex-direction: row;
+            align-items: center;
+            background: rgba(255,255,255,0.03);
+            border-radius: 8px;
+            padding: 6px 10px;
+            height: auto;
+            box-sizing: border-box;
+            text-align: left;
+            box-shadow: none;
+            backdrop-filter: none;
+            -webkit-backdrop-filter: none;
+            border: none;
+            max-width: 100%;
+            width: 100%;
+        }
+
+        .card:hover {
+            background: rgba(255,255,255,0.08);
+        }
+
+        .card .cover-wrapper {
+            width: 48px;
+            height: 48px;
+            min-width: 48px;
+            margin-bottom: 0;
+            margin-right: 16px;
+            border-radius: 6px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        }
+
+        .card .artist-wrapper {
+            border-radius: 50%;
+        }
+
+        .card-bottom {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            min-height: auto;
+            margin-top: 0;
+            overflow: hidden;
+            min-width: 0;
+        }
+
+        .card-info-stack {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+        }
+
+        .card-title {
+            font-size: 15px;
+            font-weight: 600;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 100% !important;
+        }
+
+        .card-subtitle {
+            font-size: 13px;
+            margin-top: 0;
+        }
+        
+        .card.artist-card .card-title {
+            flex: 1;
+        }
+
+        .card .more-options-btn {
+            position: relative;
+            transform: none;
+            right: auto;
+            top: auto;
+            opacity: 1;
+            margin-left: 12px;
+        }
+
+        .keyboard-spacer {
+            height: 40px;
+            margin-top: 12px;
+        }
     }
 </style>

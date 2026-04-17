@@ -16,6 +16,7 @@ public class AppDbContext : DbContext
     
     public DbSet<Playlist> Playlists { get; set; } = null!;
     public DbSet<PlaylistTrack> PlaylistTracks { get; set; } = null!;
+    public DbSet<ListenEvent> ListenEvents { get; set; } = null!;
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -72,6 +73,20 @@ public class AppDbContext : DbContext
             entity.HasMany<PlaylistTrack>()
                 .WithOne(pt => pt.Track)
                 .HasForeignKey(pt => pt.TrackId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // Configuration for ListenEvent
+        modelBuilder.Entity<ListenEvent>(entity =>
+        {
+            entity.HasOne(le => le.User)
+                .WithMany(u => u.ListenEvents)
+                .HasForeignKey(le => le.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(le => le.Track)
+                .WithMany(t => t.ListenEvents)
+                .HasForeignKey(le => le.TrackId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
     }

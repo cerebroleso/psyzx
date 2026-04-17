@@ -1,8 +1,8 @@
 <script>
     import { onMount } from 'svelte';
-    import { fade } from 'svelte/transition';
+    import { fade, scale } from 'svelte/transition';
     import { api } from '../api.js';
-    import { currentPlaylist, currentIndex, isPlaying, isShuffle, isRepeat, shuffleHistory, isGlobalColorActive, isMaxGlassActive, isLowQualityImages } from '../../store.js';
+    import { currentPlaylist, currentIndex, isPlaying, isShuffle, isRepeat, shuffleHistory, isGlobalColorActive, isMaxGlassActive, isLowQualityImages, userQueue, albumsMap } from '../../store.js';
     import { formatTime } from '../utils.js';
 
     export let playlistId;
@@ -25,6 +25,27 @@
             playlist = await api.getPlaylist(playlistId);
             if (playlist && playlist.tracks) {
                 tracks = playlist.tracks;
+                // Patch albumsMap so Player/FullPlayer can resolve cover art and artist name
+                // for tracks that only exist in this playlist response.
+                albumsMap.update(map => {
+                    tracks.forEach(t => {
+                        if (t.albumId && !map.has(t.albumId) && t.album) {
+                            const al = t.album;
+                            const ar = al.artist || {};
+                            map.set(t.albumId, {
+                                id: al.id,
+                                title: al.title,
+                                coverPath: al.coverPath,
+                                releaseYear: al.releaseYear,
+                                playCount: al.playCount || 0,
+                                artistId: ar.id,
+                                artistName: ar.name || 'Unknown Artist',
+                                tracks: []
+                            });
+                        }
+                    });
+                    return new Map(map);
+                });
             }
         }
         isLoading = false;
@@ -70,44 +91,206 @@
         currentIndex.set(index); 
     };
 
+    let toastMessage = '';
+    let toastTimeout;
+
+    const showToast = (msg) => {
+        toastMessage = msg;
+        clearTimeout(toastTimeout);
+        toastTimeout = setTimeout(() => toastMessage = '', 2500);
+    };
+
+    const removeTrackFromPlaylist = async (track) => {
+        const success = await api.removeTrackFromPlaylist(playlistId, track.id);
+        if (success) {
+            tracks = tracks.filter(t => t.id !== track.id);
+            showToast('Track removed');
+        } else {
+            showToast('Failed to remove track');
+        }
+    };
+
+    const deleteCurrentPlaylist = async () => {
+        if (confirm(`Are you sure you want to delete ${playlist.name}?`)) {
+            const success = await api.deletePlaylist(playlistId);
+            if (success) {
+                window.location.hash = '#library';
+            } else {
+                showToast('Failed to delete playlist');
+            }
+        }
+    };
+
     function swipeToQueue(node, track) {
-        let startX = 0, currentX = 0, isSwiping = false, hasVibrated = false;
-        const bg = node.previousElementSibling; 
-        const onStart = e => { startX = e.touches[0].clientX; isSwiping = false; hasVibrated = false; node.style.transition = 'none'; bg.style.transition = 'none'; };
+        let startX = 0, startY = 0, currentX = 0, isSwiping = false, hasVibrated = false, blockSwipe = false;
+        const bgLeft = node.parentElement.querySelector('.swipe-bg-left'); 
+        const bgRight = node.parentElement.querySelector('.swipe-bg-right'); 
+        
+        const onStart = e => { 
+            startX = e.touches[0].clientX; 
+            startY = e.touches[0].clientY;
+            isSwiping = false; 
+            hasVibrated = false; 
+            blockSwipe = false;
+            node.style.transition = 'none'; 
+            if (bgLeft) bgLeft.style.transition = 'none'; 
+            if (bgRight) bgRight.style.transition = 'none'; 
+        };
+
         const onMove = e => {
-            currentX = e.touches[0].clientX - startX;
+            if (blockSwipe) return;
+
+            let deltaX = e.touches[0].clientX - startX;
+            let deltaY = e.touches[0].clientY - startY;
+
+            if (!isSwiping && Math.abs(deltaY) > Math.abs(deltaX) * 0.8) {
+                blockSwipe = true;
+                return;
+            }
+
+            currentX = Math.max(-120, Math.min(120, deltaX));
+
             if (Math.abs(currentX) > 10) isSwiping = true;
-            if (currentX > 0 && currentX < 100) {
-                node.style.transform = `translateX(${currentX}px)`; bg.style.width = `${currentX}px`;
-                const icon = bg.querySelector('svg');
+            
+            node.style.transform = `translate3d(${currentX}px, 0, 0)`; 
+
+            // Swipe Right (Add to Queue)
+            if (currentX > 0 && bgLeft && bgRight) {
+                bgRight.style.width = '0px';
+                bgLeft.style.width = `${currentX}px`;
+                const icon = bgLeft.querySelector('svg');
                 if (currentX > 60) {
-                    bg.style.backgroundColor = 'var(--accent-color)';
-                    if (icon) icon.style.transform = 'translate(-50%, -50%) scale(1.2)';
+                    bgLeft.style.backgroundColor = '#10b981'; 
+                    if (icon) icon.style.transform = 'scale(1.2)';
                     if (!hasVibrated) { if (navigator.vibrate) navigator.vibrate(50); hasVibrated = true; }
                 } else {
-                    bg.style.backgroundColor = 'rgba(181, 52, 209, 0.5)';
-                    if (icon) icon.style.transform = 'translate(-50%, -50%) scale(1)';
+                    bgLeft.style.backgroundColor = 'rgba(16, 185, 129, 0.4)';
+                    if (icon) icon.style.transform = 'scale(1)';
+                    hasVibrated = false;
+                }
+            } 
+            // Swipe Left (Remove from Playlist)
+            else if (currentX < 0 && bgLeft && bgRight) {
+                bgLeft.style.width = '0px';
+                const width = Math.abs(currentX);
+                bgRight.style.width = `${width}px`;
+                const icon = bgRight.querySelector('svg');
+                if (width > 60) {
+                    bgRight.style.backgroundColor = '#ef4444'; 
+                    if (icon) icon.style.transform = 'scale(1.2)';
+                    if (!hasVibrated) { if (navigator.vibrate) navigator.vibrate(50); hasVibrated = true; }
+                } else {
+                    bgRight.style.backgroundColor = 'rgba(239, 68, 68, 0.4)';
+                    if (icon) icon.style.transform = 'scale(1)';
                     hasVibrated = false;
                 }
             }
         };
+
         const onEnd = () => {
-            node.style.transition = 'transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1)'; node.style.transform = 'translateX(0)';
-            bg.style.transition = 'width 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), background-color 0.3s'; bg.style.width = '0px';
-            const icon = bg.querySelector('svg'); if (icon) icon.style.transform = 'translate(-50%, -50%) scale(1)';
-            if (currentX > 60) {
-                currentPlaylist.update(currentList => {
-                    if (!currentList || currentList.length === 0) { currentIndex.set(0); return [track]; }
-                    const newList = [...currentList]; let cIdx = 0; currentIndex.subscribe(v => cIdx = v)();
-                    newList.splice(cIdx + 1, 0, track); return newList;
-                });
+            node.style.transition = 'transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1)'; 
+            node.style.transform = 'translate3d(0, 0, 0)';
+            
+            if (bgLeft) {
+                bgLeft.style.transition = 'width 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), background-color 0.3s'; 
+                bgLeft.style.width = '0px';
             }
-            setTimeout(() => { isSwiping = false; currentX = 0; }, 50);
+            if (bgRight) {
+                bgRight.style.transition = 'width 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), background-color 0.3s'; 
+                bgRight.style.width = '0px';
+            }
+
+            if (currentX > 60 && !blockSwipe) {
+                userQueue.update(q => [...q, track]);
+                showToast(`Added to queue`); 
+            } else if (currentX < -60 && !blockSwipe) {
+                removeTrackFromPlaylist(track);
+            }
+            
+            setTimeout(() => { isSwiping = false; currentX = 0; blockSwipe = false; }, 50);
         };
-        node.addEventListener('touchstart', onStart, {passive: true}); node.addEventListener('touchmove', onMove, {passive: true}); node.addEventListener('touchend', onEnd);
+
+        node.addEventListener('touchstart', onStart, {passive: true}); 
+        node.addEventListener('touchmove', onMove, {passive: true}); 
+        node.addEventListener('touchend', onEnd);
         return { destroy() { node.removeEventListener('touchstart', onStart); node.removeEventListener('touchmove', onMove); node.removeEventListener('touchend', onEnd); } };
     }
+    
+    // Context Menu State
+    let contextMenu = { show: false, x: 0, y: 0, track: null };
+
+    const openContextMenu = (e, track) => {
+        e.preventDefault(); // Block default browser menu
+        let x = e.clientX;
+        let y = e.clientY;
+        
+        // Prevent menu from clipping off-screen
+        if (x + 220 > window.innerWidth) x -= 220;
+        if (y + 180 > window.innerHeight) y -= 180;
+        
+        contextMenu = { show: true, x, y, track };
+    };
+
+    const closeContextMenu = () => { contextMenu.show = false; };
+    
+    // Global click listener to close menu
+    const handleGlobalClick = () => { if (contextMenu.show) closeContextMenu(); };
+
+    const addToQueueContext = (track) => {
+        userQueue.update(q => [...q, track]);
+        showToast('Added to Queue');
+        closeContextMenu();
+    };
+
+    let showPlaylistModal = false;
+    let trackToAdd = null;
+    let userPlaylists = [];
+    
+    let modalTop = 0;
+    let modalHeight = 0;
+
+    const openPlaylistSelector = async (track) => {
+        trackToAdd = track;
+        const mainView = document.getElementById('main-view');
+        
+        if (mainView) {
+            modalTop = mainView.scrollTop;
+            modalHeight = mainView.clientHeight;
+            mainView.style.overflow = 'hidden';
+        }
+        
+        showPlaylistModal = true;
+        try {
+            userPlaylists = await api.getPlaylists();
+        } catch (e) {}
+    };
+
+    const closePlaylistSelector = () => {
+        showPlaylistModal = false;
+        trackToAdd = null;
+        
+        const mainView = document.getElementById('main-view');
+        if (mainView) {
+            mainView.style.overflow = '';
+        }
+    };
+
+    const addToPlaylist = async (targetPlaylistId) => {
+        if (!trackToAdd) return;
+        const success = await api.addToPlaylist(targetPlaylistId, trackToAdd.id);
+        if (success) {
+            closePlaylistSelector();
+            showToast('Added to playlist');
+        }
+    };
+
+    function portal(node) {
+        document.body.appendChild(node);
+        return { destroy() { if (node.parentNode) node.parentNode.removeChild(node); } };
+    }
 </script>
+
+<svelte:window on:click={handleGlobalClick} />
 
 {#if !isLoading && playlist}
 <div class="view-wrapper" class:max-glass={$isMaxGlassActive}>
@@ -153,6 +336,9 @@
             <button class="btn-icon-bar hoverable" aria-label="Shuffle" disabled={tracks.length === 0} class:active={$isShuffle} on:click={toggleShuffleMode} title="Shuffle">
                 <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 18h1.4c1.3 0 2.5-.6 3.3-1.7l6.1-8.6c.7-1.1 2-1.7 3.3-1.7H22"></path><path d="m18 2 4 4-4 4"></path><path d="M2 6h1.9c1.5 0 2.9.9 3.6 2.2"></path><path d="M22 18h-5.9c-1.3 0-2.6-.7-3.3-1.8l-.5-.8"></path><path d="m18 14 4 4-4 4"></path></svg>
             </button>
+            <button class="btn-icon-bar hoverable btn-delete-playlist" aria-label="Delete Playlist" on:click={deleteCurrentPlaylist} title="Delete Playlist">
+                <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+            </button>
         </div>
     </div>
 
@@ -168,8 +354,20 @@
             
             {#each tracks as track, index}
                 <div class="list-item" class:active={($currentPlaylist?.length ?? 0) > 0 && $currentPlaylist[$currentIndex]?.id === track.id}>
-                    <div class="swipe-bg"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg></div>
-                    <div class="list-item-content" role="button" tabindex="0" use:swipeToQueue={track} on:click={() => playSpecificTrack(index)} on:keydown={(e) => e.key === 'Enter' && playSpecificTrack(index)}>
+                        <div class="swipe-bg-left">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="6" y="5" width="12" height="6" rx="3" />
+                                <line x1="6" y1="15" x2="18" y2="15"></line>
+                                <line x1="6" y1="19" x2="18" y2="19"></line>
+                            </svg>
+                        </div>
+                        <div class="swipe-bg-right">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="3 6 5 6 21 6"></polyline>
+                                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                            </svg>
+                        </div>
+                    <div class="list-item-content" role="button" tabindex="0" use:swipeToQueue={track} on:click={() => playSpecificTrack(index)} on:keydown={(e) => e.key === 'Enter' && playSpecificTrack(index)} on:contextmenu={(e) => openContextMenu(e, track)}>
                         <div class="list-item-num">{index + 1}</div>
                         <div class="track-details-wrapper">
                             <img 
@@ -183,7 +381,15 @@
                                 <div class="list-item-artist">{track.album?.artist?.name || 'Unknown Artist'}</div>
                             </div>
                         </div>
-                        <div class="list-item-time">{formatTime(track.durationSeconds || 0)}</div>
+                        <div class="list-item-time" style="display: flex; align-items: center; gap: 6px; ">
+                            <button class="btn-add-playlist user-remove-track" aria-label="Remove from Playlist" on:click|stopPropagation={() => removeTrackFromPlaylist(track)}>
+                                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <polyline points="3 6 5 6 21 6"></polyline>
+                                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                                </svg>
+                            </button>
+                            <div style="font-size: 12px;">{formatTime(track.durationSeconds || 0)}</div>
+                        </div>
                     </div>
                 </div>
             {/each}
@@ -195,6 +401,74 @@
     {/if}
 </div>
 {/if}
+
+{#if showPlaylistModal}
+    <div class="modal-backdrop" style="top: {modalTop}px; height: {modalHeight}px;" in:fade={{duration: 200}} out:fade={{duration: 150}} on:click={closePlaylistSelector}>
+        <div class="modal-glass-card" in:scale={{start: 0.95, duration: 250, opacity: 0}} on:click|stopPropagation>
+            <div class="modal-header">
+                <h3>Add to Playlist</h3>
+                <button class="btn-close" on:click={closePlaylistSelector}>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
+            </div>
+            
+            <div class="track-preview">
+                <div class="preview-title">{trackToAdd?.title}</div>
+                <div class="preview-artist">{trackToAdd?.album?.artist?.name || 'Unknown Artist'}</div>
+            </div>
+
+            <div class="modal-list">
+                {#each userPlaylists as p}
+                    <button class="modal-list-item" on:click={() => addToPlaylist(p.id)}>
+                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                        {p.name}
+                    </button>
+                {/each}
+                {#if userPlaylists.length === 0}
+                    <div style="text-align: center; color: rgba(255,255,255,0.4); padding: 16px;">
+                        No playlists found. Create one first!
+                    </div>
+                {/if}
+            </div>
+        </div>
+    </div>
+{/if}
+
+<div use:portal class="app-overlays" style="position: absolute; z-index: 9999999;">
+    {#if toastMessage}
+        <div class="toast-notification" in:scale={{start: 0.8, duration: 250}} out:fade={{duration: 200}}>
+            <svg class="toast-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <line x1="12" y1="5" x2="12" y2="19"></line>
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+            <span>{toastMessage}</span>
+        </div>
+    {/if}
+
+    {#if contextMenu.show}
+        <div class="context-menu-glass" style="top: {contextMenu.y}px; left: {contextMenu.x}px;" in:scale={{start: 0.95, duration: 150}} out:fade={{duration: 100}} on:click|stopPropagation>
+            <div class="context-header">
+                <span class="context-title">{contextMenu.track.title}</span>
+            </div>
+            <button class="context-btn" on:click={() => { playSpecificTrack(tracks.findIndex(t => t.id === contextMenu.track.id)); closeContextMenu(); }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                Play Now
+            </button>
+            <button class="context-btn" on:click={() => addToQueueContext(contextMenu.track)}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                Add to Queue
+            </button>
+            <button class="context-btn" on:click={() => { openPlaylistSelector(contextMenu.track); closeContextMenu(); }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                Add to Playlist
+            </button>
+            <button class="context-btn" on:click={() => { removeTrackFromPlaylist(contextMenu.track); closeContextMenu(); }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                Remove from Playlist
+            </button>
+        </div>
+    {/if}
+</div>
 
 <style>
     /* View Layout */
@@ -281,8 +555,24 @@
     .list-item.active { background-color: rgba(255,255,255,0.1); }
     .list-item.active .list-item-num, .list-item.active .list-item-title { color: var(--accent-color); }
     
-    .swipe-bg { position: absolute; top: 0; left: 0; height: 100%; width: 0; background: var(--accent-dark); z-index: 1; display: flex; align-items: center; border-radius: 8px 0 0 8px; overflow: hidden; }
-    .swipe-bg svg { position: absolute; left: 30px; top: 50%; transform: translate(-50%, -50%); transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1); }
+    .list-item.active .list-item-num, .list-item.active .list-item-title { color: var(--accent-color); }
+    
+    .swipe-bg-left, .swipe-bg-right { 
+        position: absolute; top: 0; bottom: 0; width: 0; 
+        z-index: 1; display: flex; align-items: center; 
+        border-radius: 8px; overflow: hidden; 
+    }
+    
+    .swipe-bg-left { 
+        left: 0; background: rgba(16, 185, 129, 0.4); 
+    }
+    .swipe-bg-right { 
+        right: 0; background: rgba(239, 68, 68, 0.4); 
+        justify-content: flex-end; 
+    }
+    
+    .swipe-bg-left svg { margin-left: 20px; flex-shrink: 0; transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1); }
+    .swipe-bg-right svg { margin-right: 20px; flex-shrink: 0; transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1); }
     
     .list-item-content { position: relative; z-index: 2; display: grid; grid-template-columns: 40px 1fr 60px; gap: 16px; align-items: center; padding: 10px 16px; cursor: pointer; outline: none; }
     .list-item-num { text-align: center; color: var(--text-secondary); font-weight: 500; font-size: 16px; font-variant-numeric: tabular-nums; }
@@ -317,6 +607,24 @@
     .btn-icon-bar:disabled { opacity: 0.3; cursor: not-allowed; }
 
     .empty-state { text-align: center; padding: 64px 24px; color: var(--text-secondary); font-size: 16px; font-weight: 600; background: var(--surface-color); border-radius: 16px; border: 1px dashed rgba(255,255,255,0.1); }
+    
+    .btn-delete-playlist { color: #ef4444; }
+    .btn-delete-playlist.hoverable:hover:not(:disabled) { color: #f87171; }
+
+    /* iOS 8 Ringer Style Toast */
+    .toast-notification {
+        position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+        background: rgba(20, 20, 20, 0.85); 
+        backdrop-filter: blur(25px) saturate(150%); 
+        -webkit-backdrop-filter: blur(25px) saturate(150%);
+        color: white; font-weight: 600; font-size: 16px;
+        width: 170px; height: 170px; border-radius: 28px; z-index: 9999999;
+        display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px;
+        box-shadow: 0 20px 50px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.1);
+        border: 1px solid rgba(255,255,255,0.05);
+        pointer-events: none;
+    }
+    .toast-icon { width: 56px; height: 56px; stroke-width: 1.5px; stroke: white; }
 
     /* Mobile Adjustments */
     @media (max-width: 768px) {
@@ -331,4 +639,85 @@
         .track-cover { width: 40px; height: 40px; }
         .list-item-num { font-size: 14px; }
     }
+
+    /* Modal / Playlist Selector Styles */
+    .modal-backdrop {
+        position: absolute; left: 0; width: 100%;
+        background: rgba(0,0,0,0.55); backdrop-filter: blur(4px);
+        -webkit-backdrop-filter: blur(4px);
+        z-index: 999999; display: flex; align-items: center; justify-content: center;
+    }
+
+    .modal-glass-card {
+        background: rgba(255, 255, 255, 0.05);
+        backdrop-filter: blur(40px) saturate(150%);
+        -webkit-backdrop-filter: blur(40px) saturate(150%);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-top: 1px solid rgba(255, 255, 255, 0.25);
+        border-radius: 24px; padding: 24px;
+        width: 90%; max-width: 400px;
+        box-shadow: 0 32px 64px rgba(0, 0, 0, 0.5);
+    }
+
+    .modal-header {
+        display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;
+    }
+    
+    .modal-header h3 { margin: 0; color: white; font-weight: 800; font-size: 20px; }
+    
+    .btn-close {
+        background: none; border: none; color: rgba(255,255,255,0.5); cursor: pointer; padding: 4px; border-radius: 50%; transition: all 0.2s;
+    }
+    .btn-close:hover { color: white; background: rgba(255,255,255,0.1); }
+
+    .track-preview {
+        background: rgba(0,0,0,0.3); padding: 12px 16px; border-radius: 12px; margin-bottom: 24px;
+        border: 1px solid rgba(255,255,255,0.05);
+    }
+    .preview-title { color: white; font-weight: bold; font-size: 15px; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .preview-artist { color: rgba(255,255,255,0.5); font-size: 13px; }
+
+    .modal-list {
+        display: flex; flex-direction: column; gap: 8px; max-height: 300px; overflow-y: auto;
+    }
+
+    .modal-list-item {
+        background: rgba(255,255,255,0.03); border: 1px solid transparent;
+        color: white; font-weight: 600; padding: 16px; border-radius: 12px;
+        display: flex; align-items: center; gap: 12px; cursor: pointer; transition: all 0.2s; text-align: left;
+    }
+
+    .modal-list-item svg { color: rgba(255,255,255,0.5); transition: color 0.2s; }
+    .modal-list-item:hover { background: rgba(255, 255, 255, 0.08); border-color: rgba(255, 255, 255, 0.1); }
+    .modal-list-item:hover svg { color: var(--accent-color); }
+
+    .btn-add-playlist {
+        background: none; border: none; color: rgba(255,255,255,0.3);
+        cursor: pointer; padding: 4px; display: flex; align-items: center; justify-content: center;
+        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        border-radius: 50%;
+    }
+    .btn-add-playlist.user-remove-track:hover {
+        color: #ef4444; background: rgba(239, 68, 68, 0.1);
+        transform: scale(1.1);
+    }
+
+    /* CONTEXT MENU */
+    .context-menu-glass {
+        position: fixed; width: 220px; z-index: 9999999;
+        background: rgba(25, 25, 25, 0.85); backdrop-filter: blur(32px) saturate(150%); -webkit-backdrop-filter: blur(32px) saturate(150%);
+        border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 14px;
+        box-shadow: 0 16px 40px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.05);
+        display: flex; flex-direction: column; padding: 6px;
+    }
+    .context-header { padding: 8px 10px; border-bottom: 1px solid rgba(255,255,255,0.05); margin-bottom: 4px; }
+    .context-title { font-size: 12px; font-weight: 700; color: rgba(255,255,255,0.5); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+    .context-btn {
+        background: transparent; border: none; color: white; font-size: 14px; font-weight: 500;
+        padding: 10px 12px; border-radius: 8px; display: flex; align-items: center; gap: 12px;
+        cursor: pointer; transition: background 0.2s; text-align: left;
+    }
+    .context-btn:hover { background: rgba(255,255,255,0.1); color: var(--accent-color); }
+    .context-btn svg { color: rgba(255,255,255,0.5); transition: color 0.2s; }
+    .context-btn:hover svg { color: var(--accent-color); }
 </style>

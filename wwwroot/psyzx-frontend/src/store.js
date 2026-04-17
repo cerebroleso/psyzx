@@ -18,6 +18,8 @@ export const isPlaying = writable(false);
 export const isShuffle = writable(false);
 export const isRepeat = writable(false);
 export const shuffleHistory = writable([]);
+export const shuffleFuture = writable([]);
+export const userQueue = writable([]);
 
 export const appSessionVersion = writable(Date.now());
 

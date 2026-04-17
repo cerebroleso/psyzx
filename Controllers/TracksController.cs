@@ -11,6 +11,7 @@ using System.Threading.Tasks;
 using System.Linq;
 using Microsoft.Extensions.Configuration;
 using System;
+using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using System.Diagnostics;
 using SixLabors.ImageSharp;
@@ -232,8 +233,77 @@ public class TracksController : ControllerBase
         return Ok(shuffledResult);
     }
 
+    [HttpGet("wrapped")]
+    public async Task<IActionResult> GetWrapped([FromQuery] string duration = "month")
+    {
+        var userIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (!int.TryParse(userIdStr, out int userId)) return Unauthorized();
+
+        DateTime startDate = DateTime.UtcNow;
+        if (duration == "week") startDate = startDate.AddDays(-7);
+        else if (duration == "month") startDate = startDate.AddMonths(-1);
+        else if (duration == "year") startDate = startDate.AddYears(-1);
+        else startDate = DateTime.MinValue; // all time
+
+        var topTrackId = await _context.ListenEvents
+            .Where(le => le.UserId == userId && le.Timestamp >= startDate && le.ListenDuration > 0)
+            .GroupBy(le => le.TrackId)
+            .OrderByDescending(g => g.Sum(le => le.ListenDuration))
+            .Select(g => (int?)g.Key)
+            .FirstOrDefaultAsync();
+
+        var topAlbumId = await _context.ListenEvents
+            .Include(le => le.Track)
+            .Where(le => le.UserId == userId && le.Timestamp >= startDate && le.ListenDuration > 0)
+            .GroupBy(le => le.Track.AlbumId)
+            .OrderByDescending(g => g.Sum(le => le.ListenDuration))
+            .Select(g => (int?)g.Key)
+            .FirstOrDefaultAsync();
+
+        var topArtistId = await _context.ListenEvents
+            .Include(le => le.Track).ThenInclude(t => t.Album)
+            .Where(le => le.UserId == userId && le.Timestamp >= startDate && le.ListenDuration > 0)
+            .GroupBy(le => le.Track.Album.ArtistId)
+            .OrderByDescending(g => g.Sum(le => le.ListenDuration))
+            .Select(g => (int?)g.Key)
+            .FirstOrDefaultAsync();
+
+        int totalSeconds = await _context.ListenEvents
+            .Where(le => le.UserId == userId && le.Timestamp >= startDate)
+            .Select(le => (int?)le.ListenDuration)
+            .SumAsync() ?? 0;
+
+        var response = new Dictionary<string, object>
+        {
+            ["totalListenTimeSeconds"] = totalSeconds
+        };
+
+        if (topTrackId.HasValue)
+        {
+            var track = await _context.Tracks.FindAsync(topTrackId.Value);
+            if (track != null)
+                response["topTrack"] = new { id = track.Id, title = track.Title };
+        }
+
+        if (topAlbumId.HasValue)
+        {
+            var album = await _context.Albums.FindAsync(topAlbumId.Value);
+            if (album != null)
+                response["topAlbum"] = new { id = album.Id, title = album.Title, coverPath = album.CoverPath };
+        }
+
+        if (topArtistId.HasValue)
+        {
+            var artist = await _context.Artists.FindAsync(topArtistId.Value);
+            if (artist != null)
+                response["topArtist"] = new { id = artist.Id, name = artist.Name, imagePath = artist.ImagePath };
+        }
+
+        return Ok(response);
+    }
+
     [HttpPost("{id}/play")]
-    public async Task<IActionResult> RecordPlay(int id)
+    public async Task<IActionResult> RecordPlay(int id, [FromBody] RecordPlayRequest? request)
     {
         var track = await _context.Tracks
             .Include(t => t.Album)
@@ -248,7 +318,59 @@ public class TracksController : ControllerBase
             track.Album.PlayCount++;
         }
 
+        if (User.Identity?.IsAuthenticated == true)
+        {
+            var userIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            if (int.TryParse(userIdStr, out int userId))
+            {
+                var listenEvent = new ListenEvent
+                {
+                    TrackId = track.Id,
+                    UserId = userId,
+                    Timestamp = DateTime.UtcNow,
+                    ListenDuration = request?.ListenDuration ?? 0,
+                    IsCompleted = request?.IsCompleted ?? false,
+                    IsSkipped = request?.IsSkipped ?? false,
+                    PlaybackContext = request?.PlaybackContext ?? string.Empty,
+                    ClientOS = GetClientOS(Request.Headers["User-Agent"].ToString()),
+                    ClientBrowser = GetClientBrowser(Request.Headers["User-Agent"].ToString())
+                };
+                
+                _context.ListenEvents.Add(listenEvent);
+            }
+        }
+
         await _context.SaveChangesAsync();
         return Ok(new { trackPlays = track.PlayCount, albumPlays = track.Album?.PlayCount ?? 0 });
     }
+
+    private string GetClientOS(string userAgent)
+    {
+        if (string.IsNullOrEmpty(userAgent)) return "Unknown";
+        if (userAgent.Contains("Windows")) return "Windows";
+        if (userAgent.Contains("Mac OS")) return "macOS";
+        if (userAgent.Contains("Linux")) return "Linux";
+        if (userAgent.Contains("Android")) return "Android";
+        if (userAgent.Contains("iPhone") || userAgent.Contains("iPad")) return "iOS";
+        return "Unknown";
+    }
+
+    private string GetClientBrowser(string userAgent)
+    {
+        if (string.IsNullOrEmpty(userAgent)) return "Unknown";
+        if (userAgent.Contains("Firefox")) return "Firefox";
+        if (userAgent.Contains("OPR") || userAgent.Contains("Opera")) return "Opera";
+        if (userAgent.Contains("Edg")) return "Edge";
+        if (userAgent.Contains("Chrome")) return "Chrome";
+        if (userAgent.Contains("Safari")) return "Safari";
+        return "Unknown";
+    }
+}
+
+public class RecordPlayRequest
+{
+    public int ListenDuration { get; set; }
+    public bool IsCompleted { get; set; }
+    public bool IsSkipped { get; set; }
+    public string PlaybackContext { get; set; } = string.Empty;
 }

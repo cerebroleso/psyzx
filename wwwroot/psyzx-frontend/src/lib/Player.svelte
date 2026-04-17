@@ -43,7 +43,17 @@
   };
 
   $: track = $currentPlaylist[$currentIndex];
-  $: album = track ? $albumsMap.get(track.albumId) : null;
+  // Prefer albumsMap (full library), fall back to inline track.album data (playlist tracks carry this)
+  $: album = track
+    ? ($albumsMap.get(track.albumId) || (track.album ? {
+        id: track.album.id,
+        title: track.album.title,
+        coverPath: track.album.coverPath,
+        artistId: track.album.artist?.id,
+        artistName: track.album.artist?.name || 'Unknown Artist',
+        tracks: []
+      } : null))
+    : null;
   $: streamUrl = track ? `/api/Tracks/stream/${track.id}` : '';
   $: coverUrl = (album && album.coverPath)
     ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&v=${$appSessionVersion}&quality=low`
@@ -185,6 +195,44 @@
 
   let isRestoringState = true;
 
+  let lastUrl = '';
+  // Analytics State
+  let trackedTrackId = null;
+  let trackStartTimeRaw = 0;
+  let trackAccumulatedTime = 0;
+  let lastPlayState = false;
+
+  const flushAnalytics = (isCompleted = false) => {
+      if (trackedTrackId) {
+          if (lastPlayState) {
+              trackAccumulatedTime += (Date.now() - trackStartTimeRaw);
+              trackStartTimeRaw = Date.now();
+          }
+
+          const durationSec = Math.floor(trackAccumulatedTime / 1000);
+          
+          if (durationSec > 0 || isCompleted) {
+              api.recordPlay(trackedTrackId, {
+                  listenDuration: durationSec,
+                  isCompleted: isCompleted,
+                  isSkipped: !isCompleted && durationSec < ($playerDuration || 999), 
+                  playbackContext: 'web'
+              });
+          }
+      }
+  };
+
+  $: {
+    if ($isPlaying !== lastPlayState) {
+        if ($isPlaying) {
+            trackStartTimeRaw = Date.now();
+        } else {
+            trackAccumulatedTime += (Date.now() - trackStartTimeRaw);
+        }
+        lastPlayState = $isPlaying;
+    }
+  }
+
   onMount(() => {
     registerAudioElements(audioElA, audioElB);
     animationFrameId = requestAnimationFrame(updateProgressBarLoop);
@@ -199,7 +247,14 @@
         setTimeout(() => { activePlayer.currentTime = parseFloat(savedTime) || 0; isRestoringState = false}, 300);
       } catch(e) {}
     }
-    return () => cancelAnimationFrame(animationFrameId);
+
+    const handleUnload = () => flushAnalytics(false);
+    window.addEventListener('beforeunload', handleUnload);
+
+    return () => {
+        cancelAnimationFrame(animationFrameId);
+        window.removeEventListener('beforeunload', handleUnload);
+    };
   });
 
   $: if ($currentPlaylist.length > 0) {
@@ -207,18 +262,26 @@
     safeSetStorage('psyzx_index', $currentIndex.toString());
   }
 
-  let lastUrl = '';
-
   // --- PRIORITY 2: Audio stream starts instantly on change ---
   $: if (streamUrl && streamUrl !== lastUrl) {
+    if (!isRestoringState && trackedTrackId) {
+        flushAnalytics(false);
+    }
+
     lastUrl = streamUrl;
+    
+    trackedTrackId = track ? track.id : null;
+    trackAccumulatedTime = 0;
+    if ($isPlaying) {
+        trackStartTimeRaw = Date.now();
+    }
+
     if (isRestoringState) {
         preloadNextUrl(streamUrl); 
     } else {
         loadAndPlayUrl(streamUrl, track?.id);
 
       if (track) {
-        api.recordPlay(track.id);
         albumsMap.update(map => {
           const targetAlbum = map.get(track.albumId);
           if (targetAlbum) {
@@ -275,6 +338,10 @@
 <svelte:window
   on:keydown={handleKeydown}
   on:track-ended={() => {
+      flushAnalytics(true);
+      trackAccumulatedTime = 0;
+      if ($isPlaying) trackStartTimeRaw = Date.now();
+      
       if ($isRepeat) { activePlayer.currentTime = 0; activePlayer.play(); }
       else { playNext(); }
   }}

@@ -17,4 +17,5 @@ public class Track
     public Album Album { get; set; } = null!;
 
     public int DiscNumber { get; set; } = 1;
+    public ICollection<ListenEvent> ListenEvents { get; set; } = new List<ListenEvent>();
 }

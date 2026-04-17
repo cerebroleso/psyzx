@@ -130,6 +130,19 @@ public class PlaylistsController : ControllerBase
         return Ok();
     }
 
+    [HttpDelete("{id}")]
+    public async Task<IActionResult> DeletePlaylist(int id)
+    {
+        var userId = GetCurrentUserId();
+        var playlist = await _db.Playlists.FirstOrDefaultAsync(p => p.Id == id && p.UserId == userId);
+        
+        if (playlist == null) return NotFound();
+
+        _db.Playlists.Remove(playlist);
+        await _db.SaveChangesAsync();
+        return Ok();
+    }
+
     [HttpGet("{id}")]
     public async Task<IActionResult> GetPlaylist(int id)
     {
@@ -157,6 +170,7 @@ public class PlaylistsController : ControllerBase
                 filePath = pt.Track.FilePath,
                 bitrate = pt.Track.Bitrate,
                 playCount = pt.Track.PlayCount,
+                albumId = pt.Track.Album.Id, // explicitly pass albumId so Player.svelte can map it from the store
                 album = new
                 {
                     id = pt.Track.Album.Id,
