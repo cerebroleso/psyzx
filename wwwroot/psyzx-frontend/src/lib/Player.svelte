@@ -59,7 +59,7 @@
     ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&v=${$appSessionVersion}&quality=low`
     : DEFAULT_PLACEHOLDER;
   $: progressPct = $playerDuration > 0 ? ($playerCurrentTime / $playerDuration) * 100 : 0;
-  $: fileExt = track ? track.filePath.split('.').pop().toUpperCase() : 'UNK';
+  $: fileExt = (track && track.filePath) ? track.filePath.split('.').pop().toUpperCase() : 'UNK';
   $: bitrate = track ? track.bitrate : 0;
   $: globalBitrate.set(bitrate);
   $: globalFileExt.set(fileExt);

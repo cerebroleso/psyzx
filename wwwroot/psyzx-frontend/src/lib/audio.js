@@ -640,15 +640,22 @@ const startSyntheticClock = () => {
 
         let pos, dur;
 
-        if (mseActive && msePlayer) {
-            pos = msePlayer.currentTime;
-            dur = msePlayer.duration > 0 ? msePlayer.duration : get(playerDuration);
-            if (msePlayer.duration > 0) playerDuration.set(msePlayer.duration);
-        } else if (currentBuffer && audioCtx) {
-            const elapsed = audioCtx.currentTime - trackStartTime;
-            dur = currentBuffer.duration;
-            pos = Math.max(0, Math.min(pauseOffset + elapsed, dur));
-        } else return;
+        if (isWebAudioMode) {
+            if (mseActive && msePlayer) {
+                pos = msePlayer.currentTime;
+                dur = msePlayer.duration > 0 ? msePlayer.duration : get(playerDuration);
+                if (msePlayer.duration > 0) playerDuration.set(msePlayer.duration);
+            } else if (currentBuffer && audioCtx) {
+                const elapsed = audioCtx.currentTime - trackStartTime;
+                dur = currentBuffer.duration;
+                pos = Math.max(0, Math.min(pauseOffset + elapsed, dur));
+            } else return;
+        } else {
+            // HTML5 fallback mode — read directly from the active element
+            if (!html5ActivePlayer || html5ActivePlayer.readyState < 1) return;
+            pos = html5ActivePlayer.currentTime;
+            dur = html5ActivePlayer.duration > 0 ? html5ActivePlayer.duration : get(playerDuration);
+        }
 
         if (pos === lastPos && !get(isBuffering)) {
             stuckTicks++;
@@ -664,14 +671,13 @@ const startSyntheticClock = () => {
 
         playerCurrentTime.set(pos);
 
-        if (!isWebAudioMode) return;
-
         syncPulse++;
         if (syncPulse >= 10) {
             syncPulse = 0;
             if (dur > 0) updateMediaPositionState(pos, dur);
 
-            if (!mseActive && html5ActivePlayer) {
+            // WebAudio mode: keep HTML5 element in sync as keep-alive
+            if (isWebAudioMode && !mseActive && html5ActivePlayer) {
                 if (html5ActivePlayer.paused) {
                     const p = html5ActivePlayer.play(); if (p) p.catch(() => {});
                 }
@@ -838,7 +844,11 @@ const attemptHardwareRecovery = (stuckPos) => {
         html5ActivePlayer.currentTime = stuckPos;
         const p = html5ActivePlayer.play(); if (p) p.catch(()=>{});
     }
-    window.dispatchEvent(new CustomEvent('ios-hardware-deadlock'));
+    
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.userAgent.includes("Mac") && "ontouchend" in document);
+    if (stuckPos === 0 && isIOS) {
+        window.dispatchEvent(new CustomEvent('ios-hardware-deadlock'));
+    }
 };
 
 // ─── Engine bootstrap ─────────────────────────────────────────────────────────
@@ -959,8 +969,9 @@ export const registerAudioElements = (elA, elB) => {
 
     tryWireAudioNodes();
 
-    if (isWebAudioMode) return; 
-
+    // Always set up HTML5 event listeners regardless of mode.
+    // These elements are always present as fallback, and if the user
+    // toggles gapless off, these listeners must already exist.
     const setup = (el) => {
         el.addEventListener('error', () => {
             if (el === html5ActivePlayer && !el.src.startsWith('data:')) {
@@ -987,11 +998,26 @@ export const registerAudioElements = (elA, elB) => {
             }
         }, { passive: true });
 
+        // Safety net: if the early-end check in timeupdate misses
+        // (e.g. large timeupdate gaps on iOS), catch the native ended event.
+        el.addEventListener('ended', () => {
+            if (el === html5ActivePlayer && !el._earlyEndFired) {
+                el._earlyEndFired = true;
+                window.dispatchEvent(new CustomEvent('track-ended'));
+            }
+        }, { passive: true });
+
         el.addEventListener('play', () => {
             el._earlyEndFired = false;
             clearTimeout(stallTimeout);
             stallTimeout = setTimeout(() => checkDeadlock(el), 3500);
-            if (el === html5ActivePlayer) isPlaying.set(true);
+            if (el === html5ActivePlayer) {
+                isPlaying.set(true);
+                // Update iOS widget: mark as playing with current position
+                if (!isWebAudioMode && el.duration > 0) {
+                    updateMediaPositionState(el.currentTime, el.duration);
+                }
+            }
         });
 
         el.addEventListener('waiting', () => {
@@ -999,12 +1025,24 @@ export const registerAudioElements = (elA, elB) => {
         }, { passive: true });
 
         el.addEventListener('playing', () => {
-            if (el === html5ActivePlayer) { isBuffering.set(false); stopBufferSound(); isPlaying.set(true); }
+            if (el === html5ActivePlayer) {
+                isBuffering.set(false); stopBufferSound(); isPlaying.set(true);
+                // Update iOS widget: confirm playback is active
+                if (!isWebAudioMode && el.duration > 0) {
+                    updateMediaPositionState(el.currentTime, el.duration);
+                }
+            }
             clearTimeout(stallTimeout);
         }, { passive: true });
 
         el.addEventListener('pause', () => {
-            if (el === html5ActivePlayer) isPlaying.set(false);
+            if (el === html5ActivePlayer) {
+                isPlaying.set(false);
+                // Update iOS widget: mark as paused so widget stays visible
+                if (!isWebAudioMode && el.duration > 0) {
+                    updateMediaPositionState(el.currentTime, el.duration);
+                }
+            }
             clearTimeout(stallTimeout);
         }, { passive: true });
     };
@@ -1062,6 +1100,10 @@ export const loadAndPlayUrl = async (url) => {
     if (!isEngineInitialized) unlockAudioContext();
     if (audioCtx?.state === 'suspended') await audioCtx.resume().catch(() => {});
 
+    // Always tear down MSE when loading a new track, regardless of mode.
+    // Prevents stale MSE state from interfering with HTML5 playback.
+    if (mseActive) teardownMse();
+
     if (html5StandbyPlayer && srcMatchesUrl(html5StandbyPlayer.src, url)) {
         [html5ActivePlayer, html5StandbyPlayer] = [html5StandbyPlayer, html5ActivePlayer];
     } else if (html5ActivePlayer && !srcMatchesUrl(html5ActivePlayer.src, url)) {
@@ -1095,7 +1137,10 @@ export const loadAndPlayUrl = async (url) => {
             activeGain.gain.setValueAtTime(0, now);
             activeGain.gain.linearRampToValueAtTime(target, now + 0.05);
         }
-        if (!isWebAudioMode) isPlaying.set(true);
+        if (!isWebAudioMode) {
+            isPlaying.set(true);
+            startSyntheticClock();
+        }
     };
     try { startHtml5(); } catch {}
 
@@ -1213,6 +1258,7 @@ export const togglePlayGlobal = async () => {
     } else {
         if (!html5ActivePlayer) return;
         if (html5ActivePlayer.paused) {
+            await playStateCue(false);
             if (audioCtx?.state === 'suspended') await audioCtx.resume().catch(() => {});
             const aGain = html5ActivePlayer === playerA ? gainA : gainB;
             if (aGain && audioCtx) {
@@ -1221,9 +1267,16 @@ export const togglePlayGlobal = async () => {
             }
             const p = html5ActivePlayer.play(); if (p) p.catch(() => {});
             isPlaying.set(true);
+            startSyntheticClock();
+            const dur = html5ActivePlayer.duration;
+            if (dur > 0) updateMediaPositionState(html5ActivePlayer.currentTime, dur);
         } else {
+            await playStateCue(true);
             html5ActivePlayer.pause();
             isPlaying.set(false);
+            if (syntheticClockInterval) clearInterval(syntheticClockInterval);
+            const dur = html5ActivePlayer.duration;
+            if (dur > 0) updateMediaPositionState(html5ActivePlayer.currentTime, dur);
         }
     }
 };
@@ -1310,7 +1363,7 @@ const makeCueTone = () => {
 };
 
 export const playStateCue = async (isPausing) => {
-    if (!audioCtx || !isWebAudioMode) return;
+    if (!audioCtx) return;
     try {
         if (audioCtx.state === 'suspended') await audioCtx.resume();
         const { osc, gain } = makeCueTone();
@@ -1325,7 +1378,7 @@ export const playStateCue = async (isPausing) => {
 };
 
 export const playSkipCue = async (dir) => {
-    if (!audioCtx || !isWebAudioMode) return;
+    if (!audioCtx) return;
     try {
         if (audioCtx.state === 'suspended') await audioCtx.resume();
         const { osc, gain } = makeCueTone();
@@ -1342,7 +1395,7 @@ export const playSkipCue = async (dir) => {
 // ─── Buffer-loading sound ─────────────────────────────────────────────────────
 
 export const startBufferSound = () => {
-    if (!audioCtx || !isWebAudioMode || audioCtx.state !== 'running' || bufferOsc) return;
+    if (!audioCtx || audioCtx.state !== 'running' || bufferOsc) return;
 
     bufferGain = audioCtx.createGain();
     bufferGain.connect(mixerNode ?? audioCtx.destination);
@@ -1496,7 +1549,7 @@ export const playNextGlobal = async (api, forceManualCue = false) => {
     const duration      = get(playerDuration);
     const isAutoAdvance = duration > 0 && (duration - currentTime <= 0.5);
 
-    if (isWebAudioMode && (!isAutoAdvance || forceManualCue)) playSkipCue('next');
+    if (!isAutoAdvance || forceManualCue) playSkipCue('next');
 
     // Process Explicit Queue 
     if (queue.length > 0) {
@@ -1564,7 +1617,7 @@ export const playPrevGlobal = () => {
         if (isWebAudioMode) seekWebAudio(0);
         else if (html5ActivePlayer) html5ActivePlayer.currentTime = 0;
     } else {
-        if (isWebAudioMode) playSkipCue('prev');
+        playSkipCue('prev');
         if (shuffle && history.length > 0) {
             const prev = history[history.length - 1];
             shuffleFuture.update(f => [index, ...f]); // Save memory of where we were

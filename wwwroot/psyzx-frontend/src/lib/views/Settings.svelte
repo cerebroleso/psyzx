@@ -27,6 +27,15 @@
             if (localStorage.getItem('psyzx_vis_shape') === null) {
                 visShape.set('PSPWaves');
             }
+
+            // Migration: old visIntensity used a 0-3.0 scale where 3.0 = 30x.
+            // New scale is 0-0.5 where 0.3 = 3.0x display.
+            // If the stored value exceeds the new max (0.5), convert it.
+            const storedIntensity = parseFloat(localStorage.getItem('psyzx_vis_intensity'));
+            if (!isNaN(storedIntensity) && storedIntensity > 0.5) {
+                const migrated = (storedIntensity / 10).toFixed(2);
+                visIntensity.set(migrated);
+            }
         }
 
         setVolumeBoost(currentBoost);
@@ -239,11 +248,11 @@
             <div class="setting-info w-full">
                 <div class="flex-between">
                     <span class="setting-title">Beat Intensity</span>
-                    <span class="highlight-val">{($visIntensity * 10).toFixed(1)}x</span>
+                    <span class="highlight-val">{(parseFloat($visIntensity) * 10).toFixed(1)}x</span>
                 </div>
                 <span class="setting-desc mb-16">How violently the shape reacts to the FFT frequency data.</span>
             </div>
-            <input class="range-slider" type="range" min="0.0" max="3.0" step="0.1" value={($visIntensity * 10).toFixed(1)} on:input={(e) => visIntensity.set(e.target.value / 10)}>
+            <input class="range-slider" type="range" min="0.0" max="0.5" step="0.01" value={$visIntensity} on:input={(e) => visIntensity.set(e.target.value)}>
         </div>
 
         <div class="setting-item-col">

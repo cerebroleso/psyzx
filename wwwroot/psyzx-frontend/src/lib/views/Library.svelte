@@ -436,7 +436,7 @@
         <div class="card" role="button" tabindex="0" on:click={() => goArtist(artist.id)}>
             <img
                 use:smoothLoad
-                src={artist.imagePath ? `/api/Tracks/image?path=${encodeURIComponent(artist.imagePath)}&size=thumb` : DEFAULT_PLACEHOLDER}
+                src={artist.imagePath ? `/api/Tracks/image?path=${encodeURIComponent(artist.imagePath.split('?')[0])}&size=thumb&v=${$appSessionVersion}` : DEFAULT_PLACEHOLDER}
                 alt=""
                 loading="lazy"
                 decoding="async"
@@ -546,17 +546,23 @@
     /* Context Menu Modal */
     .context-menu { position: fixed; z-index: 9999999; background: rgba(30, 30, 30, 0.75); backdrop-filter: blur(20px) saturate(150%); -webkit-backdrop-filter: blur(20px) saturate(150%); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; padding: 4px; min-width: 200px; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4); }
     .context-item { display: flex; align-items: center; gap: 8px; width: 100%; padding: 10px 12px; background: transparent; border: none; color: white; font-size: 13px; font-weight: 500; border-radius: 4px; cursor: pointer; text-align: left; transition: background 0.15s; }
-    .context-item:hover { background: rgba(255, 255, 255, 0.1); }
     .context-item.text-danger { color: #ef4444; }
-    .context-item.text-danger:hover { background: rgba(239, 68, 68, 0.1); }
+    @media (hover: hover) {
+        .context-item:hover { background: rgba(255, 255, 255, 0.1); }
+        .context-item.text-danger:hover { background: rgba(239, 68, 68, 0.1); }
+    }
 
     /* Banners */
     .banners-wrapper { display: flex; flex-direction: column; gap: 10px; margin-bottom: 18px; }
     .duplicates-banner { display: flex; align-items: center; gap: 10px; width: 100%; padding: 11px 16px; border-radius: 10px; cursor: pointer; text-align: left; font-size: 13px; transition: background 0.15s; }
     .artist-banner { background: rgba(230, 180, 60, 0.07); border: 0.5px solid rgba(230, 180, 60, 0.3); color: #d4a93a; }
-    .artist-banner:hover { background: rgba(230, 180, 60, 0.12); }
+    @media (hover: hover) {
+        .artist-banner:hover { background: rgba(230, 180, 60, 0.12); }
+    }
     .album-banner { background: rgba(59, 130, 246, 0.07); border: 0.5px solid rgba(59, 130, 246, 0.3); color: #60a5fa; }
-    .album-banner:hover { background: rgba(59, 130, 246, 0.12); }
+    @media (hover: hover) {
+        .album-banner:hover { background: rgba(59, 130, 246, 0.12); }
+    }
     .banner-icon { flex-shrink: 0; display: flex; align-items: center; }
     .banner-text { flex: 1; font-weight: 500; }
     .banner-chevron { font-size: 17px; opacity: 0.55; }
@@ -570,7 +576,9 @@
     .btn-close:hover { color: white; background: rgba(255,255,255,0.1); }
     .modal-list { display: flex; flex-direction: column; gap: 4px; overflow-y: auto; }
     .dup-row { display: flex; align-items: center; gap: 12px; background: rgba(255,255,255,0.03); border: 1px solid transparent; border-radius: 12px; padding: 14px 16px; transition: background 0.2s, border-color 0.2s; }
-    .dup-row:hover { background: rgba(255,255,255,0.07); border-color: rgba(255,255,255,0.08); }
+    @media (hover: hover) {
+        .dup-row:hover { background: rgba(255,255,255,0.07); border-color: rgba(255,255,255,0.08); }
+    }
     .dup-thumb { width: 40px; height: 40px; border-radius: 6px; object-fit: cover; flex-shrink: 0; }
     .dup-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
     .dup-artist { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--accent-color, #60a5fa); font-weight: 700; margin-bottom: 2px; }
@@ -582,7 +590,9 @@
 
     /* Merge button */
     .merge-btn { background: none; border: none; color: rgba(255,255,255,0.3); cursor: pointer; padding: 6px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; border-radius: 50%; transition: color 0.2s, background 0.2s; }
-    .merge-btn:hover:not(:disabled) { color: #d4a93a; background: rgba(255,255,255,0.07); }
+    @media (hover: hover) {
+        .merge-btn:hover:not(:disabled) { color: #d4a93a; background: rgba(255,255,255,0.07); }
+    }
     .album-merge-btn:hover:not(:disabled) { color: #60a5fa; }
     .merge-btn:disabled { cursor: default; opacity: 0.4; }
 
@@ -599,6 +609,8 @@
     .card-title { flex-grow: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; transition: max-width 0.2s ease; }
     .more-options-btn { position: absolute; right: 0; background: transparent; border: none; color: rgba(255, 255, 255, 0.6); cursor: pointer; padding: 4px; border-radius: 50%; display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.2s ease, background 0.2s ease, color 0.2s ease; }
     .more-options-btn:hover { color: white; background: rgba(255, 255, 255, 0.1); }
-    .card:hover .card-title { max-width: calc(100% - 32px); }
-    .card:hover .more-options-btn { opacity: 1; }
+    @media (hover: hover) {
+        .card:hover .card-title { max-width: calc(100% - 32px); }
+        .card:hover .more-options-btn { opacity: 1; }
+    }
 </style>

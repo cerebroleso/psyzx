@@ -1,8 +1,9 @@
 <script>
     import { onMount } from 'svelte';
-    import { fade, scale } from 'svelte/transition';
+    import { fade, scale, fly } from 'svelte/transition';
+    import { flip } from 'svelte/animate';
     import { api } from '../api.js';
-    import { currentPlaylist, currentIndex, isPlaying, isShuffle, isRepeat, shuffleHistory, isGlobalColorActive, isMaxGlassActive, isLowQualityImages, userQueue, albumsMap } from '../../store.js';
+    import { currentPlaylist, currentIndex, isPlaying, isShuffle, isRepeat, shuffleHistory, isGlobalColorActive, isMaxGlassActive, isLowQualityImages, userQueue, albumsMap, playlistUpdateSignal, appSessionVersion } from '../../store.js';
     import { formatTime } from '../utils.js';
 
     export let playlistId;
@@ -20,13 +21,17 @@
 
     $: playlistCovers = tracks ? [...new Set(tracks.map(t => t.album?.coverPath).filter(Boolean))].slice(0, 4) : [];
 
-    onMount(async () => {
+    $: {
+        $playlistUpdateSignal;
+        if (playlistId) loadPlaylist();
+    }
+
+    async function loadPlaylist() {
         if (playlistId) {
             playlist = await api.getPlaylist(playlistId);
             if (playlist && playlist.tracks) {
                 tracks = playlist.tracks;
                 // Patch albumsMap so Player/FullPlayer can resolve cover art and artist name
-                // for tracks that only exist in this playlist response.
                 albumsMap.update(map => {
                     tracks.forEach(t => {
                         if (t.albumId && !map.has(t.albumId) && t.album) {
@@ -49,7 +54,7 @@
             }
         }
         isLoading = false;
-    });
+    }
 
     const togglePlayPlaylist = () => {
         if (tracks.length === 0) return;
@@ -114,7 +119,7 @@
         if (confirm(`Are you sure you want to delete ${playlist.name}?`)) {
             const success = await api.deletePlaylist(playlistId);
             if (success) {
-                window.location.hash = '#library';
+                window.location.hash = '#playlists';
             } else {
                 showToast('Failed to delete playlist');
             }
@@ -281,6 +286,9 @@
         if (success) {
             closePlaylistSelector();
             showToast('Added to playlist');
+            if (targetPlaylistId === parseInt(playlistId)) {
+                loadPlaylist();
+            }
         }
     };
 
@@ -301,11 +309,11 @@
                     {#if playlistCovers.length >= 4}
                         <div class="dynamic-grid-cover">
                             {#each playlistCovers as cover}
-                                <img src="/api/Tracks/image?path={encodeURIComponent(cover)}" alt="Cover fragment" />
+                                <img src="/api/Tracks/image?path={encodeURIComponent(cover.split('?')[0])}&v={$appSessionVersion}" alt="Cover fragment" />
                             {/each}
                         </div>
                     {:else if playlistCovers.length > 0}
-                        <img src="/api/Tracks/image?path={encodeURIComponent(playlistCovers[0])}" class="single-cover" alt="Playlist Cover" />
+                        <img src="/api/Tracks/image?path={encodeURIComponent(playlistCovers[0].split('?')[0])}&v={$appSessionVersion}" class="single-cover" alt="Playlist Cover" />
                     {:else}
                         <div class="empty-cover">
                             <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
@@ -352,8 +360,12 @@
                 </div>
             </div>
             
-            {#each tracks as track, index}
-                <div class="list-item" class:active={($currentPlaylist?.length ?? 0) > 0 && $currentPlaylist[$currentIndex]?.id === track.id}>
+            {#each tracks as track, index (track.id)}
+                <div class="list-item" 
+                     class:active={($currentPlaylist?.length ?? 0) > 0 && $currentPlaylist[$currentIndex]?.id === track.id}
+                     animate:flip={{duration: 600}}
+                     in:fly={{y: 30, duration: 500}}
+                     out:fade={{duration: 300}}>
                         <div class="swipe-bg-left">
                             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                                 <rect x="6" y="5" width="12" height="6" rx="3" />
@@ -372,7 +384,7 @@
                         <div class="track-details-wrapper">
                             <img 
                                 class="track-cover"
-                                src={`/api/Tracks/image?path=${encodeURIComponent(track.album?.coverPath)}&quality=${$isLowQualityImages ? 'low' : 'high'}`} 
+                                src={`/api/Tracks/image?path=${encodeURIComponent(track.album?.coverPath?.split('?')[0] || '')}&quality=${$isLowQualityImages ? 'low' : 'high'}&v=${$appSessionVersion}`} 
                                 alt="Cover" 
                                 loading="lazy" 
                             />
@@ -403,11 +415,11 @@
 {/if}
 
 {#if showPlaylistModal}
-    <div class="modal-backdrop" style="top: {modalTop}px; height: {modalHeight}px;" in:fade={{duration: 200}} out:fade={{duration: 150}} on:click={closePlaylistSelector}>
-        <div class="modal-glass-card" in:scale={{start: 0.95, duration: 250, opacity: 0}} on:click|stopPropagation>
+    <div class="modal-backdrop" role="button" tabindex="-1" style="top: {modalTop}px; height: {modalHeight}px;" in:fade={{duration: 200}} out:fade={{duration: 150}} on:click={closePlaylistSelector} on:keydown={(e) => e.key === 'Escape' && closePlaylistSelector()}>
+        <div class="modal-glass-card" role="dialog" aria-modal="true" in:scale={{start: 0.95, duration: 250, opacity: 0}} on:click|stopPropagation>
             <div class="modal-header">
                 <h3>Add to Playlist</h3>
-                <button class="btn-close" on:click={closePlaylistSelector}>
+                <button class="btn-close" aria-label="Close" on:click={closePlaylistSelector}>
                     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
                 </button>
             </div>
@@ -437,16 +449,16 @@
 <div use:portal class="app-overlays" style="position: absolute; z-index: 9999999;">
     {#if toastMessage}
         <div class="toast-notification" in:scale={{start: 0.8, duration: 250}} out:fade={{duration: 200}}>
-            <svg class="toast-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                <line x1="12" y1="5" x2="12" y2="19"></line>
-                <line x1="5" y1="12" x2="19" y2="12"></line>
+            <svg class="toast-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="3 6 5 6 21 6"></polyline>
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
             </svg>
             <span>{toastMessage}</span>
         </div>
     {/if}
 
     {#if contextMenu.show}
-        <div class="context-menu-glass" style="top: {contextMenu.y}px; left: {contextMenu.x}px;" in:scale={{start: 0.95, duration: 150}} out:fade={{duration: 100}} on:click|stopPropagation>
+        <div class="context-menu-glass" role="menu" style="top: {contextMenu.y}px; left: {contextMenu.x}px;" in:scale={{start: 0.95, duration: 150}} out:fade={{duration: 100}} on:click|stopPropagation>
             <div class="context-header">
                 <span class="context-title">{contextMenu.track.title}</span>
             </div>

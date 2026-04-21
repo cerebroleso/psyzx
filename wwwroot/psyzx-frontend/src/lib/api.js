@@ -2,7 +2,7 @@ import { currentUser } from '../store.js';
 import { initSync, stopSync, broadcastState } from './sync.js';
 import { activePlayer } from './audio.js';
 import { get } from 'svelte/store';
-import { isPlaying, playerCurrentTime } from '../store.js';
+import { isPlaying, playerCurrentTime, playlistUpdateSignal, appSessionVersion } from '../store.js';
 
 const triggerMetadataSweep = (tracks) => {
     if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
@@ -50,7 +50,10 @@ const setCachedLyrics = (trackId, lyricsData) => {
 // Helper to clean song titles for better search results
 const cleanSongString = (input) => {
     if (!input) return "";
-    return input.replace(/(\s-\sremastered.*|\s-\sradio edit|\s\(feat\..*|\s\[.*\]|\s\(.*version\))/gi, "").trim();
+    let cleaned = input.replace(/(\s-\sremastered.*|\s-\sradio edit|\s\(feat\..*|\s\[.*\]|\s\(.*version\)|\(official video\)|\(official audio\)|\(official lyric video\)|\(demo\)|\(live\)|\(acoustic\))/gi, "").trim();
+    // Remove leading track numbers like "01. ", "1. ", "10-", etc.
+    cleaned = cleaned.replace(/^\d+[\s.-]+/, "");
+    return cleaned;
 };
 
 // LRC Parser logic to convert raw text into your { t: 0, text: "Lyric" } format
@@ -98,78 +101,90 @@ export const fetchLyricsOnFrontend = async (trackId, artist, title) => {
     const cached = getCachedLyrics(trackId);
     if (cached) return cached;
 
+    console.debug("[Lyrics] Raw metadata:", { artist, title });
     const cleanArtist = cleanSongString(artist);
     const cleanTitle = cleanSongString(title);
-    const query = encodeURIComponent(`${cleanArtist} ${cleanTitle}`);
+    console.debug("[Lyrics] Cleaned metadata:", { cleanArtist, cleanTitle });
     
     let lyricsText = null;
     let isSynced = false;
 
-    // --- The Waterfall Array ---
-    // Ranked from most reliable/useful to least.
-    const mirrors = [
-        // 1. LRCLIB (The Gold Standard)
-        // Why it's #1: Lightning fast, open, and provides perfectly synced LRC data.
-        async () => {
-            const res = await fetchWithTimeout(`https://lrclib.net/api/search?q=${query}`);
-            if (!res.ok) return null;
-            const data = await res.json();
-            const track = data.find(i => i.syncedLyrics) || data.find(i => i.plainLyrics);
-            if (track?.syncedLyrics) isSynced = true;
-            return track?.syncedLyrics || track?.plainLyrics || null;
-        },
+    const attemptFetch = async (a, t, typeLabel) => {
+        const query = encodeURIComponent(`${a} ${t}`);
+        const encA = encodeURIComponent(a);
+        const encT = encodeURIComponent(t);
 
-        // 2. Genius (via some-random-api proxy)
-        // Why it's #2: Genius has the largest catalog of plain lyrics on earth. 
-        // Note: We use a scraper proxy because official Genius API blocks frontend CORS and lacks raw text.
-        async () => {
-            const res = await fetchWithTimeout(`https://some-random-api.com/lyrics?title=${query}`);
-            if (!res.ok) return null;
-            const data = await res.json();
-            return data?.lyrics || null;
-        },
-
-        // 3. Lyrics.ovh 
-        // Why it's #3: The oldest reliable fallback for plain lyrics. Strict URL structure.
-        async () => {
-            const res = await fetchWithTimeout(`https://api.lyrics.ovh/v1/${encodeURIComponent(cleanArtist)}/${encodeURIComponent(cleanTitle)}`);
-            if (!res.ok) return null;
-            const data = await res.json();
-            return data?.lyrics || null;
-        },
-
-        // 4. Lyrist
-        // Why it's #4: A modern Vercel-hosted wrapper that scrapes multiple smaller sources.
-        async () => {
-            const res = await fetchWithTimeout(`https://lyrist.vercel.app/api/${query}`);
-            if (!res.ok) return null;
-            const data = await res.json();
-            return data?.lyrics || null;
-        },
-
-        // 5. Popcat API
-        // Why it's #5: Often goes down or rate-limits heavily, but good as a last resort.
-        async () => {
-            const res = await fetchWithTimeout(`https://api.popcat.xyz/lyrics?song=${query}`);
-            if (!res.ok) return null;
-            const data = await res.json();
-            return data?.lyrics || null;
-        }
-    ];
-
-    // --- Execute Waterfall ---
-    for (const fetchMirror of mirrors) {
-        try {
-            lyricsText = await fetchMirror();
-            // If we found valid text, break out of the loop immediately
-            if (lyricsText && typeof lyricsText === 'string' && lyricsText.trim().length > 0) {
-                break;
+        const providers = [
+            {
+                name: "LRCLIB",
+                fn: async () => {
+                    const res = await fetchWithTimeout(`https://lrclib.net/api/search?q=${query}`);
+                    if (!res.ok) return null;
+                    const data = await res.json();
+                    const track = data.find(i => i.syncedLyrics) || data.find(i => i.plainLyrics);
+                    if (track?.syncedLyrics) isSynced = true;
+                    return track?.syncedLyrics || track?.plainLyrics || null;
+                }
+            },
+            {
+                name: "Genius",
+                fn: async () => {
+                    const res = await fetchWithTimeout(`https://some-random-api.com/lyrics?title=${query}`);
+                    if (!res.ok) return null;
+                    const data = await res.json();
+                    return data?.lyrics || null;
+                }
+            },
+            {
+                name: "Lyrics.ovh",
+                fn: async () => {
+                    const res = await fetchWithTimeout(`https://api.lyrics.ovh/v1/${encA}/${encT}`);
+                    if (!res.ok) return null;
+                    const data = await res.json();
+                    return data?.lyrics || null;
+                }
+            },
+            {
+                name: "Lyrist",
+                fn: async () => {
+                    const res = await fetchWithTimeout(`https://lyrist.vercel.app/api/${query}`);
+                    if (!res.ok) return null;
+                    const data = await res.json();
+                    return data?.lyrics || null;
+                }
+            },
+            {
+                name: "Popcat",
+                fn: async () => {
+                    const res = await fetchWithTimeout(`https://api.popcat.xyz/lyrics?song=${query}`);
+                    if (!res.ok) return null;
+                    const data = await res.json();
+                    return data?.lyrics || null;
+                }
             }
-        } catch (e) {
-            // Silently swallow fetch timeouts, CORS errors, or JSON parse errors 
-            // and seamlessly move to the next mirror.
-            console.warn("Lyrics mirror failed, trying next...");
+        ];
+
+        for (const provider of providers) {
+            try {
+                const result = await provider.fn();
+                console.debug(`[Lyrics] [${typeLabel}] Mirror ${provider.name} response:`, result ? (result.substring(0, 100) + "...") : "NOT FOUND");
+                if (result && typeof result === 'string' && result.trim().length > 0) {
+                    return result;
+                }
+            } catch (e) {
+                console.debug(`[Lyrics] [${typeLabel}] Mirror ${provider.name} failed:`, e.message);
+            }
         }
+        return null;
+    };
+
+    // Pass 1: Cleaned search (Best for most cases)
+    lyricsText = await attemptFetch(cleanArtist, cleanTitle, "CLEANED");
+
+    // Pass 2: Raw search (Fallback if cleaned failed and is different)
+    if (!lyricsText && (cleanArtist !== artist || cleanTitle !== title)) {
+        console.debug("[Lyrics] Cleaned search failed, retrying with RAW metadata...");
+        lyricsText = await attemptFetch(artist, title, "RAW");
     }
 
     // --- Parse and Format ---
@@ -310,7 +325,7 @@ export const api = {
 
     async getTracks() {
         try {
-            const res = await this.fetchWithTimeout('/Tracks');
+            const res = await this.fetchWithTimeout(`/Tracks?v=${get(appSessionVersion)}`);
             if (!res.ok) {
                 if (res.status === 503) {
                     const data = await res.json();
@@ -336,7 +351,7 @@ export const api = {
 
     async getPlaylists() {
         try {
-            const res = await this.fetchWithTimeout('/Playlists');
+            const res = await this.fetchWithTimeout(`/Playlists?v=${get(appSessionVersion)}`);
             if (!res.ok) throw new Error('SERVER_ERROR');
             return await res.json();
         } catch {
@@ -346,7 +361,7 @@ export const api = {
 
     async getPlaylist(id) {
         try {
-            const res = await this.fetchWithTimeout(`/Playlists/${id}`);
+            const res = await this.fetchWithTimeout(`/Playlists/${id}?v=${get(appSessionVersion)}`);
             if (!res.ok) throw new Error('SERVER_ERROR');
             return await res.json();
         } catch {
@@ -362,6 +377,7 @@ export const api = {
                 body: JSON.stringify({ name })
             });
             if (!res.ok) throw new Error('SERVER_ERROR');
+            playlistUpdateSignal.update(n => n + 1);
             return await res.json();
         } catch {
             throw new Error('CREATE_FAILED');
@@ -371,6 +387,7 @@ export const api = {
     async deletePlaylist(id) {
         try {
             const res = await this.fetchWithTimeout(`/Playlists/${id}`, { method: 'DELETE' });
+            if (res.ok) playlistUpdateSignal.update(n => n + 1);
             return res.ok;
         } catch {
             return false;
@@ -384,6 +401,7 @@ export const api = {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ trackId })
             });
+            if (res.ok) playlistUpdateSignal.update(n => n + 1);
             return res.ok;
         } catch {
             return false;
@@ -397,6 +415,7 @@ export const api = {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ trackId })
             });
+            if (res.ok) playlistUpdateSignal.update(n => n + 1);
             return res.ok;
         } catch {
             return false;
@@ -434,7 +453,7 @@ export const api = {
 
     async getStats() {
         try {
-            const res = await this.fetchWithTimeout('/Tracks/stats');
+            const res = await this.fetchWithTimeout(`/Tracks/stats?v=${get(appSessionVersion)}`);
             if (!res.ok) throw new Error();
             return await res.json();
         } catch {

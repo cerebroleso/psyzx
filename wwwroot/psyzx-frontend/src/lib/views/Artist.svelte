@@ -94,7 +94,6 @@
                 const a = map.get(parseInt(artistId));
                 if (a) { 
                     a.name = editName;
-                    if (selectedFile) window.location.reload(); 
                 }
                 return map;
             });
@@ -243,7 +242,7 @@
 <div class="album-hero">
     <div class="cover-wrapper artist-wrapper" role="button" tabindex="0" on:click={toggleEdit} on:keydown={(e) => e.key === 'Enter' && toggleEdit()}>
         <img 
-            src={`/api/Tracks/image?path=${encodeURIComponent(artist.imagePath)}&quality=${$isLowQualityImages ? 'low' : 'high'}`} 
+            src={`/api/Tracks/image?path=${encodeURIComponent(artist.imagePath.split('?')[0])}&quality=${$isLowQualityImages ? 'low' : 'high'}&v=${$appSessionVersion}`} 
             alt="Cover" 
             loading="lazy" 
             on:error={handleImageError}

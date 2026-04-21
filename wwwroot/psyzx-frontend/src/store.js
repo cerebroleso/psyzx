@@ -22,6 +22,7 @@ export const shuffleFuture = writable([]);
 export const userQueue = writable([]);
 
 export const appSessionVersion = writable(Date.now());
+export const playlistUpdateSignal = writable(0);
 
 export const playerCurrentTime = writable(0);
 export const playerDuration = writable(0);
@@ -107,8 +108,8 @@ export const isDesktopSwapActive = writable(getStorageBool('psyzx_desktop_swap',
 
 // Visualizer Stores (Moved from component to global state)
 export const visEnabled = writable(getStorageBool('psyzx_vis_enabled', true));
-export const visIntensity = writable(getStorageString('psyzx_vis_intensity', '3.0'));
-export const visShape = writable(getStorageString('psyzx_vis_shape', 'PSP Waves'));
+export const visIntensity = writable(getStorageString('psyzx_vis_intensity', '0.3'));
+export const visShape = writable(getStorageString('psyzx_vis_shape', 'PSPWaves'));
 export const visMovement = writable(getStorageString('psyzx_vis_movement', 'Hypnotic'));
 export const visYPos = writable(getStorageString('psyzx_vis_ypos', '10'));
 export const visDimension = writable(getStorageString('psyzx_vis_dimension', '1.0'));

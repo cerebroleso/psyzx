@@ -113,7 +113,7 @@
 
             const lerp = (start, end, factor) => (1 - factor) * start + factor * end;
 
-            let visShape = localStorage.getItem('psyzx_vis_shape') || 'Icosahedron';
+            let visShape = localStorage.getItem('psyzx_vis_shape') || 'PSPWaves';
             let visMovement = localStorage.getItem('psyzx_vis_movement') || 'Hypnotic';
             
             let rawY = parseInt(localStorage.getItem('psyzx_vis_ypos'));
@@ -130,7 +130,7 @@
             const rawSpd = parseFloat(localStorage.getItem('psyzx_vis_speed'));
             visSpeed = isNaN(rawSpd) ? 1.0 : rawSpd;
             const rawInt = parseFloat(localStorage.getItem('psyzx_vis_intensity'));
-            visIntensity = isNaN(rawInt) ? 1.0 : rawInt;
+            visIntensity = isNaN(rawInt) ? 0.3 : rawInt;
 
             const getRadialSegments = () => {
                 if (visSides !== 'Default') return parseInt(visSides);
@@ -274,7 +274,7 @@
                 const nSpeed = parseFloat(localStorage.getItem('psyzx_vis_speed'));
                 visSpeed = isNaN(nSpeed) ? 1.0 : nSpeed;
                 const nInt = parseFloat(localStorage.getItem('psyzx_vis_intensity'));
-                visIntensity = isNaN(nInt) ? 1.0 : nInt;
+                visIntensity = isNaN(nInt) ? 0.3 : nInt;
 
                 if (visualizerMesh) {
                     if (!['Tunnel', 'Synthwave', 'PSPWaves'].includes(visShape)) {

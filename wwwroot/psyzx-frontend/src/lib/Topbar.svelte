@@ -7,20 +7,29 @@
     export let currentHash = ''; // <-- ECCO IL COLPEVOLE MANCANTE!
     
     let searchQuery = '';
+    let searchTimeout;
+    let isTyping = false;
 
     $: if (currentHash.startsWith('#search/')) {
         const fromUrl = decodeURIComponent(currentHash.substring(8));
-        if (fromUrl !== searchQuery.trim()) searchQuery = fromUrl;
+        if (!isTyping && fromUrl !== searchQuery.trim()) searchQuery = fromUrl;
     } else if (currentHash === '' || currentHash === '#') {
-        searchQuery = '';
+        if (!isTyping) searchQuery = '';
     }
 
     const handleSearch = () => {
-        if (searchQuery.trim().length > 0) {
-            window.location.hash = `#search/${encodeURIComponent(searchQuery.trim())}`;
-        } else {
-            window.location.hash = '';
-        }
+        isTyping = true;
+        clearTimeout(searchTimeout);
+        
+        searchTimeout = setTimeout(() => {
+            const trimmed = searchQuery.trim();
+            if (trimmed.length > 0) {
+                window.location.hash = `#search/${encodeURIComponent(trimmed)}`;
+            } else {
+                window.location.hash = '';
+            }
+            isTyping = false;
+        }, 400); // Increased debounce to be safer on mobile
     };
 </script>
 

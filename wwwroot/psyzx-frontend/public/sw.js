@@ -5,29 +5,27 @@ const MEDIA_CACHE = 'psyzx-media-v10';
 // ── MANIFEST CONFIG (Added) ──
 const META_KEY = 'psyzx:media-manifest';
 let cacheLimit = 200 * 1024 * 1024;   // 200 MB default
-let noDownload  = false;               // when true, skip all background caching
+let noDownload = false;               // when true, skip all background caching
 let mediaManifest = null;
 
 const APP_ASSETS = [
     '/',
     '/index.html',
-    '/manifest.json',
-    '/favicon.png',
-    '/placeholder.png'
+    '/manifest.json'
 ];
 
 const FALLBACK_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><rect width="1" height="1" fill="#333"/></svg>';
 
 let downloadQueue = [];
 let activeDownloads = 0;
-const MAX_CONCURRENT = 3; 
+const MAX_CONCURRENT = 3;
 
 // ── MANIFEST HELPERS (Added) ──
 async function loadManifest() {
     if (mediaManifest !== null) return mediaManifest;
     try {
         const cache = await caches.open(DATA_CACHE);
-        const res   = await cache.match(META_KEY, { ignoreVary: true });
+        const res = await cache.match(META_KEY, { ignoreVary: true });
         mediaManifest = res ? await res.json() : {};
     } catch {
         mediaManifest = {};
@@ -44,23 +42,23 @@ async function saveManifest() {
                 headers: { 'Content-Type': 'application/json' }
             })
         );
-    } catch {}
+    } catch { }
 }
 
 async function enforceLimit() {
-    const manifest   = await loadManifest();
-    let totalSize    = Object.values(manifest).reduce((s, v) => s + (v.size || 0), 0);
-    if (totalSize <= cacheLimit) return false; 
+    const manifest = await loadManifest();
+    let totalSize = Object.values(manifest).reduce((s, v) => s + (v.size || 0), 0);
+    if (totalSize <= cacheLimit) return false;
 
-    const sorted     = Object.entries(manifest).sort(([, a], [, b]) => a.timestamp - b.timestamp);
+    const sorted = Object.entries(manifest).sort(([, a], [, b]) => a.timestamp - b.timestamp);
     const mediaCache = await caches.open(MEDIA_CACHE);
-    let evicted      = false;
+    let evicted = false;
 
     for (const [trackId, meta] of sorted) {
         if (totalSize <= cacheLimit) break;
         try {
             await mediaCache.delete(meta.cacheKey);
-        } catch {}
+        } catch { }
         totalSize -= (meta.size || 0);
         delete manifest[trackId];
         broadcastLog(`Evicted track ${trackId} (size limit)`);
@@ -75,11 +73,11 @@ async function enforceLimit() {
 }
 
 async function deleteTrackFromCache(trackId) {
-    const manifest   = await loadManifest();
+    const manifest = await loadManifest();
     const mediaCache = await caches.open(MEDIA_CACHE);
 
     if (manifest[trackId]) {
-        try { await mediaCache.delete(manifest[trackId].cacheKey); } catch {}
+        try { await mediaCache.delete(manifest[trackId].cacheKey); } catch { }
         delete manifest[trackId];
         await saveManifest();
     }
@@ -91,7 +89,7 @@ async function deleteTrackFromCache(trackId) {
                 await mediaCache.delete(req);
             }
         }
-    } catch {}
+    } catch { }
 
     await notifyClientsOfCacheUpdate();
 }
@@ -99,10 +97,12 @@ async function deleteTrackFromCache(trackId) {
 // ── UTILS ──
 function getCleanApiRequest(urlStr) {
     const url = new URL(urlStr, self.location.origin);
-    url.searchParams.delete('v');
+    // Keep 'v' parameter for cache busting.
     url.searchParams.delete('token');
     url.searchParams.delete('_');
-    return url.toString(); 
+    url.searchParams.delete('kbps');
+    url.searchParams.delete('format');
+    return url.toString();
 }
 
 const broadcastProgress = async (trackId, progress) => {
@@ -119,8 +119,29 @@ const notifyClientsOfCacheUpdate = async () => {
     try {
         const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
         clients.forEach(client => client.postMessage({ type: 'CACHE_UPDATED' }));
-    } catch (err) {}
+    } catch (err) { }
 };
+
+// ── Helper: fetch with timeout (prevents iOS Safari hangs) ──
+function fetchWithTimeout(request, timeoutMs = 8000) {
+    return new Promise((resolve, reject) => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => {
+            controller.abort();
+            reject(new Error('Fetch timeout'));
+        }, timeoutMs);
+
+        const fetchOpts = { signal: controller.signal };
+        // Preserve credentials from original request if it's a Request object
+        if (request instanceof Request) {
+            fetchOpts.credentials = request.credentials || 'same-origin';
+        }
+
+        fetch(request, fetchOpts)
+            .then(res => { clearTimeout(timer); resolve(res); })
+            .catch(err => { clearTimeout(timer); reject(err); });
+    });
+}
 
 // ── QUEUE & DOWNLOADS ──
 const processQueue = async () => {
@@ -128,25 +149,25 @@ const processQueue = async () => {
 
     while (activeDownloads < MAX_CONCURRENT && downloadQueue.length > 0) {
         const { type, cacheKey, url, trackId } = downloadQueue.shift();
-        
+
         // Respect no-download setting
         if (noDownload && type === 'MEDIA') continue;
 
         const targetCacheName = type === 'MEDIA' ? MEDIA_CACHE : DATA_CACHE;
         const cache = await caches.open(targetCacheName);
-        
-        const existing = await cache.match(cacheKey, { ignoreVary: true }); 
+
+        const existing = await cache.match(cacheKey, { ignoreVary: true });
         if (existing) continue;
 
         activeDownloads++;
-        
+
         (async () => {
             try {
                 if (type === 'MEDIA') {
                     await backgroundCacheMedia(cacheKey, url, trackId);
                 } else {
                     const res = await fetch(new Request(url, { credentials: 'include' }));
-                    if (res.ok) await cache.put(cacheKey, res); 
+                    if (res.ok) await cache.put(cacheKey, res);
                 }
             } catch (e) {
                 console.error(e);
@@ -179,9 +200,11 @@ async function backgroundCacheMedia(cacheKey, originalUrl, trackId) {
         broadcastProgress(trackId, 80);
 
         const headers = new Headers(res.headers);
-        headers.set('Content-Length',  arrayBuffer.byteLength.toString());
-        headers.set('Accept-Ranges',   'bytes');
-        headers.set('Content-Type',    res.headers.get('Content-Type') || 'audio/mpeg');
+        headers.set('Content-Length', arrayBuffer.byteLength.toString());
+        headers.set('Accept-Ranges', 'bytes');
+        headers.set('Content-Type', res.headers.get('Content-Type') || 'audio/mpeg');
+        // Strip Vary header to prevent iOS cache-match misses
+        headers.delete('Vary');
 
         const cachedResponse = new Response(arrayBuffer.slice(0), {
             status: 200,
@@ -194,7 +217,7 @@ async function backgroundCacheMedia(cacheKey, originalUrl, trackId) {
         // Update manifest with size
         const manifest = await loadManifest();
         manifest[trackId] = {
-            size:      arrayBuffer.byteLength,
+            size: arrayBuffer.byteLength,
             timestamp: Date.now(),
             cacheKey
         };
@@ -255,9 +278,9 @@ self.addEventListener('message', async event => {
     }
 
     if (data.type === 'GET_CACHE_STATS') {
-        const manifest  = await loadManifest();
+        const manifest = await loadManifest();
         const totalSize = Object.values(manifest).reduce((s, v) => s + (v.size || 0), 0);
-        const clients   = await self.clients.matchAll();
+        const clients = await self.clients.matchAll();
         clients.forEach(c => c.postMessage({ type: 'CACHE_STATS', totalSize, trackCount: Object.keys(manifest).length }));
     }
 });
@@ -272,14 +295,25 @@ self.addEventListener('install', event => {
     self.skipWaiting();
     event.waitUntil(
         caches.open(CACHE_NAME).then(async cache => {
+            // Pre-cache known static assets (non-hashed)
             for (let asset of APP_ASSETS) {
                 try {
-                    const res = await fetch(asset);
+                    const res = await fetch(asset, { cache: 'no-cache' });
                     if (res.ok) await cache.put(asset, res);
                 } catch (err) {
                     console.warn(`[SW] Ignored missing asset during install: ${asset}`);
                 }
             }
+
+            // Also cache the navigation response as index.html
+            // This ensures the SPA shell is always available
+            try {
+                const htmlRes = await fetch('/', { cache: 'no-cache' });
+                if (htmlRes.ok) {
+                    await cache.put('/', htmlRes.clone());
+                    await cache.put('/index.html', htmlRes.clone());
+                }
+            } catch { }
         })
     );
 });
@@ -299,48 +333,60 @@ self.addEventListener('fetch', event => {
     const req = event.request;
     const url = new URL(req.url);
 
+    // Skip Vite dev server requests
     if (
-        url.pathname.startsWith('/@') ||            
-        url.pathname.startsWith('/src/') ||          
-        url.pathname.startsWith('/node_modules/') || 
-        url.searchParams.has('import') ||            
-        url.searchParams.has('t')                    
+        url.pathname.startsWith('/@') ||
+        url.pathname.startsWith('/src/') ||
+        url.pathname.startsWith('/node_modules/') ||
+        url.searchParams.has('import') ||
+        url.searchParams.has('t')
     ) {
-        return; 
+        return;
     }
 
+    // ── MEDIA STREAMS ──
     if (url.pathname.startsWith('/api/Tracks/stream')) {
-        // ONLY bypass the Service Worker for the fragmented MP4 MSE stream.
-        // The standard MP3 fetches (for background gapless decoding) will pass 
-        // through to your normal caching strategy and be saved for offline use!
-        if (url.pathname.includes('/api/Tracks/stream') && url.searchParams.get('format') === 'mp4') {
-            return; 
+        // MSE fragmented MP4 streams bypass SW entirely (they use MediaSource API)
+        if (url.searchParams.get('format') === 'mp4') {
+            return;
         }
-        return;
+        // Standard MP3/audio stream requests — serve from cache if available,
+        // ALWAYS fall back to network. Never block playback.
         if (req.method !== 'GET') return;
         event.respondWith(handleMediaRequest(event, req));
         return;
     }
+
+    // ── IMAGES ──
     if (url.pathname.startsWith('/api/Tracks/image')) {
         if (req.method !== 'GET') return;
         event.respondWith(handleImageRequest(req));
         return;
     }
-    if (url.pathname.startsWith('/api/')) {
+
+    // ── OTHER LOCAL API ──
+    if (url.origin === self.location.origin && url.pathname.startsWith('/api/')) {
         event.respondWith(handleApiRequest(req));
         return;
     }
 
     if (req.method !== 'GET') return;
 
+    // ── HTML / NAVIGATION ──
     if (req.mode === 'navigate' || req.headers.get('accept')?.includes('text/html')) {
         event.respondWith(handleHtmlRequest(req));
         return;
     }
 
+    // ── APP ASSETS (JS, CSS, fonts, etc.) ──
     if (url.origin === self.location.origin && !url.pathname.startsWith('/api/')) {
         event.respondWith(handleAppAsset(req));
         return;
+    }
+
+    // ── EVERYTHING ELSE (Third-party, fonts, etc.) ──
+    if (url.origin !== self.location.origin) {
+        return; // Let browser handle cross-origin requests normally
     }
 
     event.respondWith(
@@ -365,45 +411,53 @@ async function handleHtmlRequest(req) {
     const origin = self.location.origin;
 
     try {
-        const res = await fetch(req.url);
+        const res = await fetchWithTimeout(req.url, 6000);
         if (!res.ok) throw new Error(`Server returned ${res.status}`);
-        
+
+        // Cache the fresh HTML under multiple keys for robustness
         await cache.put(origin + '/', res.clone());
         await cache.put(origin + '/index.html', res.clone());
-        
+
         return res;
     } catch (err) {
-        const cachedHtml = (await cache.match(origin + '/', { ignoreVary: true })) 
+        // Offline: serve from cache with multiple fallback keys
+        const cachedHtml = (await cache.match(origin + '/', { ignoreVary: true }))
             || (await cache.match(origin + '/index.html', { ignoreVary: true }))
-            || (await cache.match('/', { ignoreVary: true }));
-            
-        return cachedHtml || new Response("<h2 style='text-align:center;font-family:sans-serif;margin-top:20vh;'>App Offline</h2>", { status: 503, headers: { 'Content-Type': 'text/html' } });
+            || (await cache.match('/', { ignoreVary: true }))
+            || (await cache.match('/index.html', { ignoreVary: true }));
+
+        return cachedHtml || new Response(
+            `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>psyzx</title><style>body{background:#121212;color:#fff;font-family:-apple-system,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;text-align:center}h2{font-size:18px;font-weight:600;margin-bottom:8px}p{color:rgba(255,255,255,0.5);font-size:14px}</style></head><body><div><h2>Offline</h2><p>Connect to the server once to cache the app.</p></div></body></html>`,
+            { status: 503, headers: { 'Content-Type': 'text/html' } }
+        );
     }
 }
 
 async function handleAppAsset(req) {
     const cache = await caches.open(CACHE_NAME);
     const reqUrl = new URL(req.url);
-    const cleanUrlStr = reqUrl.origin + reqUrl.pathname; 
-    
-    // 1. Cache First
+    const cleanUrlStr = reqUrl.origin + reqUrl.pathname;
+
+    // 1. Cache First — try exact match, then without query params
     let cached = await cache.match(cleanUrlStr, { ignoreVary: true });
     if (!cached) cached = await cache.match(req.url, { ignoreVary: true });
     if (cached) return cached;
 
-    // 2. Network Fallback
+    // 2. Network with timeout — prevents iOS Safari from hanging indefinitely
     try {
-        const fetchRes = await fetch(req.url);
+        const fetchRes = await fetchWithTimeout(req.url, 6000);
         if (!fetchRes.ok) throw new Error(`Asset fetch failed: ${fetchRes.status}`);
-        
-        cache.put(cleanUrlStr, fetchRes.clone()); 
+
+        // Cache with clean URL (no query params) for reliable matching
+        cache.put(cleanUrlStr, fetchRes.clone());
         return fetchRes;
     } catch (err) {
-        // 3. Fuzzy Matcher
+        // 3. Fuzzy Matcher — handles Vite hash changes between deploys
+        //    e.g. /assets/index-ABC123.js → /assets/index-DEF456.js
         if (reqUrl.pathname.startsWith('/assets/')) {
             const keys = await cache.keys();
             const match = reqUrl.pathname.match(/\/assets\/([^/]+)-[a-zA-Z0-9_-]+\.(js|css)$/);
-            
+
             if (match) {
                 const baseName = match[1];
                 const ext = match[2];
@@ -414,17 +468,14 @@ async function handleAppAsset(req) {
                 if (fuzzyReq) return await cache.match(fuzzyReq.url);
             }
         }
-        
-        // 4. Visual Offline Fallback
+
+        // 4. Graceful offline fallbacks — don't break the app
         const ext = reqUrl.pathname.split('.').pop();
         if (ext === 'js') {
-            const visualErrorJS = `
-                window.onload = function() { 
-                    document.body.innerHTML = "<div style='padding:20px; text-align:center; font-family:sans-serif; margin-top:20vh;'><h2>App Offline</h2><p>Cannot load required assets. Please reconnect to the server once to sync.</p></div>"; 
-                };
-                console.error("App Offline: JavaScript module unavailable.");
-            `;
-            return new Response(visualErrorJS, { status: 200, headers: { 'Content-Type': 'application/javascript' } });
+            return new Response(
+                `console.warn("[SW] Offline: Could not load ${reqUrl.pathname}");`,
+                { status: 200, headers: { 'Content-Type': 'application/javascript' } }
+            );
         } else if (ext === 'css') {
             return new Response('/* Offline */', { status: 200, headers: { 'Content-Type': 'text/css' } });
         }
@@ -440,19 +491,19 @@ async function handleApiRequest(req) {
     try {
         const res = await fetch(req);
         if (req.method === 'GET' && res.status >= 500) throw new Error('Proxy Offline');
-        
+
         if (res.ok && req.method === 'GET') cache.put(cacheKey, res.clone());
         return res;
     } catch (err) {
         if (req.method !== 'GET') {
-            return new Response(JSON.stringify({ ok: false, error: 'ACTION_UNAVAILABLE_OFFLINE' }), { 
+            return new Response(JSON.stringify({ ok: false, error: 'ACTION_UNAVAILABLE_OFFLINE' }), {
                 status: 503,
                 headers: { 'Content-Type': 'application/json' }
             });
         }
-        
+
         const cachedRes = await cache.match(cacheKey, { ignoreVary: true });
-        return cachedRes || new Response(JSON.stringify({ error: 'OFFLINE' }), { 
+        return cachedRes || new Response(JSON.stringify({ error: 'OFFLINE' }), {
             status: 503,
             headers: { 'Content-Type': 'application/json' }
         });
@@ -479,73 +530,160 @@ async function handleImageRequest(req) {
     }
 }
 
+// ── MEDIA REQUEST HANDLER ──
+// CRITICAL: This handler MUST never block playback.
+// Strategy: Try cache first → if cache hit, serve with range support.
+//           If ANYTHING fails (cache miss, read error, range error), 
+//           fall through to network immediately.
+//           Background-cache the network response for next time.
 async function handleMediaRequest(event, req) {
-    const cache = await caches.open(MEDIA_CACHE);
-    const cacheKey = getCleanApiRequest(req.url);
     const url = new URL(req.url);
-    const trackId = url.pathname.split('/').filter(Boolean).pop().split('?')[0];
-    
-    // 🔥 FIX 3: Ignore Vary headers.
-    const cachedRes = await cache.match(cacheKey, { ignoreVary: true });
-    if (cachedRes) return handleRangeLogic(cachedRes, req);
-    
-    // Respect the noDownload setting & check the manifest so we don't duplicate
-    if (!noDownload && activeDownloads < MAX_CONCURRENT && navigator.onLine !== false) {
-        const manifestEntry = (await loadManifest())[trackId];
-        if (!manifestEntry) {
-            const alreadyQueued = downloadQueue.some(q => q.trackId === String(trackId));
-            if (!alreadyQueued) {
-                event.waitUntil(backgroundCacheMedia(cacheKey, req.url, trackId));
+    const pathParts = url.pathname.split('/').filter(Boolean);
+    const lastPart = pathParts.pop();
+    const trackId = lastPart ? lastPart.split('?')[0] : 'unknown';
+
+    try {
+        const cache = await caches.open(MEDIA_CACHE);
+        const cacheKey = getCleanApiRequest(req.url);
+
+        // Try cache first with ignoreVary (iOS Safari sends different Vary headers)
+        const cachedRes = await cache.match(cacheKey, { ignoreVary: true });
+
+        if (cachedRes) {
+            // We have a cached response — try to serve it with range support.
+            // If this fails for ANY reason, we fall through to network below.
+            try {
+                const rangeResponse = await handleRangeLogic(cachedRes, req);
+                if (rangeResponse && rangeResponse.status !== 500) {
+                    return rangeResponse;
+                }
+            } catch (rangeErr) {
+                console.warn('[SW] Cache range serving failed, falling to network:', rangeErr.message);
+                // Fall through to network
             }
         }
+    } catch (cacheErr) {
+        console.warn('[SW] Cache lookup error:', cacheErr.message);
+        // Fall through to network
     }
-    
-    return fetch(req).catch(() => Response.error());
+
+    // ── NETWORK FALLBACK (always) ──
+    // Fetch from the origin server. This ensures playback is never blocked.
+    try {
+        const networkReq = new Request(req.url, { credentials: 'include' });
+        const networkRes = await fetch(networkReq);
+
+        // Background-cache this response for offline use (don't await — non-blocking)
+        if (networkRes.ok && !noDownload) {
+            const cacheKey = getCleanApiRequest(req.url);
+            event.waitUntil(
+                backgroundCacheFromResponse(cacheKey, networkRes.clone(), trackId)
+            );
+        }
+
+        return networkRes;
+    } catch (networkErr) {
+        // Both cache and network failed — we're truly offline with no cache
+        return new Response(null, {
+            status: 503,
+            statusText: 'Offline - Track not cached'
+        });
+    }
 }
 
-async function handleRangeLogic(response, request) {
+// Background-cache a network response that we just served to the user.
+// This runs after the response is already returned, so it never blocks playback.
+async function backgroundCacheFromResponse(cacheKey, response, trackId) {
     try {
-        // 🔥 FIX 4: Bypass iOS Safari's corrupt Blob slice bug
-        const buffer = await response.arrayBuffer();
-        
-        if (!buffer || buffer.byteLength === 0) {
-            return new Response(null, { status: 500 });
-        }
-        
-        const size = buffer.byteLength;
-        const contentType = response.headers.get('Content-Type') || 'audio/mpeg';
-        const rangeHeader = request.headers.get('Range');
-        
-        if (!rangeHeader) {
-            return new Response(buffer, { 
-                status: 200, 
-                headers: { 
-                    'Content-Type': contentType, 
-                    'Content-Length': size.toString(), 
-                    'Accept-Ranges': 'bytes',
-                    'Access-Control-Allow-Origin': '*' 
-                } 
-            });
-        }
-        
-        const parts = rangeHeader.replace(/bytes=/, "").split("-");
-        const start = parseInt(parts[0], 10);
-        const end = parts[1] ? parseInt(parts[1], 10) : size - 1;
-        
-        const chunk = buffer.slice(start, end + 1);
-        
-        return new Response(chunk, {
-            status: 206,
-            headers: { 
-                'Content-Range': `bytes ${start}-${end}/${size}`, 
-                'Content-Length': chunk.byteLength.toString(), 
-                'Content-Type': contentType, 
-                'Accept-Ranges': 'bytes',
-                'Access-Control-Allow-Origin': '*' 
-            }
+        const cache = await caches.open(MEDIA_CACHE);
+
+        // Check if already cached (avoid duplicate work)
+        const existing = await cache.match(cacheKey, { ignoreVary: true });
+        if (existing) return;
+
+        const arrayBuffer = await response.arrayBuffer();
+        if (!arrayBuffer || arrayBuffer.byteLength === 0) return;
+
+        const headers = new Headers(response.headers);
+        headers.set('Content-Length', arrayBuffer.byteLength.toString());
+        headers.set('Accept-Ranges', 'bytes');
+        headers.set('Content-Type', response.headers.get('Content-Type') || 'audio/mpeg');
+        headers.delete('Vary');
+
+        const cachedResponse = new Response(arrayBuffer.slice(0), {
+            status: 200,
+            statusText: 'OK',
+            headers
         });
-    } catch (e) {
-        console.error('[SW] Range Logic Error:', e);
+
+        await cache.put(cacheKey, cachedResponse);
+
+        // Update manifest with size
+        const manifest = await loadManifest();
+        manifest[trackId] = {
+            size: arrayBuffer.byteLength,
+            timestamp: Date.now(),
+            cacheKey
+        };
+        await saveManifest();
+        await enforceLimit();
+        await notifyClientsOfCacheUpdate();
+    } catch (err) {
+        // Non-fatal — user is already hearing the track
+    }
+}
+
+// ── RANGE REQUEST HANDLER ──
+// Serves cached audio with proper HTTP Range support.
+// iOS Safari's <audio> element requires range requests to function.
+async function handleRangeLogic(response, request) {
+    // Clone before reading to avoid consuming the cached response
+    const buffer = await response.clone().arrayBuffer();
+
+    if (!buffer || buffer.byteLength === 0) {
         return new Response(null, { status: 500 });
     }
+
+    const size = buffer.byteLength;
+    const contentType = response.headers.get('Content-Type') || 'audio/mpeg';
+    const rangeHeader = request.headers.get('Range');
+
+    if (!rangeHeader) {
+        // No Range header — return full response
+        return new Response(buffer, {
+            status: 200,
+            headers: {
+                'Content-Type': contentType,
+                'Content-Length': size.toString(),
+                'Accept-Ranges': 'bytes',
+                'Access-Control-Allow-Origin': '*'
+            }
+        });
+    }
+
+    // Parse Range header (e.g. "bytes=0-" or "bytes=1024-2048")
+    const parts = rangeHeader.replace(/bytes=/, "").split("-");
+    const start = parseInt(parts[0], 10) || 0;
+    const end = parts[1] ? Math.min(parseInt(parts[1], 10), size - 1) : size - 1;
+
+    // Validate range
+    if (start >= size || start < 0 || end < start) {
+        return new Response(null, {
+            status: 416,
+            headers: { 'Content-Range': `bytes */${size}` }
+        });
+    }
+
+    const chunk = buffer.slice(start, end + 1);
+
+    return new Response(chunk, {
+        status: 206,
+        headers: {
+            'Content-Range': `bytes ${start}-${end}/${size}`,
+            'Content-Length': chunk.byteLength.toString(),
+            'Content-Type': contentType,
+            'Accept-Ranges': 'bytes',
+            'Access-Control-Allow-Origin': '*'
+        }
+    });
 }

@@ -1,5 +1,5 @@
 <script>
-    import { currentPlaylist, currentIndex, shuffleHistory, isLowQualityImages, albumsMap, artistsMap } from '../../store.js';
+    import { currentPlaylist, currentIndex, shuffleHistory, isLowQualityImages, albumsMap, artistsMap, appSessionVersion } from '../../store.js';
     import { api } from '../api.js';
     import { fade, scale } from 'svelte/transition';
 
@@ -134,6 +134,59 @@
         }
         closeContextMenu();
     };
+
+    async function hardDeleteArtist(id) {
+        const artist = resultsArtists.find(a => a.id === id);
+        if (!confirm(`Are you absolutely sure you want to delete '${artist.name}'?\n\nThis will permanently erase the artist, all their albums, and all audio files from your hard drive. This cannot be undone.`)) {
+            closeContextMenu();
+            return;
+        }
+
+        try {
+            const res = await fetch(`/api/Library/artist/${id}`, { method: 'DELETE' });
+            if (res.ok) {
+                artistsMap.update(m => { m.delete(id); return m; });
+                resultsArtists = resultsArtists.filter(a => a.id !== id);
+            } else {
+                const err = await res.json();
+                alert(`Error: ${err.message || 'Failed to delete artist.'}`);
+            }
+        } catch (e) {
+            alert('Network error while deleting artist.');
+        }
+        closeContextMenu();
+    }
+
+    async function hardDeleteAlbum(id) {
+        const album = resultsAlbums.find(a => a.id === id);
+        if (!confirm(`Are you absolutely sure you want to delete '${album.title}'?\n\nThis will permanently erase the album and all audio files from your hard drive. This cannot be undone.`)) {
+            closeContextMenu();
+            return;
+        }
+
+        try {
+            const res = await fetch(`/api/Library/album/${id}`, { method: 'DELETE' });
+            if (res.ok) {
+                albumsMap.update(m => { m.delete(id); return m; });
+                resultsAlbums = resultsAlbums.filter(a => a.id !== id);
+                
+                // Also update the artist's album list if it exists in the map
+                artistsMap.update(m => {
+                    const artist = m.get(album.artistId);
+                    if (artist && artist.albums) {
+                        artist.albums.delete(id);
+                    }
+                    return m;
+                });
+            } else {
+                const err = await res.json();
+                alert(`Error: ${err.message || 'Failed to delete album.'}`);
+            }
+        } catch (e) {
+            alert('Network error while deleting album.');
+        }
+        closeContextMenu();
+    }
 </script>
 
 <svelte:window on:click={closeContextMenu} />
@@ -149,13 +202,39 @@
                     Play Now
                 </button>
             {/if}
-            <button class="context-item" on:click={addToQueue}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <line x1="12" y1="5" x2="12" y2="19"></line>
-                    <line x1="5" y1="12" x2="19" y2="12"></line>
-                </svg>
-                Add to Queue
-            </button>
+            {#if contextMenuType === 'track'}
+                <button class="context-item" on:click={addToQueue}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="12" y1="5" x2="12" y2="19"></line>
+                        <line x1="5" y1="12" x2="19" y2="12"></line>
+                    </svg>
+                    Add to Queue
+                </button>
+            {/if}
+            
+            {#if contextMenuType === 'artist'}
+                <button class="context-item text-danger" on:click={() => hardDeleteArtist(contextMenuItem.id)}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="3 6 5 6 21 6"></polyline>
+                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                        <line x1="10" y1="11" x2="10" y2="17"></line>
+                        <line x1="14" y1="11" x2="14" y2="17"></line>
+                    </svg>
+                    Delete Artist from Disk
+                </button>
+            {/if}
+
+            {#if contextMenuType === 'album'}
+                <button class="context-item text-danger" on:click={() => hardDeleteAlbum(contextMenuItem.id)}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="3 6 5 6 21 6"></polyline>
+                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                        <line x1="10" y1="11" x2="10" y2="17"></line>
+                        <line x1="14" y1="11" x2="14" y2="17"></line>
+                    </svg>
+                    Delete Album from Disk
+                </button>
+            {/if}
         </div>
     </div>
 {/if}
@@ -178,7 +257,7 @@
                         
                         <div class="cover-wrapper artist-wrapper">
                             <img 
-                                src={artist.imagePath ? `/api/Tracks/image?path=${encodeURIComponent(artist.imagePath.split('?')[0])}&quality=low` : DEFAULT_PLACEHOLDER} 
+                                src={artist.imagePath ? `/api/Tracks/image?path=${encodeURIComponent(artist.imagePath.split('?')[0])}&quality=low&v=${$appSessionVersion}` : DEFAULT_PLACEHOLDER} 
                                 alt={artist.name} 
                                 class="sleek-cover"
                                 on:error={handleImageError}
@@ -208,7 +287,7 @@
 
                         <div class="cover-wrapper">
                             <img 
-                                src={album.coverPath ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath.split('?')[0])}&quality=low` : DEFAULT_PLACEHOLDER} 
+                                src={album.coverPath ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath.split('?')[0])}&quality=low&v=${$appSessionVersion}` : DEFAULT_PLACEHOLDER} 
                                 alt={album.title} 
                                 class="sleek-cover"
                                 on:error={handleImageError}
@@ -238,7 +317,7 @@
                 {#each resultsTracks as track}
                     <div class="track-item" role="button" tabindex="0" on:click={() => playTrack(track)} on:keydown={(e) => e.key === 'Enter' && playTrack(track)}>
                         <img 
-                            src={track.album?.coverPath ? `/api/Tracks/image?path=${encodeURIComponent(track.album.coverPath.split('?')[0])}&quality=low` : DEFAULT_PLACEHOLDER} 
+                            src={track.album?.coverPath ? `/api/Tracks/image?path=${encodeURIComponent(track.album.coverPath.split('?')[0])}&quality=low&v=${$appSessionVersion}` : DEFAULT_PLACEHOLDER} 
                             alt={track.title} 
                             class="track-thumb sleek-cover"
                             on:error={handleImageError}
@@ -332,8 +411,10 @@
         border-radius: 12px;
     }
 
-    .card:hover {
-        background: rgba(255,255,255,0.08);
+    @media (hover: hover) {
+        .card:hover {
+            background: rgba(255,255,255,0.08);
+        }
     }
 
     .cover-wrapper {
@@ -412,10 +493,14 @@
         transition: opacity 0.2s ease, background 0.2s ease, color 0.2s ease; 
         z-index: 2;
     }
-    .more-options-btn:hover { color: white; background: rgba(255, 255, 255, 0.1); }
+    @media (hover: hover) {
+        .more-options-btn:hover { color: white; background: rgba(255, 255, 255, 0.1); }
+    }
     
-    .card:hover .card-title, .card:hover .card-info-stack { max-width: calc(100% - 32px); }
-    .card:hover .more-options-btn { opacity: 1; }
+    @media (hover: hover) {
+        .card:hover .card-title, .card:hover .card-info-stack { max-width: calc(100% - 32px); }
+        .card:hover .more-options-btn { opacity: 1; }
+    }
 
     .track-list {
         display: flex;
@@ -451,8 +536,10 @@
         }
     }
 
-    .track-item:hover {
-        background: rgba(255,255,255,0.08);
+    @media (hover: hover) {
+        .track-item:hover {
+            background: rgba(255,255,255,0.08);
+        }
     }
 
     .track-thumb {
@@ -497,7 +584,9 @@
         opacity: 0;
         z-index: 2;
     }
-    .track-item:hover .track-options { opacity: 1; }
+    @media (hover: hover) {
+        .track-item:hover .track-options { opacity: 1; }
+    }
 
     .context-menu { 
         position: fixed; 
@@ -527,7 +616,11 @@
         text-align: left; 
         transition: background 0.15s; 
     }
-    .context-item:hover { background: rgba(255, 255, 255, 0.1); }
+    .context-item.text-danger { color: #ef4444; }
+    @media (hover: hover) {
+        .context-item:hover { background: rgba(255, 255, 255, 0.1); }
+        .context-item.text-danger:hover { background: rgba(239, 68, 68, 0.1); }
+    }
 
     .empty-state {
         color: rgba(255,255,255,0.4);
@@ -590,8 +683,10 @@
             width: 100%;
         }
 
-        .card:hover {
-            background: rgba(255,255,255,0.08);
+        @media (hover: hover) {
+            .card:hover {
+                background: rgba(255,255,255,0.08);
+            }
         }
 
         .card .cover-wrapper {

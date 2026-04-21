@@ -22,9 +22,10 @@
     import Account from './lib/views/Account.svelte';
     import Playlists from './lib/views/Playlists.svelte';
     import Playlist from './lib/views/Playlist.svelte';
+    import Auth from './lib/views/Auth.svelte';
     
     import { api } from './lib/api.js';
-    import { allTracks, artistsMap, albumsMap, accentColor, isGlobalColorActive, isMaxGlassActive } from './store.js';
+    import { allTracks, artistsMap, albumsMap, accentColor, isGlobalColorActive, isMaxGlassActive, appSessionVersion } from './store.js';
     
     let currentHash = '';
     let isMobileSidebarOpen = false;
@@ -35,10 +36,6 @@
     let apiError = null;
     
     let requiresLogin = false;
-    let isRegisterMode = false;
-    let loginUsername = '';
-    let loginPassword = '';
-    let loginErrorMsg = '';
     let isLoggingIn = false;
 
     $: routeKey = currentHash.startsWith('#search/') ? '#search' : currentHash;
@@ -233,6 +230,7 @@
         } finally {
             bootProgress = 100;
             bootStatus = "Done.";
+            appSessionVersion.set(Date.now());
             setTimeout(() => {
                 isLoading = false;
                 isFirstLoad = false;
@@ -264,21 +262,6 @@
         };
     });
 
-    if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('/sw.js', { scope: '/' })
-            .then(reg => {
-                console.log('SW Registered!', reg);
-                reg.onupdatefound = () => {
-                    const newWorker = reg.installing;
-                    newWorker.onstatechange = () => {
-                        if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                            location.reload(); 
-                        }
-                    };
-                };
-            })
-            .catch(err => console.error('SW Registration Failed', err));
-    }
 
     const handleScroll = (e) => { isScrolled = e.target.scrollTop > 50; };
 
@@ -392,35 +375,7 @@
 {/if}
 
 {#if requiresLogin}
-    <div class="auth-overlay" in:fade={{duration: 300}}>
-        <div class="auth-card">
-            <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="var(--accent-color)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom: 16px;">
-                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
-            </svg>
-            <h2>{isRegisterMode ? 'Create Account' : 'Access Required'}</h2>
-            
-            <form on:submit|preventDefault={executeAuth} class="auth-form">
-                <input type="text" bind:value={loginUsername} placeholder="Username" required disabled={isLoggingIn} autocomplete="username">
-                <input type="password" bind:value={loginPassword} placeholder="Password" required disabled={isLoggingIn} autocomplete={isRegisterMode ? "new-password" : "current-password"}>
-                
-                {#if loginErrorMsg}
-                    <div class="auth-error">{loginErrorMsg}</div>
-                {/if}
-                
-                <button type="submit" class="btn-auth" disabled={isLoggingIn}>
-                    {#if isLoggingIn}
-                        Working...
-                    {:else}
-                        {isRegisterMode ? 'Sign Up' : 'Enter'}
-                    {/if}
-                </button>
-            </form>
-
-            <button class="btn-toggle-auth" on:click={() => { isRegisterMode = !isRegisterMode; loginErrorMsg = ''; }} disabled={isLoggingIn}>
-                {isRegisterMode ? 'Already have an account? Login' : 'No account? Register here'}
-            </button>
-        </div>
-    </div>
+    <Auth bind:isLoggingIn on:success={() => { requiresLogin = false; isLoading = true; bootEngine(); }} />
 {/if}
 
 {#if apiError && !requiresLogin}
@@ -634,144 +589,6 @@
         z-index: -1; pointer-events: none;
     }
 
-    /* OVERLAY SCURO E BLURRATO PER IL LOGIN */
-    .auth-overlay {
-        position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-        background: rgba(0, 0, 0, 0.6); 
-        backdrop-filter: blur(8px);
-        -webkit-backdrop-filter: blur(8px);
-        display: flex; align-items: center; justify-content: center;
-        z-index: 999999;
-        perspective: 1000px;
-    }
-
-    /* CARD LOGIN ULTRA-GLASS */
-    .auth-card {
-        background: rgba(255, 255, 255, 0.03);
-        backdrop-filter: blur(40px) saturate(150%);
-        -webkit-backdrop-filter: blur(40px) saturate(150%);
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        border-top: 1px solid rgba(255, 255, 255, 0.25); /* Glossy top edge */
-        padding: 48px 40px; 
-        border-radius: 28px; 
-        text-align: center; 
-        width: 90%;
-        max-width: 420px;
-        box-shadow: 
-            0 32px 64px rgba(0, 0, 0, 0.5), 
-            inset 0 1px 0 rgba(255, 255, 255, 0.1);
-        transform: translateY(0);
-        animation: cardFloatUp 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
-    }
-
-    @keyframes cardFloatUp {
-        0% { opacity: 0; transform: translateY(30px) scale(0.95); }
-        100% { opacity: 1; transform: translateY(0) scale(1); }
-    }
-
-    .auth-card h2 { 
-        margin: 0 0 32px 0; 
-        font-size: 28px; 
-        color: white; 
-        font-weight: 800;
-        letter-spacing: -1px;
-    }
-
-    .auth-form { 
-        display: flex; 
-        flex-direction: column; 
-        gap: 16px; 
-    }
-
-    /* INPUT CAMPI INCASSATI E LUMINOSI */
-    .auth-form input {
-        width: 100%; 
-        padding: 16px 20px; 
-        background: rgba(0, 0, 0, 0.3); 
-        color: white;
-        border: 1px solid rgba(255, 255, 255, 0.05); 
-        border-radius: 16px; 
-        font-size: 15px;
-        box-sizing: border-box; 
-        outline: none; 
-        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
-    }
-
-    .auth-form input::placeholder {
-        color: rgba(255, 255, 255, 0.3);
-    }
-
-    .auth-form input:focus { 
-        border-color: var(--accent-color); 
-        background: rgba(0, 0, 0, 0.5);
-        box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.1), inset 0 2px 4px rgba(0,0,0,0.2); 
-    }
-    
-    .auth-form input:disabled { 
-        opacity: 0.5; 
-        cursor: not-allowed; 
-    }
-
-    .auth-error { 
-        color: #ef4444; 
-        font-size: 13px; 
-        font-weight: 700; 
-        margin-top: -4px; 
-        background: rgba(239, 68, 68, 0.1);
-        padding: 10px;
-        border-radius: 10px;
-        border: 1px solid rgba(239, 68, 68, 0.2);
-    }
-
-    /* BOTTONE CALL TO ACTION */
-    .btn-auth {
-        background: var(--accent-color); 
-        color: black; 
-        border: none; 
-        padding: 16px;
-        font-size: 16px; 
-        font-weight: 800; 
-        border-radius: 16px; 
-        cursor: pointer;
-        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); 
-        width: 100%; 
-        margin-top: 8px;
-    }
-
-    .btn-auth:hover:not(:disabled) { 
-        transform: translateY(-2px); 
-        box-shadow: 0 8px 24px rgba(255, 255, 255, 0.2);
-        filter: brightness(1.15);
-    }
-    
-    .btn-auth:active:not(:disabled) {
-        transform: translateY(1px);
-        box-shadow: 0 2px 8px rgba(255, 255, 255, 0.1);
-    }
-
-    .btn-auth:disabled { 
-        opacity: 0.7; 
-        cursor: wait; 
-        filter: grayscale(0.5);
-    }
-
-    /* BOTTONE TOGGLE SECONDARIO */
-    .btn-toggle-auth {
-        background: none; 
-        border: none; 
-        color: rgba(255, 255, 255, 0.4);
-        margin-top: 24px; 
-        cursor: pointer; 
-        font-size: 14px; 
-        font-weight: 600;
-        transition: all 0.2s;
-    }
-
-    .btn-toggle-auth:hover { 
-        color: white; 
-        text-shadow: 0 0 12px rgba(255,255,255,0.4);
-    }
 
     #loader-overlay {
         position: fixed; 

@@ -2,19 +2,24 @@
     import { onMount } from 'svelte';
     import { fade, scale } from 'svelte/transition';
     import { api } from '../api.js';
+    import { playlistUpdateSignal, appSessionVersion } from '../../store.js';
 
     let userPlaylists = [];
     let showCreateModal = false;
     let newPlaylistName = '';
     let isCreating = false;
 
-    onMount(async () => {
+    $: if ($playlistUpdateSignal || true) {
+        loadPlaylists();
+    }
+
+    async function loadPlaylists() {
         try {
             userPlaylists = await api.getPlaylists();
         } catch (e) {
             console.error(e);
         }
-    });
+    }
 
     function portal(node) {
         document.body.appendChild(node);
@@ -76,11 +81,11 @@
                     {#if playlist.covers && playlist.covers.length >= 4}
                         <div class="dynamic-grid-cover">
                             {#each playlist.covers as cover}
-                                <img src="/api/Tracks/image?path={encodeURIComponent(cover)}" alt="Cover fragment" />
+                                <img src="/api/Tracks/image?path={encodeURIComponent(cover.split('?')[0])}&v={$appSessionVersion}" alt="Cover fragment" />
                             {/each}
                         </div>
                     {:else if playlist.covers && playlist.covers.length > 0}
-                        <img src="/api/Tracks/image?path={encodeURIComponent(playlist.covers[0])}" class="single-cover" alt="Playlist Cover" />
+                        <img src="/api/Tracks/image?path={encodeURIComponent(playlist.covers[0].split('?')[0])}&v={$appSessionVersion}" class="single-cover" alt="Playlist Cover" />
                     {:else}
                         <div class="empty-cover">
                             <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
@@ -97,11 +102,11 @@
 </div>
 
 {#if showCreateModal}
-    <div class="modal-backdrop" use:portal in:fade={{duration: 200}} out:fade={{duration: 150}} on:click={closeCreateModal}>
-        <div class="modal-glass-card" in:scale={{start: 0.95, duration: 250, opacity: 0}} on:click|stopPropagation>
+    <div class="modal-backdrop" role="button" tabindex="-1" use:portal in:fade={{duration: 200}} out:fade={{duration: 150}} on:click={closeCreateModal} on:keydown={(e) => e.key === 'Escape' && closeCreateModal()}>
+        <div class="modal-glass-card" role="dialog" aria-modal="true" in:scale={{start: 0.95, duration: 250, opacity: 0}} on:click|stopPropagation>
             <div class="modal-header">
                 <h3>New Playlist</h3>
-                <button class="btn-close" on:click={closeCreateModal}>
+                <button class="btn-close" aria-label="Close" on:click={closeCreateModal}>
                     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
                 </button>
             </div>
