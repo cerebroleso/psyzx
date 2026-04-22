@@ -1,15 +1,32 @@
 <script>
     import { fade } from 'svelte/transition';
-    import { createEventDispatcher } from 'svelte';
+    import { createEventDispatcher, onMount, onDestroy } from 'svelte';
     import { api } from '../api.js';
+    import { hasOfflineCredentials } from '../offlineAuth.js';
 
     export let isLoggingIn = false;
     let isRegisterMode = false;
     let loginUsername = '';
     let loginPassword = '';
     let loginErrorMsg = '';
+    let offlineBadgeVisible = typeof navigator !== 'undefined' ? !navigator.onLine : false;
 
     const dispatch = createEventDispatcher();
+
+    // ── OFFLINE STATE ──────────────────────────────────────────────────────
+    onMount(() => {
+        // Listen for online/offline events to update badge in real-time
+        const handleOnline = () => { offlineBadgeVisible = false; };
+        const handleOffline = () => { offlineBadgeVisible = true; };
+
+        window.addEventListener('online', handleOnline);
+        window.addEventListener('offline', handleOffline);
+
+        return () => {
+            window.removeEventListener('online', handleOnline);
+            window.removeEventListener('offline', handleOffline);
+        };
+    });
 
     const executeAuth = async () => {
         console.group(`[AUTH DEBUG] executeAuth() - Mode: ${isRegisterMode ? 'REGISTER' : 'LOGIN'}`);
@@ -60,6 +77,9 @@
 
                 if (res && (res.ok === true || res.success === true || res.token || res.status === 200)) {
                     console.log('[AUTH DEBUG] Login SUCCESS! Transitioning app state...');
+                    if (res.offline) {
+                        console.log('[AUTH DEBUG] Logged in OFFLINE using stored credentials.');
+                    }
                     isLoggingIn = false;
                     dispatch('success');
                     console.groupEnd();
@@ -95,7 +115,25 @@
         <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="var(--accent-color)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom: 16px;">
             <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
         </svg>
+
         <h2>{isRegisterMode ? 'Create Account' : 'Access Required'}</h2>
+
+        {#if offlineBadgeVisible}
+            <div class="offline-badge">
+                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24"
+                     fill="none" stroke="currentColor" stroke-width="2.5"
+                     stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="1" y1="1" x2="23" y2="23"/>
+                    <path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55"/>
+                    <path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39"/>
+                    <path d="M10.71 5.05A16 16 0 0 1 22.56 9"/>
+                    <path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88"/>
+                    <path d="M8.53 16.11a6 6 0 0 1 6.95 0"/>
+                    <line x1="12" y1="20" x2="12.01" y2="20"/>
+                </svg>
+                {hasOfflineCredentials() ? 'Offline — enter your password' : 'Offline — connect once to enable offline access'}
+            </div>
+        {/if}
         
         <form on:submit|preventDefault={executeAuth} class="auth-form">
             <input type="text" bind:value={loginUsername} placeholder="Username" required disabled={isLoggingIn} autocomplete="username">
@@ -157,11 +195,32 @@
     }
 
     .auth-card h2 { 
-        margin: 0 0 32px 0; 
+        margin: 0 0 24px 0; 
         font-size: 28px; 
         color: white; 
         font-weight: 800;
         letter-spacing: -1px;
+    }
+
+    /* OFFLINE BADGE */
+    .offline-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: rgba(251, 191, 36, 0.12);
+        border: 1px solid rgba(251, 191, 36, 0.3);
+        color: rgb(251, 191, 36);
+        font-size: 12px;
+        font-weight: 600;
+        padding: 6px 12px;
+        border-radius: 20px;
+        margin-bottom: 20px;
+        animation: badgePulse 2.5s ease-in-out infinite;
+    }
+
+    @keyframes badgePulse {
+        0%, 100% { opacity: 1;    }
+        50%       { opacity: 0.65; }
     }
 
     .auth-form { 

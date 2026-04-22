@@ -193,12 +193,11 @@ public class SystemController : ControllerBase
         
         string cleanUrl = req.url.Trim();
         
-        // Backend safety net: block non-URLs and single videos
-        if (!cleanUrl.StartsWith("http")) 
-            return BadRequest(new { text = "Text searches disabled. Please provide a direct Playlist URL." });
-            
-        if ((cleanUrl.Contains("youtube.com") || cleanUrl.Contains("youtu.be")) && !cleanUrl.Contains("list="))
-            return BadRequest(new { text = "Single YouTube videos are disabled. Provide a Playlist URL (must contain 'list=')." });
+        // FORMAT TEXT SEARCHES: If it's not a URL and doesn't already have the ytsearch prefix, convert it to a search
+        if (!cleanUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase) && !cleanUrl.StartsWith("ytsearch", StringComparison.OrdinalIgnoreCase)) 
+        {
+            cleanUrl = $"ytsearch1:{cleanUrl}";
+        }
 
         if (cleanUrl.Contains("googleusercontent"))
         {
@@ -207,7 +206,7 @@ public class SystemController : ControllerBase
             else return BadRequest(new { text = "Invalid corrupted URL structure." });
         }
 
-        Console.WriteLine($"[DEBUG-YTDLP] Enqueuing new URL: {cleanUrl}");
+        Console.WriteLine($"[DEBUG-YTDLP] Enqueuing new URL/Query: {cleanUrl}");
         _downloadQueue.Enqueue(new DownloadTaskItem { Url = cleanUrl, TargetArtist = req.targetArtist });
         
         if (Interlocked.Exchange(ref _isProcessing, 1) == 0)
@@ -225,8 +224,8 @@ public class SystemController : ControllerBase
         var ytDlpPath = Path.Combine(fullBasePath, "yt-dlp_linux");
         var cookiePath = Path.Combine(fullBasePath, "cookies.txt");
         
-        // FIX: Inject --yes-playlist (forces playlists) and --split-chapters (forces 1-hour tracks to split natively)
-        var ytDlpArgs = (System.IO.File.Exists(cookiePath) ? $"--cookies \"{cookiePath}\" " : "") + "--yes-playlist --split-chapters ";
+        // Define your base arguments WITHOUT the hardcoded playlist flag
+        var baseArgs = (System.IO.File.Exists(cookiePath) ? $"--cookies \"{cookiePath}\" " : "") + "--split-chapters ";
 
         EnsureExecutable(ytDlpPath);
 
@@ -241,11 +240,12 @@ public class SystemController : ControllerBase
             
             bool isSpotify = url.Contains("spotify", StringComparison.OrdinalIgnoreCase);
             
-            // FIX: The original code used "/playlist/" which failed on YouTube's "/playlist?list=".
-            // FIX: Added "list=" check to correctly identify YouTube video URLs that contain an attached playlist.
             bool isPlaylist = url.Contains("/playlist", StringComparison.OrdinalIgnoreCase) || 
                             url.Contains("/album/", StringComparison.OrdinalIgnoreCase) || 
                             url.Contains("list=", StringComparison.OrdinalIgnoreCase);
+
+            // DYNAMICALLY assign the playlist argument based on what we are processing
+            string ytDlpArgs = baseArgs + (isPlaylist ? "--yes-playlist " : "--no-playlist ");
 
             string identifier = url;
             bool isSuccess = false;

@@ -364,7 +364,7 @@
                 <div class="list-item" 
                      class:active={($currentPlaylist?.length ?? 0) > 0 && $currentPlaylist[$currentIndex]?.id === track.id}
                      animate:flip={{duration: 600}}
-                     in:fly={{y: 30, duration: 500}}
+                     in:fly={{y: 30, duration: 500, delay: 100}}
                      out:fade={{duration: 300}}>
                         <div class="swipe-bg-left">
                             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">

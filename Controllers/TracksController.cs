@@ -141,17 +141,15 @@ public class TracksController : ControllerBase
     public async Task<IActionResult> GetRadioMix(int seedTrackId, [FromQuery] int limit = 20, [FromQuery] string excludeIds = "")
     {
         var excludeList = new HashSet<int> { seedTrackId };
-        
+
         if (!string.IsNullOrEmpty(excludeIds))
         {
             var parsedIds = excludeIds.Split(',', StringSplitOptions.RemoveEmptyEntries)
                 .Select(id => int.TryParse(id, out var parsed) ? parsed : -1)
                 .Where(id => id != -1);
-            
+
             foreach (var id in parsedIds)
-            {
                 excludeList.Add(id);
-            }
         }
 
         var seedTrack = await _context.Tracks
@@ -160,39 +158,47 @@ public class TracksController : ControllerBase
 
         if (seedTrack == null) return NotFound();
 
-        // 1. SAFE NULL CHECK: Track might not be in an album.
         int? seedArtistId = seedTrack.Album?.ArtistId;
         var finalMix = new List<Track>();
 
-        // 2. Similar Artist Tracks (40% of mix) - Only if an artist exists
-        if (seedArtistId.HasValue) 
+        // --- Bucket 1: Same-artist tracks (40%) ---
+        int artistQuota = (int)Math.Floor(limit * 0.4);
+        if (seedArtistId.HasValue && artistQuota > 0)
         {
             var artistTracks = await _context.Tracks
                 .Include(t => t.Album).ThenInclude(a => a.Artist)
-                .Where(t => t.Album != null && t.Album.ArtistId == seedArtistId.Value && !excludeList.Contains(t.Id))
+                .Where(t => t.Album != null
+                        && t.Album.ArtistId == seedArtistId.Value
+                        && !excludeList.Contains(t.Id))
                 .OrderBy(t => EF.Functions.Random())
-                .Take((int)(limit * 0.4))
+                .Take(artistQuota)
                 .ToListAsync();
 
             finalMix.AddRange(artistTracks);
-            foreach(var t in artistTracks) excludeList.Add(t.Id);
+            foreach (var t in artistTracks) excludeList.Add(t.Id);
         }
 
-        // 3. Spotify-like "Discovery Favorites" (30% of mix)
-        // Fixed: We expand the pool from 50 to 300 to stop it from endlessly repeating the same songs.
-        var favoriteTracks = await _context.Tracks
-            .Include(t => t.Album).ThenInclude(a => a.Artist)
-            .Where(t => !excludeList.Contains(t.Id) && t.PlayCount > 0)
-            .OrderByDescending(t => t.PlayCount)
-            .Take(300) 
-            .OrderBy(t => EF.Functions.Random())
-            .Take((int)(limit * 0.3))
-            .ToListAsync();
+        // --- Bucket 2: Discovery favorites (30%) ---
+        // FIX: Removed hard `PlayCount > 0` gate; sort by PlayCount DESC so
+        // played songs still float to the top, but unplayed ones fill the gap
+        // rather than letting the bucket starve and causing repeats.
+        int favoritesQuota = (int)Math.Floor(limit * 0.3);
+        if (favoritesQuota > 0)
+        {
+            var favoriteTracks = await _context.Tracks
+                .Include(t => t.Album).ThenInclude(a => a.Artist)
+                .Where(t => !excludeList.Contains(t.Id))
+                .OrderByDescending(t => t.PlayCount)
+                .Take(300)
+                .OrderBy(t => EF.Functions.Random())
+                .Take(favoritesQuota)
+                .ToListAsync();
 
-        finalMix.AddRange(favoriteTracks);
-        foreach(var t in favoriteTracks) excludeList.Add(t.Id);
+            finalMix.AddRange(favoriteTracks);
+            foreach (var t in favoriteTracks) excludeList.Add(t.Id);
+        }
 
-        // 4. True Random Filler / Deep Cuts (Remaining %)
+        // --- Bucket 3: Random filler / deep cuts (remaining %) ---
         int remaining = limit - finalMix.Count;
         if (remaining > 0)
         {
@@ -206,9 +212,9 @@ public class TracksController : ControllerBase
             finalMix.AddRange(randomTracks);
         }
 
-        // 5. Shuffle the resulting mix to interleave the vibes, keeping null-safety intact
+        // --- Final shuffle to interleave buckets ---
         var shuffledResult = finalMix
-            .OrderBy(t => Guid.NewGuid())
+            .OrderBy(_ => Guid.NewGuid())
             .Select(t => new {
                 id = t.Id,
                 title = t.Title,
@@ -218,7 +224,6 @@ public class TracksController : ControllerBase
                 bitrate = t.Bitrate,
                 playCount = t.PlayCount,
                 albumId = t.AlbumId,
-                // SAFE MAPPING
                 album = t.Album == null ? null : new {
                     id = t.Album.Id,
                     title = t.Album.Title,

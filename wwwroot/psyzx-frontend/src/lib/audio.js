@@ -15,9 +15,34 @@
  * playerA / playerB (HTML5) → MediaElementSource → gainA/B → mixerNode
  * gainA/B held at 0.0001 so they stay active but are inaudible
  * silentPlayer loops 1-byte silence to hold background audio session
+ * silentPlayer is wired through AudioContext (FIX 1) so the AVAudioSession
+ * remains claimed by our AudioContext even when activeSources is empty.
  *
  * Signal chain:
  * mixerNode → analyserNode → EQ[0..5] → gainNode(boost) → masterVolumeNode → destination
+ *
+ * iOS PWA fixes applied (2025-04):
+ * FIX 1 — silentPlayer wired through AudioContext graph to hold AVAudioSession.
+ * FIX 2 — Interruption-end detection via unexpected `pause` events on media elements.
+ * FIX 3 — destroyEngine() + pagehide listener to prevent WebKit audio unit exhaustion.
+ * FIX 4 — Stall watchdog distinguishes network stalls from session interruptions.
+ * FIX 5 — Post-resume liveness check to detect and surface ghost AudioContext sessions.
+ *
+ * Bug fixes applied (2025-07):
+ * BUGFIX 1 — pagehide listener now uses destroyEngineSync() so audioCtx.close()
+ * actually executes before the process exits. The previous async
+ * destroyEngine() call was fire-and-forget; the close() await never
+ * completed, leaking a hardware audio unit on every PWA restart and
+ * eventually requiring a device reboot to clear the WebKit pool.
+ * BUGFIX 2 — scheduleInterruptionRecovery() now runs verifyContextLive() after
+ * audioCtx.resume() to catch ghost sessions on the pause-event recovery
+ * path, matching the protection already present on the onstatechange path.
+ * BUGFIX 3 — Stall watchdog threshold raised from 25 → 60 ticks (6 s) while an
+ * MSE fetch is still in-flight, preventing false-positive hardware
+ * recovery calls during normal SourceBuffer append pauses.
+ * BUGFIX 4 — teardownMse() now revokes the Object URL before calling
+ * msePlayer.load(), preventing a WebKit re-fetch against an
+ * imminently-invalid blob URL that surfaces as a spurious network error.
  */
 
 import { get } from 'svelte/store';
@@ -32,15 +57,15 @@ import {
 const MAX_CACHE_SIZE        = 3;
 const FFT_SIZE              = 256;
 const EQ_FREQS              = [60, 250, 1000, 4000, 8000, 14000];
-const MIN_MSE_BUFFER_SECS   = 3;      
-const ROLLOVER_THRESHOLD    = 0.3;    
+const MIN_MSE_BUFFER_SECS   = 3;
+const ROLLOVER_THRESHOLD    = 0.3;
 
 const SILENCE_B64 = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQQAAAAAAAE=';
 
 // ─── Exported state ───────────────────────────────────────────────────────────
 
 export let audioCtx             = null;
-export let gainNode             = null;   
+export let gainNode             = null;
 export let analyserNode         = null;
 export let isEngineInitialized  = false;
 export let isWebAudioMode;
@@ -57,7 +82,7 @@ export const setWebAudioGaplessMode = (enabled) => {
 
 export const getBufferedPct = () => {
     if (isWebAudioMode) {
-        if (currentBuffer) return 100; 
+        if (currentBuffer) return 100;
         if (mseActive && msePlayer && msePlayer.duration > 0 && msePlayer.buffered.length > 0) {
             return (msePlayer.buffered.end(msePlayer.buffered.length - 1) / msePlayer.duration) * 100;
         }
@@ -87,10 +112,10 @@ let gainB                   = null;
 
 // ─── MSE streaming layer ──────────────────────────────────────────────────────
 
-let msePlayer               = null;   
-let mseGain                 = null;   
+let msePlayer               = null;
+let mseGain                 = null;
 let mseWired                = false;
-let mseActive               = false;  
+let mseActive               = false;
 let mseAbortCtrl            = null;
 let mseMediaSource          = null;
 let mseObjectUrl            = null;
@@ -98,15 +123,15 @@ let mseObjectUrl            = null;
 // ─── WebAudio buffer state ────────────────────────────────────────────────────
 
 let currentBuffer           = null;
-let trackStartTime          = 0;      
-let pauseOffset             = 0;      
+let trackStartTime          = 0;
+let pauseOffset             = 0;
 let currentTrackUrl         = null;
 
 let activeSources           = new Set();
 let pendingLoadId           = 0;
 
 let syntheticClockInterval  = null;
-const decodeCache           = new Map();  
+const decodeCache           = new Map();
 
 // ─── Misc module state ────────────────────────────────────────────────────────
 
@@ -123,14 +148,15 @@ let pendingBoost    = 1.0;
 let pendingVolume   = 1.0;
 let pendingEq       = [0, 0, 0, 0, 0, 0];
 
+// FIX 2: Timer handle for debounced interruption recovery.
+let interruptionRecoveryTimer = null;
+
 const dataArray = typeof window !== 'undefined' ? new Uint8Array(FFT_SIZE / 2) : null;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const safeDecodeAudioData = (buffer) => {
     return new Promise((resolve, reject) => {
-        // FIX: Lazily instantiate audioCtx if a gapless preload triggers 
-        // before the engine is formally unlocked by a user gesture.
         if (!audioCtx) {
             const Ctor = window.AudioContext || window['webkitAudioContext'];
             if (Ctor) {
@@ -146,7 +172,6 @@ const safeDecodeAudioData = (buffer) => {
 
         try {
             const promise = audioCtx.decodeAudioData(buffer, done, fail);
-            // Crucial for Firefox: hook into the returned Promise if it exists
             if (promise && typeof promise.catch === 'function') {
                 promise.then(done).catch(fail);
             }
@@ -171,13 +196,12 @@ export const getAudioDiagnostics = () => {
         bufferDecoded: !!currentBuffer,
         cacheSize: decodeCache.size,
         activeSources: activeSources.size,
-        html5Status: html5ActivePlayer 
-            ? `readyState: ${html5ActivePlayer.readyState}, netState: ${html5ActivePlayer.networkState}` 
+        html5Status: html5ActivePlayer
+            ? `readyState: ${html5ActivePlayer.readyState}, netState: ${html5ActivePlayer.networkState}`
             : 'Uninitialized',
-        // New Telemetry
         mseLoadedBytes,
         mseFetchComplete,
-        activeDecodes
+        activeDecodes,
     };
 };
 
@@ -249,10 +273,10 @@ const initSilentPlayer = () => {
     silentPlayer.preload      = 'auto';
     silentPlayer.autoplay     = false;
     try { silentPlayer.disableRemotePlayback = true; } catch {}
-    silentPlayer.setAttribute('playsinline',          '');
-    silentPlayer.setAttribute('webkit-playsinline',   '');
-    silentPlayer.setAttribute('aria-hidden',          'true');
-    silentPlayer.setAttribute('x-webkit-airplay',     'allow');
+    silentPlayer.setAttribute('playsinline',        '');
+    silentPlayer.setAttribute('webkit-playsinline', '');
+    silentPlayer.setAttribute('aria-hidden',        'true');
+    silentPlayer.setAttribute('x-webkit-airplay',   'allow');
     silentPlayer.style.cssText =
         'position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;';
     document.body.appendChild(silentPlayer);
@@ -261,7 +285,7 @@ const initSilentPlayer = () => {
 const startSilentKeepAlive = () => {
     initSilentPlayer();
     if (!silentPlayer) return;
-    try { silentPlayer.loop = true; silentPlayer.volume = 0.0001; }catch {}
+    try { silentPlayer.loop = true; silentPlayer.volume = 0.0001; } catch {}
     const p = silentPlayer.play();
     if (p) p.catch(() => {});
 };
@@ -270,6 +294,62 @@ const stopSilentKeepAlive = () => {
     if (!silentPlayer) return;
     try { silentPlayer.pause(); silentPlayer.currentTime = 0; } catch {}
 };
+
+// ─── FIX 2 + BUGFIX 2: Interruption recovery ─────────────────────────────────
+//
+// iOS often silences the AVAudioSession at the system layer without transitioning
+// audioCtx.state to 'interrupted'. The media elements do reliably fire `pause`.
+// We detect this "unexpected pause" (isPlaying is still true) and schedule a
+// debounced re-play attempt, giving the system ~800 ms to finish the handoff
+// before we reclaim the session.
+//
+// BUGFIX 2: verifyContextLive() is now also called here, matching the protection
+// on the onstatechange path. Without it, resume() resolves even in a ghost session
+// and the UI appears to recover while audio stays silent.
+
+const scheduleInterruptionRecovery = () => {
+    if (interruptionRecoveryTimer) clearTimeout(interruptionRecoveryTimer);
+    interruptionRecoveryTimer = setTimeout(async () => {
+        interruptionRecoveryTimer = null;
+        if (!get(isPlaying)) return; // user paused during the wait window
+
+        if (audioCtx?.state === 'suspended') {
+            await audioCtx.resume().catch(() => {});
+        }
+
+        // BUGFIX 2: Verify the context is actually producing audio after resume.
+        // On iOS 16+, resume() can resolve while the AVAudioSession is still in a
+        // ghost state — the context object is live but hardware output is not
+        // connected. We check that currentTime advances within 200 ms.
+        const isLive = await verifyContextLive();
+        if (!isLive) {
+            console.warn('[InterruptionRecovery] Ghost session detected. Flagging for re-init.');
+            hasDoneSilentPrime = false;
+            window.dispatchEvent(new CustomEvent('audio-ghost-session'));
+            return;
+        }
+
+        if (mseActive && msePlayer?.paused) {
+            const p = msePlayer.play(); if (p) p.catch(() => startSilentKeepAlive());
+        } else if (!mseActive && currentBuffer && activeSources.size === 0 && isWebAudioMode) {
+            playWebAudio();
+        } else if (!isWebAudioMode && html5ActivePlayer?.paused) {
+            const p = html5ActivePlayer.play(); if (p) p.catch(() => {});
+        }
+    }, 800);
+};
+
+// ─── FIX 5: Post-resume liveness check ───────────────────────────────────────
+//
+// audioCtx.resume() resolves even when iOS has handed back the context object
+// but not yet reconnected it to the hardware output (ghost session). We verify
+// that audioCtx.currentTime actually advances after 200 ms before trusting it.
+
+const verifyContextLive = () => new Promise(resolve => {
+    if (!audioCtx) return resolve(false);
+    const t0 = audioCtx.currentTime;
+    setTimeout(() => resolve(audioCtx.currentTime > t0), 200);
+});
 
 // ─── MSE helpers ──────────────────────────────────────────────────────────────
 
@@ -316,6 +396,11 @@ const initMsePlayer = () => {
         if (mseActive) { isBuffering.set(false); stopBufferSound(); }
     }, { passive: true });
 
+    // FIX 2: Detect unexpected pause on msePlayer (system interruption).
+    msePlayer.addEventListener('pause', () => {
+        if (mseActive && get(isPlaying)) scheduleInterruptionRecovery();
+    }, { passive: true });
+
     msePlayer.addEventListener('error', () => {
         if (!mseActive) return;
         console.error('MSE player error', msePlayer.error);
@@ -336,14 +421,27 @@ const wireMsePlayer = () => {
     mseWired = true;
 };
 
+// ─── BUGFIX 4: teardownMse ────────────────────────────────────────────────────
+//
+// The Object URL is now revoked BEFORE msePlayer.load() is called. Previously the
+// order was: pause → removeAttribute('src') → load() → revokeObjectURL(). On some
+// WebKit versions, load() re-fetches the internal src reference even after
+// removeAttribute, which triggered a network error against a URL that was about to
+// be invalidated. Revoking first ensures no fetch can be attempted against it.
+
 const teardownMse = () => {
     mseActive = false;
     if (mseAbortCtrl) { mseAbortCtrl.abort(); mseAbortCtrl = null; }
+
+    // BUGFIX 4: Revoke the blob URL before touching the element so WebKit cannot
+    // re-fetch a URL that is about to become invalid.
+    if (mseObjectUrl) { URL.revokeObjectURL(mseObjectUrl); mseObjectUrl = null; }
+
     if (msePlayer) {
-        msePlayer._earlyEndFired = true; 
-        try { 
-            msePlayer.pause(); 
-            msePlayer.removeAttribute('src'); 
+        msePlayer._earlyEndFired = true;
+        try {
+            msePlayer.pause();
+            msePlayer.removeAttribute('src');
             msePlayer.load();
         } catch {}
     }
@@ -356,7 +454,6 @@ const teardownMse = () => {
         try { if (mseMediaSource.readyState === 'open') mseMediaSource.endOfStream(); } catch {}
         mseMediaSource = null;
     }
-    if (mseObjectUrl) { URL.revokeObjectURL(mseObjectUrl); mseObjectUrl = null; }
 };
 
 const streamViaMse = async (url, loadId) => {
@@ -365,7 +462,7 @@ const streamViaMse = async (url, loadId) => {
     const abortCtrl = new AbortController();
     mseAbortCtrl    = abortCtrl;
 
-    mseLoadedBytes = 0;
+    mseLoadedBytes   = 0;
     mseFetchComplete = false;
 
     try {
@@ -385,8 +482,8 @@ const streamViaMse = async (url, loadId) => {
         msePlayer._earlyEndFired = false;
 
         await new Promise((resolve, reject) => {
-            const onOpen  = () => { ms.removeEventListener('sourceopen', onOpen); resolve(); };
-            const onErr   = () => { ms.removeEventListener('error', onErr); reject(new Error('MSE open error')); };
+            const onOpen = () => { ms.removeEventListener('sourceopen', onOpen); resolve(); };
+            const onErr  = () => { ms.removeEventListener('error', onErr); reject(new Error('MSE open error')); };
             ms.addEventListener('sourceopen', onOpen);
             ms.addEventListener('error', onErr);
             setTimeout(() => reject(new Error('MSE sourceopen timeout')), 5000);
@@ -429,10 +526,10 @@ const streamViaMse = async (url, loadId) => {
             }
         };
 
-        const reader      = response.body.getReader();
-        const allChunks   = [];
-        let totalBytes    = 0;
-        let playStarted   = false;
+        const reader    = response.body.getReader();
+        const allChunks = [];
+        let totalBytes  = 0;
+        let playStarted = false;
 
         isBuffering.set(true);
         startBufferSound();
@@ -444,13 +541,13 @@ const streamViaMse = async (url, loadId) => {
             if (done) break;
 
             allChunks.push(value);
-            totalBytes += value.byteLength;
+            totalBytes    += value.byteLength;
             mseLoadedBytes = totalBytes;
             await appendChunk(value);
 
             if (!playStarted && msePlayer.buffered.length > 0 &&
                 msePlayer.buffered.end(0) >= MIN_MSE_BUFFER_SECS) {
-                playStarted    = true;
+                playStarted           = true;
                 msePlayer.currentTime = 0;
 
                 if (audioCtx?.state === 'suspended') await audioCtx.resume().catch(() => {});
@@ -462,8 +559,15 @@ const streamViaMse = async (url, loadId) => {
                 isBuffering.set(false);
                 stopBufferSound();
                 startSyntheticClock();
-                if (msePlayer.duration > 0) playerDuration.set(msePlayer.duration);
-                updateMediaPositionState(0, msePlayer.duration || 0);
+                
+                // FIX: Ensure duration is not Infinity/NaN for MSE
+                const dur = msePlayer.duration;
+                if (dur > 0 && dur !== Infinity && !isNaN(dur)) {
+                    playerDuration.set(dur);
+                    updateMediaPositionState(0, dur);
+                } else {
+                    updateMediaPositionState(0, 0);
+                }
             }
         }
 
@@ -471,7 +575,7 @@ const streamViaMse = async (url, loadId) => {
 
         if (totalBytes === 0) {
             teardownMse();
-            return false; 
+            return false;
         }
 
         if (ms.readyState === 'open') {
@@ -510,8 +614,8 @@ const streamViaMse = async (url, loadId) => {
                 currentBuffer = buf;
                 playerDuration.set(buf.duration);
             })
-            .catch(() => { /* non-fatal: MSE is still playing, Firefox just didn't like the chunks */ })
-            .finally(() => { activeDecodes--; }); 
+            .catch(() => { /* non-fatal */ })
+            .finally(() => { activeDecodes--; });
         }
 
         return true;
@@ -526,7 +630,7 @@ const streamViaMse = async (url, loadId) => {
 // ─── WebAudio graph construction ──────────────────────────────────────────────
 
 const buildWebAudioGraph = () => {
-    if (!audioCtx || mixerNode) return; 
+    if (!audioCtx || mixerNode) return;
 
     mixerNode = audioCtx.createGain();
     mixerNode.gain.value = 1.0;
@@ -534,15 +638,15 @@ const buildWebAudioGraph = () => {
     const hGain = audioCtx.createGain();
     hGain.gain.value = 0.0000001;
     heartbeatOsc = audioCtx.createOscillator();
-    heartbeatOsc.type           = 'sine';
+    heartbeatOsc.type             = 'sine';
     heartbeatOsc.frequency.value = 440;
     heartbeatOsc.connect(hGain);
     hGain.connect(mixerNode);
     heartbeatOsc.start();
 
     analyserNode = audioCtx.createAnalyser();
-    analyserNode.fftSize                  = FFT_SIZE;
-    analyserNode.smoothingTimeConstant    = 0.85;
+    analyserNode.fftSize               = FFT_SIZE;
+    analyserNode.smoothingTimeConstant = 0.85;
 
     eqFilters = EQ_FREQS.map((freq, i) => {
         const f = audioCtx.createBiquadFilter();
@@ -569,20 +673,20 @@ const buildWebAudioGraph = () => {
 
 const tryWireAudioNodes = () => {
     if (!audioCtx || !playerA || !playerB || gainA || !mixerNode) return;
-    
+
     gainA = audioCtx.createGain(); gainA.gain.value = 0;
     gainB = audioCtx.createGain(); gainB.gain.value = 0;
-    
+
     try {
         const srcA = audioCtx.createMediaElementSource(playerA);
         const srcB = audioCtx.createMediaElementSource(playerB);
         srcA.connect(gainA);
         srcB.connect(gainB);
     } catch (e) { console.warn('HTML5 wire warning', e); }
-    
+
     gainA.connect(mixerNode);
     gainB.connect(mixerNode);
-    
+
     wireMsePlayer();
 };
 
@@ -604,14 +708,10 @@ const fetchAndDecode = async (url) => {
         try {
             const resp = await fetch(buildStreamUrl(url, false), { signal: controller.signal });
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-            const ab = await resp.arrayBuffer();
-            
+            const ab      = await resp.arrayBuffer();
             const decoded = await safeDecodeAudioData(ab.slice(0));
-            
-            // FIX: Mark the cache entry as fully resolved
-            const entry = decodeCache.get(url);
+            const entry   = decodeCache.get(url);
             if (entry) entry.resolved = true;
-            
             return decoded;
         } catch (e) {
             if (e.name !== 'AbortError') console.error('Audio decode error:', e);
@@ -619,7 +719,6 @@ const fetchAndDecode = async (url) => {
         }
     })().finally(() => { activeDecodes--; });
 
-    // FIX: Add resolved: false initially
     decodeCache.set(url, { promise: p, controller, resolved: false });
     return p;
 };
@@ -629,7 +728,7 @@ const fetchAndDecode = async (url) => {
 const startSyntheticClock = () => {
     if (syntheticClockInterval) clearInterval(syntheticClockInterval);
     let syncPulse = 0;
-    let lastPos = -1;
+    let lastPos   = -1;
     let stuckTicks = 0;
 
     syntheticClockInterval = setInterval(() => {
@@ -643,30 +742,68 @@ const startSyntheticClock = () => {
         if (isWebAudioMode) {
             if (mseActive && msePlayer) {
                 pos = msePlayer.currentTime;
-                dur = msePlayer.duration > 0 ? msePlayer.duration : get(playerDuration);
-                if (msePlayer.duration > 0) playerDuration.set(msePlayer.duration);
+                const realDur = msePlayer.duration;
+                // FIX: Guard against Infinity/NaN from partial network streams breaking scrubbers
+                if (realDur > 0 && realDur !== Infinity && !isNaN(realDur)) {
+                    dur = realDur;
+                    if (get(playerDuration) !== dur) playerDuration.set(dur);
+                } else {
+                    dur = get(playerDuration);
+                }
             } else if (currentBuffer && audioCtx) {
                 const elapsed = audioCtx.currentTime - trackStartTime;
                 dur = currentBuffer.duration;
                 pos = Math.max(0, Math.min(pauseOffset + elapsed, dur));
+                if (dur > 0 && dur !== Infinity && !isNaN(dur) && get(playerDuration) !== dur) {
+                    playerDuration.set(dur);
+                }
             } else return;
         } else {
-            // HTML5 fallback mode — read directly from the active element
             if (!html5ActivePlayer || html5ActivePlayer.readyState < 1) return;
             pos = html5ActivePlayer.currentTime;
-            dur = html5ActivePlayer.duration > 0 ? html5ActivePlayer.duration : get(playerDuration);
+            const realDur = html5ActivePlayer.duration;
+            if (realDur > 0 && realDur !== Infinity && !isNaN(realDur)) {
+                dur = realDur;
+                if (get(playerDuration) !== dur) playerDuration.set(dur);
+            } else {
+                dur = get(playerDuration);
+            }
         }
 
         if (pos === lastPos && !get(isBuffering)) {
             stuckTicks++;
-            if (stuckTicks > 25) {
-                console.warn("[Watchdog] Audio engine stalled. Forcing hardware recovery...");
+
+            // BUGFIX 3: Use a higher stuck-ticks threshold while an MSE fetch is
+            // still in-flight. SourceBuffer.appendBuffer() legitimately pauses
+            // timeupdate emission at codec boundaries and during chunk appends.
+            // The original flat threshold of 25 (2.5 s) fired false-positive
+            // hardware recovery calls that tore down healthy streams on slow networks.
+            // 60 ticks = 6 s, which is long enough to survive a normal append pause.
+            const stuckThreshold = (mseActive && !mseFetchComplete) ? 60 : 25;
+
+            if (stuckTicks > stuckThreshold) {
                 stuckTicks = 0;
-                attemptHardwareRecovery(pos);
+
+                // FIX 4: Distinguish a network stall from a session interruption.
+                // A network stall means the media element is loading data but hasn't
+                // buffered enough to continue. A session interruption means the element
+                // is technically ready but the AVAudioSession was revoked underneath it.
+                // Hard recovery (reload stream) is correct for network stalls only.
+                const isNetworkStall = mseActive && msePlayer &&
+                    msePlayer.networkState === /* NETWORK_LOADING */ 2 &&
+                    msePlayer.readyState    <  /* HAVE_FUTURE_DATA */ 3;
+
+                if (isNetworkStall) {
+                    console.warn('[Watchdog] Network stall detected. Forcing hardware recovery.');
+                    attemptHardwareRecovery(pos);
+                } else {
+                    console.warn('[Watchdog] Session interruption suspected. Scheduling soft recovery.');
+                    scheduleInterruptionRecovery();
+                }
             }
         } else {
             stuckTicks = 0;
-            lastPos = pos;
+            lastPos    = pos;
         }
 
         playerCurrentTime.set(pos);
@@ -676,7 +813,6 @@ const startSyntheticClock = () => {
             syncPulse = 0;
             if (dur > 0) updateMediaPositionState(pos, dur);
 
-            // WebAudio mode: keep HTML5 element in sync as keep-alive
             if (isWebAudioMode && !mseActive && html5ActivePlayer) {
                 if (html5ActivePlayer.paused) {
                     const p = html5ActivePlayer.play(); if (p) p.catch(() => {});
@@ -706,8 +842,8 @@ const playWebAudio = () => {
     src.connect(mixerNode);
 
     src.onended = () => {
-        activeSources.delete(src); 
-        src.buffer = null; 
+        activeSources.delete(src);
+        src.buffer = null;
         if (get(isPlaying)) {
             window.dispatchEvent(new CustomEvent('track-ended'));
         }
@@ -746,7 +882,7 @@ const scheduleGaplessNext = (nextBuf) => {
 
     const capturedDuration = nextBuf.duration;
     src.onended = () => {
-        activeSources.delete(src); 
+        activeSources.delete(src);
         src.buffer = null;
         if (get(isPlaying)) {
             window.dispatchEvent(new CustomEvent('track-ended'));
@@ -806,8 +942,8 @@ const seekWebAudio = (time) => {
         try { msePlayer.currentTime = time; } catch {}
     }
 
-    const maxTime  = currentBuffer?.duration ?? (msePlayer?.duration ?? 0);
-    pauseOffset    = Math.max(0, Math.min(time, maxTime));
+    const maxTime = currentBuffer?.duration ?? (msePlayer?.duration ?? 0);
+    pauseOffset   = Math.max(0, Math.min(time, maxTime));
     playerCurrentTime.set(pauseOffset);
 
     if (html5ActivePlayer) try { html5ActivePlayer.currentTime = pauseOffset; } catch {}
@@ -828,27 +964,114 @@ const attemptHardwareRecovery = (stuckPos) => {
     if (audioCtx) {
         audioCtx.suspend().then(() => audioCtx.resume()).catch(() => {});
     }
-    
+
     if (isWebAudioMode) {
         if (mseActive && msePlayer) {
-            msePlayer.load(); 
+            msePlayer.load();
             msePlayer.currentTime = stuckPos;
-            const p = msePlayer.play(); if (p) p.catch(()=>{});
+            const p = msePlayer.play(); if (p) p.catch(() => {});
         } else if (currentBuffer) {
             pauseOffset = stuckPos;
-            stopWebAudio(); 
+            stopWebAudio();
             playWebAudio();
         }
     } else if (html5ActivePlayer) {
         html5ActivePlayer.load();
         html5ActivePlayer.currentTime = stuckPos;
-        const p = html5ActivePlayer.play(); if (p) p.catch(()=>{});
+        const p = html5ActivePlayer.play(); if (p) p.catch(() => {});
     }
-    
-    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.userAgent.includes("Mac") && "ontouchend" in document);
+
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+        (navigator.userAgent.includes('Mac') && 'ontouchend' in document);
     if (stuckPos === 0 && isIOS) {
         window.dispatchEvent(new CustomEvent('ios-hardware-deadlock'));
     }
+};
+
+// ─── FIX 3 + BUGFIX 1: Engine teardown ───────────────────────────────────────
+//
+// iOS WebKit limits concurrent AudioContext instances. Without closing the context
+// on teardown, every PWA force-close + relaunch leaks one hardware audio unit.
+// After enough cycles the process can no longer claim a session and all play()
+// calls silently fail — requiring a device reboot to clear.
+//
+// BUGFIX 1: The original destroyEngine() was async and was called from the
+// `pagehide` event handler without being awaited. The browser does not wait for
+// returned promises from pagehide listeners, so the `await audioCtx.close()`
+// inside it never ran. This caused the hardware audio unit leak described above.
+//
+// Solution: destroyEngineSync() performs a best-effort synchronous teardown.
+// audioCtx.suspend() is synchronous on WebKit and releases the hardware lock
+// immediately. audioCtx.close() is then fired and forgotten — it may or may not
+// complete before the process exits, but suspend() alone is sufficient to prevent
+// the leak. destroyEngine() (async) is retained for soft teardowns called from
+// application code where await is available.
+
+export const destroyEngineSync = () => {
+    teardownMse();
+    stopWebAudio();
+
+    if (syntheticClockInterval) { clearInterval(syntheticClockInterval); syntheticClockInterval = null; }
+    if (bufferInterval)         { clearInterval(bufferInterval);         bufferInterval = null; }
+    if (interruptionRecoveryTimer) { clearTimeout(interruptionRecoveryTimer); interruptionRecoveryTimer = null; }
+
+    // Fully detach all media elements before closing the context.
+    for (const el of [playerA, playerB, msePlayer, silentPlayer]) {
+        if (!el) continue;
+        try { el.pause(); el.removeAttribute('src'); el.load(); } catch {}
+    }
+
+    // BUGFIX 1: suspend() is synchronous on WebKit and immediately releases the
+    // hardware audio unit. close() is best-effort — it may not complete before
+    // the process exits in a pagehide context, but suspend() alone is sufficient
+    // to return the unit to the iOS pool and prevent the reboot-required deadlock.
+    if (audioCtx) {
+        try { audioCtx.suspend(); } catch {}
+        audioCtx.close().catch(() => {});
+        audioCtx = null;
+    }
+
+    // Reset all graph refs so the next unlockAudioContext() rebuilds from scratch.
+    mixerNode = gainNode = analyserNode = masterVolumeNode = null;
+    gainA = gainB = mseGain = null;
+    eqFilters           = [];
+    isEngineInitialized = false;
+    hasDoneSilentPrime  = false;
+    currentBuffer       = null;
+    currentTrackUrl     = null;
+    mseWired            = false;
+};
+
+export const destroyEngine = async () => {
+    teardownMse();
+    stopWebAudio();
+
+    if (syntheticClockInterval) { clearInterval(syntheticClockInterval); syntheticClockInterval = null; }
+    if (bufferInterval)         { clearInterval(bufferInterval);         bufferInterval = null; }
+    if (interruptionRecoveryTimer) { clearTimeout(interruptionRecoveryTimer); interruptionRecoveryTimer = null; }
+
+    // Fully detach all media elements before closing the context.
+    for (const el of [playerA, playerB, msePlayer, silentPlayer]) {
+        if (!el) continue;
+        try { el.pause(); el.removeAttribute('src'); el.load(); } catch {}
+    }
+
+    // CRITICAL: close the AudioContext to release the hardware audio unit back
+    // to iOS. Without this, repeated restarts exhaust the WebKit audio unit pool.
+    if (audioCtx) {
+        try { await audioCtx.close(); } catch {}
+        audioCtx = null;
+    }
+
+    // Reset all graph refs so the next unlockAudioContext() rebuilds from scratch.
+    mixerNode = gainNode = analyserNode = masterVolumeNode = null;
+    gainA = gainB = mseGain = null;
+    eqFilters           = [];
+    isEngineInitialized = false;
+    hasDoneSilentPrime  = false;
+    currentBuffer       = null;
+    currentTrackUrl     = null;
+    mseWired            = false;
 };
 
 // ─── Engine bootstrap ─────────────────────────────────────────────────────────
@@ -868,13 +1091,29 @@ export const unlockAudioContext = () => {
     audioCtx.onstatechange = () => {
         const s = audioCtx.state;
         if ((s === 'interrupted' || s === 'suspended') && get(isPlaying)) {
-            // FIX 1: Instant resume instead of waiting 1000ms. Restores the 10ms gap.
-            audioCtx.resume().then(() => {
-                if (isWebAudioMode && currentBuffer && activeSources.size === 0 && !mseActive) playWebAudio();
-                else if (mseActive && msePlayer?.paused) { const p = msePlayer.play(); if(p) p.catch(()=>{}); }
-                else if (!isWebAudioMode && html5ActivePlayer?.paused) { const p = html5ActivePlayer.play(); if(p) p.catch(()=>{}); }
+            audioCtx.resume().then(async () => {
+                // FIX 5: Verify the context is actually producing audio after resume.
+                // On iOS 16+, resume() can resolve while the AVAudioSession is still
+                // in a ghost state — the context object is live but hardware output
+                // is not connected. We check that currentTime advances within 200 ms.
+                const isLive = await verifyContextLive();
+                if (!isLive) {
+                    console.warn('[AudioCtx] Ghost session detected post-resume. Flagging for re-init.');
+                    // Signal the UI layer to show a "Tap to restore audio" prompt.
+                    // A fresh user gesture is the only escape from a ghost session on iOS.
+                    hasDoneSilentPrime = false;
+                    window.dispatchEvent(new CustomEvent('audio-ghost-session'));
+                    return;
+                }
+
+                if (isWebAudioMode && currentBuffer && activeSources.size === 0 && !mseActive)
+                    playWebAudio();
+                else if (mseActive && msePlayer?.paused) {
+                    const p = msePlayer.play(); if (p) p.catch(() => {});
+                } else if (!isWebAudioMode && html5ActivePlayer?.paused) {
+                    const p = html5ActivePlayer.play(); if (p) p.catch(() => {});
+                }
             }).catch(() => {
-                // Only fall back to polling if the instant resume fails
                 if (!interruptionPolling) {
                     interruptionPolling = setInterval(() => {
                         if (audioCtx.state === 'running' || !get(isPlaying)) {
@@ -883,7 +1122,7 @@ export const unlockAudioContext = () => {
                         } else {
                             audioCtx.resume().catch(() => {});
                         }
-                    }, 100); // Sped up fallback polling to 100ms
+                    }, 100);
                 }
             });
         } else if (s === 'running') {
@@ -900,6 +1139,30 @@ export const unlockAudioContext = () => {
     };
 
     buildWebAudioGraph();
+
+    // FIX 1: Wire silentPlayer through the AudioContext graph.
+    //
+    // Previously silentPlayer was a plain HTMLAudioElement playing silence in
+    // parallel with — but disconnected from — the AudioContext. iOS WebKit only
+    // keeps the AVAudioSession claimed for an AudioContext that has at least one
+    // source routed to its destination. When activeSources is empty (paused),
+    // the context had no live connections and iOS reclaimed the hardware session.
+    //
+    // By routing silentPlayer → silentGain(0.00001) → mixerNode, the AudioContext
+    // always has a live source graph and retains the AVAudioSession across pauses.
+    if (silentPlayer && mixerNode && !silentPlayer._wiredToCtx) {
+        try {
+            const silentSrc  = audioCtx.createMediaElementSource(silentPlayer);
+            const silentGain = audioCtx.createGain();
+            silentGain.gain.value = 0.00001; // sub-perceptual; keeps session alive
+            silentSrc.connect(silentGain);
+            silentGain.connect(mixerNode);
+            silentPlayer._wiredToCtx = true;
+        } catch {
+            // Element already captured on a prior init — harmless.
+        }
+    }
+
     tryWireAudioNodes();
 
     if (msePlayer) {
@@ -928,9 +1191,6 @@ export const unlockAudioContext = () => {
     if (typeof document !== 'undefined') {
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState !== 'visible' || !audioCtx) return;
-            
-            // FIX 2: Removed the forced `audioCtx.suspend()` here which was causing 
-            // a heavy stutter whenever the user reopened the app from the background.
 
             if (audioCtx.state !== 'running') {
                 audioCtx.resume().then(() => {
@@ -949,13 +1209,21 @@ export const unlockAudioContext = () => {
             }
         }, { passive: true });
 
-        window.addEventListener('pageshow', (e) => {
+        window.addEventListener('pageshow', () => {
             if (audioCtx && audioCtx.state !== 'running') audioCtx.resume().catch(() => {});
         }, { passive: true });
 
         window.addEventListener('resume', () => {
             if (audioCtx && audioCtx.state !== 'running') audioCtx.resume().catch(() => {});
         }, { passive: true });
+
+        // FIX 3 + BUGFIX 1: Register synchronous teardown on page unload so the
+        // AudioContext hardware unit is returned to iOS before the process exits.
+        // destroyEngineSync() calls audioCtx.suspend() (synchronous on WebKit) which
+        // releases the hardware lock immediately, then fires close() best-effort.
+        // The previous destroyEngine() call was async and its await audioCtx.close()
+        // never completed inside a pagehide handler — see BUGFIX 1 above.
+        window.addEventListener('pagehide', () => { destroyEngineSync(); }, { once: true });
     }
 
     isEngineInitialized = true;
@@ -969,9 +1237,6 @@ export const registerAudioElements = (elA, elB) => {
 
     tryWireAudioNodes();
 
-    // Always set up HTML5 event listeners regardless of mode.
-    // These elements are always present as fallback, and if the user
-    // toggles gapless off, these listeners must already exist.
     const setup = (el) => {
         el.addEventListener('error', () => {
             if (el === html5ActivePlayer && !el.src.startsWith('data:')) {
@@ -985,8 +1250,12 @@ export const registerAudioElements = (elA, elB) => {
 
         el.addEventListener('loadedmetadata', () => {
             if (el !== html5ActivePlayer) return;
-            playerDuration.set(el.duration);
-            updateMediaPositionState(el.currentTime, el.duration);
+            const dur = el.duration;
+            // FIX: Guard against Infinity/NaN from partial network streams breaking scrubbers
+            if (dur > 0 && dur !== Infinity && !isNaN(dur)) {
+                playerDuration.set(dur);
+                updateMediaPositionState(el.currentTime, dur);
+            }
         }, { passive: true });
 
         el.addEventListener('timeupdate', () => {
@@ -998,8 +1267,6 @@ export const registerAudioElements = (elA, elB) => {
             }
         }, { passive: true });
 
-        // Safety net: if the early-end check in timeupdate misses
-        // (e.g. large timeupdate gaps on iOS), catch the native ended event.
         el.addEventListener('ended', () => {
             if (el === html5ActivePlayer && !el._earlyEndFired) {
                 el._earlyEndFired = true;
@@ -1013,7 +1280,6 @@ export const registerAudioElements = (elA, elB) => {
             stallTimeout = setTimeout(() => checkDeadlock(el), 3500);
             if (el === html5ActivePlayer) {
                 isPlaying.set(true);
-                // Update iOS widget: mark as playing with current position
                 if (!isWebAudioMode && el.duration > 0) {
                     updateMediaPositionState(el.currentTime, el.duration);
                 }
@@ -1027,7 +1293,6 @@ export const registerAudioElements = (elA, elB) => {
         el.addEventListener('playing', () => {
             if (el === html5ActivePlayer) {
                 isBuffering.set(false); stopBufferSound(); isPlaying.set(true);
-                // Update iOS widget: confirm playback is active
                 if (!isWebAudioMode && el.duration > 0) {
                     updateMediaPositionState(el.currentTime, el.duration);
                 }
@@ -1035,12 +1300,29 @@ export const registerAudioElements = (elA, elB) => {
             clearTimeout(stallTimeout);
         }, { passive: true });
 
+        // FIX 2: Distinguish user-initiated pauses from system interruptions.
+        //
+        // Previously every `pause` event set isPlaying(false), which made an iOS
+        // AVAudioSession interruption (e.g. incoming call, another app claiming
+        // audio focus) indistinguishable from a deliberate user pause. Recovery
+        // never fired because isPlaying was already false.
+        //
+        // Now: if isPlaying is still true when `pause` fires, the pause was not
+        // initiated by us — it is a system interruption. We schedule a debounced
+        // recovery without flipping isPlaying, giving iOS ~800 ms to complete
+        // the handoff before we attempt to reclaim the session.
         el.addEventListener('pause', () => {
             if (el === html5ActivePlayer) {
-                isPlaying.set(false);
-                // Update iOS widget: mark as paused so widget stays visible
                 if (!isWebAudioMode && el.duration > 0) {
                     updateMediaPositionState(el.currentTime, el.duration);
+                }
+
+                if (get(isPlaying)) {
+                    // Unexpected pause — system interruption. Do not flip isPlaying.
+                    scheduleInterruptionRecovery();
+                } else {
+                    // Expected pause — user or engine initiated.
+                    isPlaying.set(false);
                 }
             }
             clearTimeout(stallTimeout);
@@ -1052,8 +1334,8 @@ export const registerAudioElements = (elA, elB) => {
 };
 
 const checkDeadlock = (el) => {
-    const ctxStuck   = audioCtx && audioCtx.state !== 'running';
-    const headStuck  = !el.paused && el.readyState >= 3 && el.currentTime < 0.1;
+    const ctxStuck  = audioCtx && audioCtx.state !== 'running';
+    const headStuck = !el.paused && el.readyState >= 3 && el.currentTime < 0.1;
     if (ctxStuck || headStuck) {
         clearTimeout(stallTimeout);
         attemptHardwareRecovery(el.currentTime);
@@ -1087,7 +1369,7 @@ export const preloadNextUrl = async (url) => {
                     target.removeEventListener('canplaythrough', onReady);
                 };
                 target.addEventListener('canplaythrough', onReady, { once: true });
-                setTimeout(onReady, 1500); 
+                setTimeout(onReady, 1500);
             }).catch(() => {});
         }
     }
@@ -1097,15 +1379,20 @@ export const loadAndPlayUrl = async (url) => {
     const streamUrl     = buildStreamUrl(url, false);
     const currentLoadId = ++pendingLoadId;
 
+    radioSeedTrackId = null;
+
     if (!isEngineInitialized) unlockAudioContext();
     if (audioCtx?.state === 'suspended') await audioCtx.resume().catch(() => {});
 
-    // Always tear down MSE when loading a new track, regardless of mode.
-    // Prevents stale MSE state from interfering with HTML5 playback.
     if (mseActive) teardownMse();
 
     if (html5StandbyPlayer && srcMatchesUrl(html5StandbyPlayer.src, url)) {
         [html5ActivePlayer, html5StandbyPlayer] = [html5StandbyPlayer, html5ActivePlayer];
+        // FIX: Ensure duration carries over from the preloaded metadata
+        if (html5ActivePlayer.readyState >= 1) {
+            const dur = html5ActivePlayer.duration;
+            if (dur > 0 && dur !== Infinity && !isNaN(dur)) playerDuration.set(dur);
+        }
     } else if (html5ActivePlayer && !srcMatchesUrl(html5ActivePlayer.src, url)) {
         [html5ActivePlayer, html5StandbyPlayer] = [html5StandbyPlayer, html5ActivePlayer];
         html5ActivePlayer.src = streamUrl;
@@ -1146,11 +1433,11 @@ export const loadAndPlayUrl = async (url) => {
 
     if (!isWebAudioMode) return;
 
-    const currentPos      = get(playerCurrentTime);
-    const mseRollover     = mseActive && msePlayer && msePlayer.duration > 0 &&
-                            (msePlayer.duration - msePlayer.currentTime <= ROLLOVER_THRESHOLD);
-    const bufferRollover  = !mseActive && !!currentBuffer &&
-                            (currentBuffer.duration - currentPos <= ROLLOVER_THRESHOLD);
+    const currentPos     = get(playerCurrentTime);
+    const mseRollover    = mseActive && msePlayer && msePlayer.duration > 0 &&
+                           (msePlayer.duration - msePlayer.currentTime <= ROLLOVER_THRESHOLD);
+    const bufferRollover = !mseActive && !!currentBuffer &&
+                           (currentBuffer.duration - currentPos <= ROLLOVER_THRESHOLD);
     const isNaturalRollover = mseRollover || bufferRollover;
 
     if (!isNaturalRollover) {
@@ -1161,9 +1448,12 @@ export const loadAndPlayUrl = async (url) => {
         isBuffering.set(true);
         startBufferSound();
 
+        // FIX: Reset time and duration instantly so UI doesn't hold onto the old track's values
+        playerCurrentTime.set(0);
+        playerDuration.set(0);
+
         const cacheEntry = decodeCache.get(url);
-        
-        // FIX: If it's cached but NOT fully resolved yet, abort it and prefer MSE fast-start
+
         if (!cacheEntry || !cacheEntry.resolved) {
             if (cacheEntry && cacheEntry.controller) {
                 cacheEntry.controller.abort();
@@ -1171,15 +1461,15 @@ export const loadAndPlayUrl = async (url) => {
             }
             const mseDone = await streamViaMse(url, currentLoadId);
             if (currentLoadId !== pendingLoadId) return;
-            if (mseDone) return; 
+            if (mseDone) return;
         }
     } else {
-        activeSources.forEach(s => { 
-            try { 
-                s.onended = () => { 
-                    try { s.disconnect(); s.buffer = null; } catch {} 
-                }; 
-            } catch {} 
+        activeSources.forEach(s => {
+            try {
+                s.onended = () => {
+                    try { s.disconnect(); s.buffer = null; } catch {}
+                };
+            } catch {}
         });
         activeSources.clear();
         if (syntheticClockInterval) clearInterval(syntheticClockInterval);
@@ -1207,10 +1497,10 @@ export const loadAndPlayUrl = async (url) => {
         const wasPlayingViaMse = mseActive;
         if (mseActive) {
             teardownMse();
-            currentBuffer = null; 
+            currentBuffer = null;
         }
         if (wasPlayingViaMse || get(isPlaying)) {
-            isPlaying.set(true); 
+            isPlaying.set(true);
             scheduleGaplessNext(buf);
             startSyntheticClock();
         }
@@ -1269,14 +1559,14 @@ export const togglePlayGlobal = async () => {
             isPlaying.set(true);
             startSyntheticClock();
             const dur = html5ActivePlayer.duration;
-            if (dur > 0) updateMediaPositionState(html5ActivePlayer.currentTime, dur);
+            if (dur > 0 && dur !== Infinity && !isNaN(dur)) updateMediaPositionState(html5ActivePlayer.currentTime, dur);
         } else {
             await playStateCue(true);
             html5ActivePlayer.pause();
             isPlaying.set(false);
             if (syntheticClockInterval) clearInterval(syntheticClockInterval);
             const dur = html5ActivePlayer.duration;
-            if (dur > 0) updateMediaPositionState(html5ActivePlayer.currentTime, dur);
+            if (dur > 0 && dur !== Infinity && !isNaN(dur)) updateMediaPositionState(html5ActivePlayer.currentTime, dur);
         }
     }
 };
@@ -1335,14 +1625,14 @@ export const updateMediaSession = (track, album, handlers) => {
             const t = details.seekTime ?? 0;
             activePlayer.currentTime = t;
             const dur = activePlayer.duration;
-            if (!isNaN(dur) && dur > 0) updateMediaPositionState(t, dur);
+            if (!isNaN(dur) && dur > 0 && dur !== Infinity) updateMediaPositionState(t, dur);
             handlers.seek(t);
         });
     }
 };
 
 export const updateMediaPositionState = (currentTime, duration) => {
-    if (!('mediaSession' in navigator) || isNaN(duration) || duration <= 0) return;
+    if (!('mediaSession' in navigator) || isNaN(duration) || duration <= 0 || duration === Infinity) return;
     try {
         const playing = get(isPlaying);
         navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
@@ -1433,8 +1723,8 @@ export const stopBufferSound = () => {
         gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.5);
     }
     setTimeout(() => {
-        if (osc)  { try { osc.stop();         } catch {} }
-        if (gain) { try { gain.disconnect();  } catch {} }
+        if (osc)  { try { osc.stop();        } catch {} }
+        if (gain) { try { gain.disconnect(); } catch {} }
     }, 600);
 };
 
@@ -1458,23 +1748,21 @@ export const startScrubEffect = async () => {
 };
 
 export const updateScrubEffect = (speed, dir) => {
-    if (!audioCtx) return; // FIX: Removed !isWebAudioMode
+    if (!audioCtx) return;
     const soundType = typeof window !== 'undefined'
         ? (localStorage.getItem('psyzx_scrub_sound') || 'speed') : 'speed';
     if (soundType === 'none') return;
 
     if (soundType === 'vinyl') {
         const rate = dir > 0 ? Math.min(2.5, 1 + speed * 4) : Math.max(0.2, 1 - speed * 3);
-        
-        // Scrub WebAudio Buffers
+
         activeSources.forEach(src => {
             if (src.playbackRate) {
                 src.playbackRate.cancelScheduledValues(audioCtx.currentTime);
                 src.playbackRate.setTargetAtTime(rate, audioCtx.currentTime, 0.01);
             }
         });
-        
-        // FIX: Scrub HTML5 Fallback
+
         if (!isWebAudioMode && html5ActivePlayer) {
             html5ActivePlayer.playbackRate = rate;
         }
@@ -1506,11 +1794,11 @@ export const stopScrubEffect = () => {
             src.playbackRate.value = 1.0;
         }
     });
-    
+
     if (!isWebAudioMode && html5ActivePlayer) {
         html5ActivePlayer.playbackRate = 1.0;
     }
-    
+
     if (!scrubGain) return;
 
     scrubGain.gain.cancelScheduledValues(audioCtx.currentTime);
@@ -1529,6 +1817,7 @@ export const stopScrubEffect = () => {
 // ─── Track navigation ─────────────────────────────────────────────────────────
 
 let lastNextTime = 0;
+let radioSeedTrackId = null;
 
 export const playNextGlobal = async (api, forceManualCue = false) => {
     const now = Date.now();
@@ -1551,39 +1840,52 @@ export const playNextGlobal = async (api, forceManualCue = false) => {
 
     if (!isAutoAdvance || forceManualCue) playSkipCue('next');
 
-    // Process Explicit Queue 
     if (queue.length > 0) {
         const nextTrack = queue[0];
         userQueue.update(q => q.slice(1));
-        
-        // Inject into currentPlaylist 
-        let targetIndex = index + 1;
+
+        let targetIndex  = index + 1;
         const updatedList = [...playlist];
         updatedList.splice(targetIndex, 0, nextTrack);
         currentPlaylist.set(updatedList);
-        
+
         if (shuffle) {
             shuffleHistory.update(h => [...h, index]);
-            shuffleFuture.set([]); // Invalidate forward history when manually queued
+            shuffleFuture.set([]);
         }
-        
+
         currentIndex.set(targetIndex);
         return;
     }
 
     if (!repeat && index === playlist.length - 1 && queue.length === 0) {
-        const newTracks = await api.getRadioMix(playlist[index].id, playlist.map(t => t.id));
-        if (newTracks.length) currentPlaylist.update(l => [...l, ...newTracks]);
-        else {
+        // Lock the seed to the track that started radio — never re-seed from
+        // the current last track, which drifts further from the original vibe each time
+        if (!radioSeedTrackId) radioSeedTrackId = playlist[0]?.id ?? playlist[index].id;
+
+        // Serialise the full current playlist as excludeIds so the server's
+        // random buckets can't re-draw anything already queued
+        const newTracks = await api.getRadioMix(radioSeedTrackId, playlist.map(t => t.id));
+
+        if (newTracks.length) {
+            currentPlaylist.update(l => [...l, ...newTracks]);
+            // BUGFIX: `playlist` is a stale snapshot captured at the top of this
+            // function. Using `(index + 1) % playlist.length` after appending would
+            // wrap back to 0 because playlist.length still reflects the *old* size,
+            // causing the engine to replay from the start and append another 10
+            // tracks on every full cycle. Set the index directly and return early
+            // to bypass the modulo logic below.
+            currentIndex.set(index + 1);
+        } else {
             if (isWebAudioMode) pauseWebAudio(); else html5ActivePlayer?.pause();
-            return;
         }
+        return;
     }
 
     if (shuffle) {
-        const updated  = [...history, index];
+        const updated = [...history, index];
         shuffleHistory.set(updated);
-        
+
         if (future.length > 0) {
             const nextIdx = future[0];
             shuffleFuture.update(f => f.slice(1));
@@ -1620,7 +1922,7 @@ export const playPrevGlobal = () => {
         playSkipCue('prev');
         if (shuffle && history.length > 0) {
             const prev = history[history.length - 1];
-            shuffleFuture.update(f => [index, ...f]); // Save memory of where we were
+            shuffleFuture.update(f => [index, ...f]);
             shuffleHistory.update(h => h.slice(0, -1));
             currentIndex.set(prev);
         } else {

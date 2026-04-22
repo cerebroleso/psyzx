@@ -3,6 +3,14 @@ import { initSync, stopSync, broadcastState } from './sync.js';
 import { activePlayer } from './audio.js';
 import { get } from 'svelte/store';
 import { isPlaying, playerCurrentTime, playlistUpdateSignal, appSessionVersion } from '../store.js';
+import {
+            saveOfflineCredentials,
+            refreshOfflineUserData,
+            verifyOfflineLogin,
+            hasOfflineCredentials,
+            clearOfflineCredentials,
+        } from './offlineAuth.js';
+
 
 const triggerMetadataSweep = (tracks) => {
     if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
@@ -253,6 +261,8 @@ export const api = {
             if (res.ok) {
                 const data = await res.json();
                 currentUser.set(data);
+                // Keep the cached user profile fresh so offline logins stay current
+                refreshOfflineUserData(data);
                 try { await this.startSync(); } catch(e) { console.warn("Sync error", e); }
                 return true;
             }
@@ -264,6 +274,7 @@ export const api = {
         }
     },
 
+
     async login(formData) {
         try {
             const res = await this.fetchWithTimeout('/Auth/login', {
@@ -271,32 +282,83 @@ export const api = {
                 body: JSON.stringify(formData),
                 headers: { 'Content-Type': 'application/json' }
             });
-            
+    
             if (res.ok) {
                 const data = await res.json();
                 currentUser.set(data);
-                // Protect the sync call so it doesn't crash the login flow
-                try { 
-                    await this.startSync(); 
+    
+                // ── Save credentials for future offline use ──
+                // Fire-and-forget: PBKDF2 is async but we don't want to stall the
+                // login transition on a 200k-iteration hash.
+                saveOfflineCredentials(formData.username, formData.password, data)
+                    .catch(e => console.warn('[API] Offline credential save failed:', e));
+    
+                try {
+                    await this.startSync();
                 } catch (syncErr) {
                     console.warn('[API] Sync failed to start, but login succeeded.', syncErr);
                 }
             }
-            // Return the raw response so Svelte can accurately check res.ok and res.status
-            return res; 
+    
+            // Return the raw response so AuthModal can check res.ok / res.status
+            return res;
+    
         } catch (error) {
-            console.error('[API] Login Fetch Error:', error);
-            throw error; // Let the UI handle network errors gracefully
+            // ── OFFLINE FALLBACK ──────────────────────────────────────────────────
+            // Only intercept genuine network-level failures.
+            // UNAUTHORIZED (401/403) is thrown separately and must NOT reach here.
+            if (error.message === 'NETWORK_ERROR' || error.message === 'TIMEOUT') {
+    
+                // Tell the user early that we are in offline mode
+                console.info('[API] Server unreachable — attempting offline login.');
+    
+                // Verify the entered password against the stored PBKDF2 hash
+                const offlineUser = await verifyOfflineLogin(
+                    formData.username,
+                    formData.password
+                );
+    
+                if (offlineUser) {
+                    currentUser.set(offlineUser);
+                    // Return a duck-typed response object that AuthModal already
+                    // handles via `res.ok === true`
+                    return { ok: true, offline: true };
+                }
+    
+                // Credentials exist but password was wrong
+                if (hasOfflineCredentials()) {
+                    return {
+                        ok: false,
+                        message: 'Incorrect password (you are offline — server is unreachable).',
+                    };
+                }
+    
+                // No prior login on this device at all
+                return {
+                    ok: false,
+                    message: 'You are offline. Connect once to enable offline access.',
+                };
+            }
+    
+            // Re-throw anything that is not a network failure (e.g. UNAUTHORIZED)
+            throw error;
         }
     },
+
 
     async logout() {
         try {
             await this.fetchWithTimeout('/Auth/logout', { method: 'POST' });
-        } catch { /* ignore */ }
+        } catch { /* ignore — we still clear local state */ }
+    
         await this.stopSync();
         currentUser.set(null);
+    
+        // Wipe stored credentials so someone else can't bypass login on
+        // a shared device after the owner has explicitly logged out.
+        clearOfflineCredentials();
     },
+
 
     async register(formData) {
         try {

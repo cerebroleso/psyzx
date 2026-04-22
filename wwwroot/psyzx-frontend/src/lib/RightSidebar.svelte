@@ -21,7 +21,7 @@
     };
 </script>
 
-<div class="right-header">Top Albums</div>
+<div class="right-header">Most Played Albums</div>
 <div id="top-albums-container">
     {#each topAlbums as album (album.id)}
         <div class="top-album-item" role="button" tabindex="0" on:click={() => goAlbum(album.id)}>

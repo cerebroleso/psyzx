@@ -73,6 +73,16 @@ public class LibraryScanner
                     }
                 }
             }
+
+            // Cleanup: Clear ImagePath if the file no longer exists
+            if (!string.IsNullOrEmpty(dbArtist.ImagePath))
+            {
+                var fullImagePath = Path.Combine(_basePath, dbArtist.ImagePath);
+                if (!File.Exists(fullImagePath))
+                {
+                    dbArtist.ImagePath = null;
+                }
+            }
         }
         await _context.SaveChangesAsync();
 
@@ -178,6 +188,20 @@ public class LibraryScanner
                 }
                 await _context.SaveChangesAsync();
             }
+
+            // Fallback: If no dedicated artist image found, use the first album cover
+            if (string.IsNullOrEmpty(artist.ImagePath))
+            {
+                var fallbackAlbum = await _context.Albums
+                    .Where(a => a.ArtistId == artist.Id && !string.IsNullOrEmpty(a.CoverPath))
+                    .FirstOrDefaultAsync();
+                
+                if (fallbackAlbum != null)
+                {
+                    artist.ImagePath = fallbackAlbum.CoverPath;
+                    await _context.SaveChangesAsync();
+                }
+            }
         }
         Console.WriteLine("DEBUG: Scan Complete.");
     }
@@ -210,11 +234,7 @@ public class LibraryScanner
         }
         catch { }
 
-        if (string.IsNullOrWhiteSpace(pictureUrl))
-        {
-            Console.WriteLine($"Deezer failed for {artistName}, trying Google...");
-            pictureUrl = await GetFirstGoogleImageAsync($"{artistName} music artist");
-        }
+        // REMOVED Google Fallback for artists as per user request
         return pictureUrl;
     }
 

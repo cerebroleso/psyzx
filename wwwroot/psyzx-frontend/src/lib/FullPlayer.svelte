@@ -314,8 +314,48 @@
 
                 if (visualizerMesh) {
                     
+                    // 1. Fetch and smooth FFT data BEFORE doing shape logic
+                    let rawFftData = null;
+                    try { rawFftData = getFftData(); } catch(e) {}
+                    if (!rawFftData || rawFftData.length === 0) {
+                        rawFftData = new Uint8Array(256); 
+                    }
+
+                    if (rawFftData && (!smoothedFftData || smoothedFftData.length !== rawFftData.length)) {
+                        smoothedFftData = new Float32Array(rawFftData.length);
+                    }
+
+                    let totalSum = 0; let bassSum = 0; let trebleSum = 0;
+                    let dynamicBass = 0; let audioIntensity = 0; let trebleIntensity = 0;
+
+                    if (rawFftData && smoothedFftData) {
+                        const bassCutoff = Math.floor(rawFftData.length * 0.10); 
+                        const trebleStart = Math.floor(rawFftData.length * 0.60); 
+
+                        let rawBassSum = 0;
+                        for (let i = 0; i < bassCutoff; i++) rawBassSum += rawFftData[i];
+                        const rawBass = (rawBassSum / bassCutoff) / 255.0;
+                        dynamicBass = Math.max(0, rawBass - 0.35) * 1.6;
+
+                        for (let i = 0; i < rawFftData.length; i++) {
+                            const target = $isPlaying ? rawFftData[i] : 0;
+                            const smoothingFactor = $isPlaying ? 0.4 : 0.05; 
+                            smoothedFftData[i] = lerp(smoothedFftData[i], target, smoothingFactor);
+                            totalSum += smoothedFftData[i];
+                            if (i < bassCutoff) bassSum += smoothedFftData[i];
+                            if (i > trebleStart) trebleSum += smoothedFftData[i];
+                        }
+
+                        audioIntensity = (totalSum / smoothedFftData.length) / 255.0; 
+                        trebleIntensity = (trebleSum / (rawFftData.length - trebleStart)) / 255.0;
+                    }
+
+                    // 2. Handle PSPWaves base expansion
                     if (visShape === 'PSPWaves') {
-                        if ($isPlaying) {
+                        // FIX: Only expand if playing AND there is actual audio output
+                        const isActuallyPlaying = $isPlaying && audioIntensity > 0.002;
+
+                        if (isActuallyPlaying) {
                             transitionFactor = lerp(transitionFactor, 1.0, 0.06);
                         } else {
                             transitionFactor = lerp(transitionFactor, 0.0, 0.4); 
@@ -330,37 +370,8 @@
                         }
                     }
 
-                    let rawFftData = null;
-                    try { rawFftData = getFftData(); } catch(e) {}
-                    if (!rawFftData || rawFftData.length === 0) {
-                        rawFftData = new Uint8Array(256); 
-                    }
-
-                    if (rawFftData && (!smoothedFftData || smoothedFftData.length !== rawFftData.length)) {
-                        smoothedFftData = new Float32Array(rawFftData.length);
-                    }
-
+                    // 3. Process geometry updates for all shapes
                     if (rawFftData && smoothedFftData) {
-                        let totalSum = 0; let bassSum = 0; let trebleSum = 0;
-                        const bassCutoff = Math.floor(rawFftData.length * 0.10); 
-                        const trebleStart = Math.floor(rawFftData.length * 0.60); 
-
-                        let rawBassSum = 0;
-                        for (let i = 0; i < bassCutoff; i++) rawBassSum += rawFftData[i];
-                        const rawBass = (rawBassSum / bassCutoff) / 255.0;
-                        const dynamicBass = Math.max(0, rawBass - 0.35) * 1.6;
-
-                        for (let i = 0; i < rawFftData.length; i++) {
-                            const target = $isPlaying ? rawFftData[i] : 0;
-                            const smoothingFactor = $isPlaying ? 0.4 : 0.05; 
-                            smoothedFftData[i] = lerp(smoothedFftData[i], target, smoothingFactor);
-                            totalSum += smoothedFftData[i];
-                            if (i < bassCutoff) bassSum += smoothedFftData[i];
-                            if (i > trebleStart) trebleSum += smoothedFftData[i];
-                        }
-
-                        const audioIntensity = (totalSum / smoothedFftData.length) / 255.0; 
-                        const trebleIntensity = (trebleSum / (rawFftData.length - trebleStart)) / 255.0;
                         const positions = visualizerMesh.geometry.attributes.position;
                         
                         if (visShape === 'Tunnel') {

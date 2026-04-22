@@ -19,6 +19,10 @@
     } from "../../store.js";
     import { formatTime } from "../utils.js";
     import { api } from "../api.js";
+    import * as THREE from 'three';
+    import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+    import { RenderPass }     from 'three/examples/jsm/postprocessing/RenderPass.js';
+    import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 
     // 1. IMPORT ONLY WHAT IS NEEDED FROM THE NEW ENGINE
     import { unlockAudioContext, togglePlayGlobal } from "../audio.js";
@@ -360,6 +364,209 @@
         };
     }
 
+    // ─── PS2 TOWER SCENE ────────────────────────────────────────────────
+    let hoveredTower = null; // { title, playCount, x, y }
+
+    /** Svelte action: runs when the canvas is mounted, tears down on destroy */
+    function initPS2(canvas) {
+        // ── Scene ──────────────────────────────────────────────────────
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x000000);
+        scene.fog = new THREE.FogExp2(0x000000, 0.016);
+
+        // ── Renderer ───────────────────────────────────────────────────
+        const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.toneMapping = THREE.ReinhardToneMapping;
+        renderer.toneMappingExposure = 1.5;
+
+        // ── Camera ─────────────────────────────────────────────────────
+        const camera = new THREE.PerspectiveCamera(60, 2, 0.1, 500);
+
+        // ── Grid maths ─────────────────────────────────────────────────
+        const COLS      = Math.min(4, tracks.length);
+        const ROWS      = Math.ceil(tracks.length / COLS);
+        const SPACING_X = 9;
+        const SPACING_Z = 9;
+        const GRID_DEPTH = (ROWS - 1) * SPACING_Z;
+
+        // Camera sits behind/above one end, looking into the receding fog
+        camera.position.set(0, 22, GRID_DEPTH / 2 + 38);
+        camera.lookAt(0, 8, -GRID_DEPTH / 4);
+
+        // ── Towers (InstancedMesh) ──────────────────────────────────────
+        const towerGeo = new THREE.BoxGeometry(4, 1, 4);
+        const towerMat = new THREE.MeshStandardMaterial({
+            color: 0xd0d0d0,
+            roughness: 0.92,
+            metalness: 0.0,
+        });
+        const mesh = new THREE.InstancedMesh(towerGeo, towerMat, tracks.length);
+        mesh.frustumCulled = false;
+        scene.add(mesh);
+
+        const dummy = new THREE.Object3D();
+        tracks.forEach((track, i) => {
+            const col    = i % COLS;
+            const row    = Math.floor(i / COLS);
+            const height = maxPlay > 0
+                ? ((track.playCount || 0) / maxPlay) * 160 + 8
+                : 8;
+            const x = (col - (COLS - 1) / 2) * SPACING_X;
+            const z = GRID_DEPTH / 2 - row * SPACING_Z;
+
+            dummy.position.set(x, height / 2, z);
+            dummy.scale.set(1, height, 1);
+            dummy.updateMatrix();
+            mesh.setMatrixAt(i, dummy.matrix);
+        });
+        mesh.instanceMatrix.needsUpdate = true;
+
+        // ── Particle dust ──────────────────────────────────────────────
+        const PARTICLE_COUNT = 450;
+        const pPos = new Float32Array(PARTICLE_COUNT * 3);
+        for (let i = 0; i < PARTICLE_COUNT; i++) {
+            pPos[i * 3]     = (Math.random() - 0.5) * 160;
+            pPos[i * 3 + 1] = (Math.random() - 0.5) * 60 + 20;
+            pPos[i * 3 + 2] = (Math.random() - 0.5) * (GRID_DEPTH + 90);
+        }
+        const particleGeo = new THREE.BufferGeometry();
+        particleGeo.setAttribute('position', new THREE.BufferAttribute(pPos, 3));
+        const particleMat = new THREE.PointsMaterial({
+            color: 0xaabbff,
+            size: 0.35,
+            transparent: true,
+            opacity: 0.75,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+        });
+        scene.add(new THREE.Points(particleGeo, particleMat));
+
+        // ── Lights ─────────────────────────────────────────────────────
+        scene.add(new THREE.AmbientLight(0x080820, 1.2));
+
+        const blueLight   = new THREE.PointLight(0x2244ff, 3.5, 130);
+        const purpleLight = new THREE.PointLight(0x9922cc, 2.2, 90);
+        scene.add(blueLight, purpleLight);
+
+        // ── Post-processing ────────────────────────────────────────────
+        const composer  = new EffectComposer(renderer);
+        composer.addPass(new RenderPass(scene, camera));
+        const bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.75, 0.4, 0.82);
+        composer.addPass(bloom);
+
+        // ── Resize helper ──────────────────────────────────────────────
+        const syncSize = () => {
+            const w = canvas.offsetWidth  || 800;
+            const h = canvas.offsetHeight || 440;
+            if (w === 0 || h === 0) return;
+            camera.aspect = w / h;
+            camera.updateProjectionMatrix();
+            renderer.setSize(w, h, false);
+            composer.setSize(w, h);
+            bloom.resolution.set(w, h);
+        };
+        syncSize();
+        const ro = new ResizeObserver(syncSize);
+        ro.observe(canvas);
+
+        // ── Raycasting (click + hover) ──────────────────────────────────
+        const raycaster = new THREE.Raycaster();
+        const mouse     = new THREE.Vector2();
+
+        const getMouseNDC = (e) => {
+            const r = canvas.getBoundingClientRect();
+            mouse.x =  ((e.clientX - r.left) / r.width)  * 2 - 1;
+            mouse.y = -((e.clientY - r.top)  / r.height) * 2 + 1;
+        };
+
+        const onClick = (e) => {
+            getMouseNDC(e);
+            raycaster.setFromCamera(mouse, camera);
+            const hits = raycaster.intersectObject(mesh);
+            if (hits.length && hits[0].instanceId != null) {
+                playSpecificTrack(hits[0].instanceId);
+            }
+        };
+
+        const onMouseMove = (e) => {
+            getMouseNDC(e);
+            raycaster.setFromCamera(mouse, camera);
+            const hits = raycaster.intersectObject(mesh);
+            if (hits.length && hits[0].instanceId != null) {
+                const idx = hits[0].instanceId;
+                const r   = canvas.getBoundingClientRect();
+                hoveredTower = {
+                    title:     tracks[idx]?.title ?? '',
+                    playCount: tracks[idx]?.playCount ?? 0,
+                    x: e.clientX - r.left,
+                    y: e.clientY - r.top,
+                };
+                canvas.style.cursor = 'pointer';
+            } else {
+                hoveredTower = null;
+                canvas.style.cursor = 'default';
+            }
+        };
+
+        canvas.addEventListener('click',     onClick);
+        canvas.addEventListener('mousemove', onMouseMove);
+
+        // ── Animation loop ─────────────────────────────────────────────
+        const CAM_Z_START = camera.position.z;
+        const CAM_Z_END   = -GRID_DEPTH / 4;
+        let t = 0, raf;
+
+        const animate = () => {
+            raf = requestAnimationFrame(animate);
+            t += 0.004;
+
+            // Sweeping point lights
+            blueLight.position.set(
+                Math.sin(t * 0.75) * 55,
+                36,
+                Math.cos(t * 0.45) * 38,
+            );
+            purpleLight.position.set(
+                Math.cos(t * 1.1)  * 44,
+                26,
+                Math.sin(t * 0.65) * 52,
+            );
+
+            // Particles drift toward the lens, reset when they pass
+            const pa = particleGeo.attributes.position.array;
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                pa[i * 3 + 2] += 0.38;
+                if (pa[i * 3 + 2] > camera.position.z + 18)
+                    pa[i * 3 + 2] -= GRID_DEPTH + 90;
+            }
+            particleGeo.attributes.position.needsUpdate = true;
+
+            // Slow forward pan, seamless loop
+            camera.position.z -= 0.014;
+            if (camera.position.z < CAM_Z_END) camera.position.z = CAM_Z_START;
+
+            composer.render();
+        };
+        animate();
+
+        // ── Cleanup ────────────────────────────────────────────────────
+        return {
+            destroy() {
+                cancelAnimationFrame(raf);
+                canvas.removeEventListener('click',     onClick);
+                canvas.removeEventListener('mousemove', onMouseMove);
+                ro.disconnect();
+                renderer.dispose();
+                towerGeo.dispose();
+                towerMat.dispose();
+                particleGeo.dispose();
+                particleMat.dispose();
+                hoveredTower = null;
+            },
+        };
+    }
+
     let showPlaylistModal = false;
     let trackToAdd = null;
     let userPlaylists = [];
@@ -434,50 +641,54 @@
                     <div class="album-title">{album.title}</div>
                     <div class="album-meta">
                         <strong
-                            class="album-info-text"
+                            class="album-artist-name hoverable"
                             role="button"
                             tabindex="0"
                             on:click={goArtist}
                             on:keydown={(e) => e.key === "Enter" && goArtist()}
-                            >{album.artistName}</strong
-                        ><span class="dot">•</span>
-                        <span class="album-info-text"
-                            >{album.releaseYear > 0
-                                ? album.releaseYear
-                                : ""}</span
-                        ><span class="dot">•</span>
-                        <span class="album-info-text"
-                            >{tracks.length} songs</span
-                        ><span class="dot">•</span>
-                        <span class="duration-highlight">{timeString}</span>
+                        >
+                            {album.artistName}
+                        </strong>
+                        
+                        <span class="dot desktop-dot">•</span>
+                        
+                        <div class="meta-secondary">
+                            {#if album.releaseYear > 0}
+                                <span class="album-info-text">{album.releaseYear}</span>
+                                <span class="dot">•</span>
+                            {/if}
+                            <span class="album-info-text">{tracks.length} songs</span>
+                            <span class="dot">•</span>
+                            <span class="duration-highlight">{timeString}</span>
 
-                        {#if avgBitrate > 0}
-                            <div class="kbps-badge-inline">
-                                <svg
-                                    width="12"
-                                    height="12"
-                                    viewBox="0 0 24 24"
-                                    fill="var(--accent-color)"
-                                    ><rect
-                                        x="3"
-                                        y="8"
-                                        width="4"
-                                        height="8"
-                                    /><rect
-                                        x="10"
-                                        y="4"
-                                        width="4"
-                                        height="16"
-                                    /><rect
-                                        x="17"
-                                        y="10"
-                                        width="4"
-                                        height="4"
-                                    /></svg
-                                >
-                                <span>{avgBitrate} kbps</span>
-                            </div>
-                        {/if}
+                            {#if avgBitrate > 0}
+                                <div class="kbps-badge-inline">
+                                    <svg
+                                        width="12"
+                                        height="12"
+                                        viewBox="0 0 24 24"
+                                        fill="var(--accent-color)"
+                                        ><rect
+                                            x="3"
+                                            y="8"
+                                            width="4"
+                                            height="8"
+                                        /><rect
+                                            x="10"
+                                            y="4"
+                                            width="4"
+                                            height="16"
+                                        /><rect
+                                            x="17"
+                                            y="10"
+                                            width="4"
+                                            height="4"
+                                        /></svg
+                                    >
+                                    <span>{avgBitrate} kbps</span>
+                                </div>
+                            {/if}
+                        </div>
                     </div>
                 </div>
             </div>
@@ -617,40 +828,17 @@
                 class="active-view"
                 in:fade={{ duration: 200 }}
             >
-                <div class="ps2-scroll-wrapper">
-                    <div class="ps2-grid">
-                        {#each tracks as track, index}
-                            {@const ps2Height =
-                                maxPlay > 0
-                                    ? ((track.playCount || 0) / maxPlay) * 180 +
-                                      20
-                                    : 20}
-                            <div
-                                class="ps2-tower-container-3d"
-                                style="--tower-h: {ps2Height}px;"
-                                role="button"
-                                tabindex="0"
-                                on:click={() => playSpecificTrack(index)}
-                                on:keydown={(e) =>
-                                    e.key === "Enter" &&
-                                    playSpecificTrack(index)}
-                            >
-                                <div class="ps2-face ps2-front"></div>
-                                <div class="ps2-face ps2-back"></div>
-                                <div class="ps2-face ps2-right"></div>
-                                <div class="ps2-face ps2-left"></div>
-                                <div class="ps2-face ps2-top">
-                                    {track.trackNumber > 0
-                                        ? track.trackNumber
-                                        : index + 1}
-                                </div>
-                                <div class="ps2-tooltip">
-                                    {track.title}<br />{track.playCount || 0} plays
-                                </div>
-                            </div>
-                        {/each}
+                <canvas class="ps2-canvas" use:initPS2></canvas>
+
+                {#if hoveredTower}
+                    <div
+                        class="ps2-hud"
+                        style="left: {hoveredTower.x}px; top: {hoveredTower.y - 64}px;"
+                    >
+                        <span class="ps2-hud-title">{hoveredTower.title}</span>
+                        <span class="ps2-hud-plays">{hoveredTower.playCount} plays</span>
                     </div>
-                </div>
+                {/if}
             </div>
         {:else}
             <div
@@ -1024,6 +1212,26 @@
 </div>
 
 <style>
+    .album-meta {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 4px;
+    }
+    .album-artist-name {
+        color: rgba(255, 255, 255, 0.95);
+        cursor: pointer;
+    }
+    .meta-secondary {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+    .desktop-dot {
+        display: inline;
+    }
     /* Base Desktop Styles for the Cover */
     .cover-wrapper {
         width: 232px; /* Matches your Artist wrapper size for consistency */
@@ -1205,85 +1413,45 @@
         cursor: pointer;
         flex-shrink: 0;
     }
-    @media (hover: hover) {
-        .ps2-tower-container-3d:hover {
-            transform: rotateX(-15deg) rotateY(-30deg) translateY(-10px);
-        }
-    }
-    .ps2-face {
-        position: absolute;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        border: 1px solid rgba(255, 255, 255, 0.2);
-        box-sizing: border-box;
-    }
-    .ps2-front {
+    /* ── PS2 Tower Scene ─────────────────────────────── */
+    #ps2-tower-container {
+        position: relative;
         width: 100%;
-        height: 100%;
-        bottom: 0;
-        left: 0;
-        background: var(--accent-color);
-        transform: rotateY(0deg) translateZ(18px);
-    }
-    .ps2-back {
-        width: 100%;
-        height: 100%;
-        bottom: 0;
-        left: 0;
-        background: rgba(0, 0, 0, 0.8);
-        transform: rotateY(180deg) translateZ(18px);
-    }
-    .ps2-right {
-        width: 100%;
-        height: 100%;
-        bottom: 0;
-        left: 0;
-        background: rgba(0, 0, 0, 0.6);
-        transform: rotateY(90deg) translateZ(18px);
-    }
-    .ps2-left {
-        width: 100%;
-        height: 100%;
-        bottom: 0;
-        left: 0;
-        background: rgba(0, 0, 0, 0.6);
-        transform: rotateY(-90deg) translateZ(18px);
-    }
-    .ps2-top {
-        width: 36px;
-        height: 36px;
-        top: 0;
-        left: 0;
-        background: rgba(255, 255, 255, 0.4);
-        transform: translateY(-18px) rotateX(90deg);
-        font-size: 11px;
-        font-weight: bold;
-        color: white;
-        text-shadow: 1px 1px 2px black;
-    }
-    .ps2-tooltip {
-        position: absolute;
-        bottom: calc(100% + 20px);
-        left: 50%;
-        transform: translateX(-50%) rotateX(15deg) rotateY(30deg);
+        height: 500px;
+        border-radius: 16px;
+        overflow: hidden;
         background: #000;
-        color: white;
-        padding: 6px 12px;
-        border-radius: 4px;
-        font-size: 12px;
-        white-space: nowrap;
-        opacity: 0;
-        pointer-events: none;
-        transition: opacity 0.2s;
-        text-align: center;
-        border: 1px solid var(--accent-color);
-        z-index: 10;
     }
-    @media (hover: hover) {
-        .ps2-tower-container-3d:hover .ps2-tooltip {
-            opacity: 1;
-        }
+
+    .ps2-canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+    }
+
+    .ps2-hud {
+        position: absolute;
+        transform: translateX(-50%);
+        background: rgba(0, 0, 0, 0.88);
+        border: 1px solid rgba(80, 120, 255, 0.55);
+        border-radius: 6px;
+        padding: 5px 12px;
+        pointer-events: none;
+        white-space: nowrap;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 2px;
+        box-shadow: 0 0 12px rgba(60, 100, 255, 0.3);
+    }
+    .ps2-hud-title {
+        color: #fff;
+        font-size: 12px;
+        font-weight: 700;
+    }
+    .ps2-hud-plays {
+        color: rgba(140, 170, 255, 0.85);
+        font-size: 10px;
     }
     .btn-add-playlist {
         background: none;
@@ -1367,6 +1535,24 @@
         .list-item-title {
             padding-right: 12px;
             font-size: 14px;
+        }
+        .album-meta {
+            flex-direction: column; /* Stack Artist and Meta on separate lines */
+            justify-content: center;
+            gap: 6px;
+        }
+        
+        .desktop-dot {
+            display: none; /* Hide the dot between Artist and Meta on mobile */
+        }
+        
+        .meta-secondary {
+            justify-content: center;
+            row-gap: 8px; /* Gives the kbps badge breathing room if it drops to a 3rd line */
+        }
+
+        .kbps-badge-inline {
+            margin-left: 2px !important; /* Remove the heavy desktop margin so it centers properly */
         }
     }
 
