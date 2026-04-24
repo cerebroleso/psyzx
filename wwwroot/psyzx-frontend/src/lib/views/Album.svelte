@@ -593,6 +593,8 @@
     const closePlaylistSelector = () => {
         showPlaylistModal = false;
         trackToAdd = null;
+        tracksToAdd = [];
+        selectedTracks = new Set();
 
         const mainView = document.getElementById("main-view");
         if (mainView) {
@@ -601,9 +603,19 @@
     };
 
     const addToPlaylist = async (playlistId) => {
+        // Support batch add from drag-and-drop multi-select
+        if (tracksToAdd.length > 0) {
+            const count = await api.addTracksToPlaylist(playlistId, tracksToAdd.map(t => t.id));
+            if (count > 0) {
+                showToast(`Added ${count} track${count > 1 ? 's' : ''} to playlist`);
+            }
+            closePlaylistSelector();
+            return;
+        }
         if (!trackToAdd) return;
         const success = await api.addToPlaylist(playlistId, trackToAdd.id);
         if (success) {
+            showToast('Added to playlist');
             closePlaylistSelector();
         }
     };
@@ -612,6 +624,85 @@
         if (album && album.artistId) {
             window.location.hash = `#artist/${album.artistId}`;
         }
+    };
+
+    // ─── DRAG-AND-DROP (Desktop Only) ─────────────────────────────────────
+
+    let selectedTracks = new Set();
+    let isDragging = false;
+    let dragCount = 0;
+    let tracksToAdd = [];
+
+    // Track multi-selection (desktop Ctrl/Cmd + click)
+    const handleTrackSelect = (e, track, globalIndex) => {
+        if (e.ctrlKey || e.metaKey) {
+            e.preventDefault();
+            e.stopPropagation();
+            selectedTracks = new Set(selectedTracks);
+            if (selectedTracks.has(track.id)) {
+                selectedTracks.delete(track.id);
+            } else {
+                selectedTracks.add(track.id);
+            }
+        } else if (!selectedTracks.has(track.id)) {
+            selectedTracks = new Set();
+            playSpecificTrack(globalIndex);
+        } else {
+            playSpecificTrack(globalIndex);
+        }
+    };
+
+    const handleDragStart = (e, track) => {
+        // Only allow drag on desktop (mouse events)
+        if (e.touches) return;
+
+        isDragging = true;
+        let draggedTracks;
+
+        if (selectedTracks.size > 0 && selectedTracks.has(track.id)) {
+            draggedTracks = tracks.filter(t => selectedTracks.has(t.id));
+        } else {
+            draggedTracks = [track];
+        }
+
+        dragCount = draggedTracks.length;
+        e.dataTransfer.effectAllowed = 'copy';
+        e.dataTransfer.setData('text/plain', JSON.stringify(draggedTracks.map(t => t.id)));
+
+        // Custom drag image
+        const ghost = document.createElement('div');
+        ghost.className = 'drag-ghost-el';
+        ghost.textContent = dragCount > 1 ? `${dragCount} tracks` : track.title;
+        ghost.style.cssText = 'position:fixed;left:-9999px;top:-9999px;padding:8px 16px;background:rgba(0,0,0,0.85);color:white;border-radius:10px;font-size:13px;font-weight:600;backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,0.15);white-space:nowrap;z-index:999999;pointer-events:none;';
+        document.body.appendChild(ghost);
+        e.dataTransfer.setDragImage(ghost, 0, 0);
+        setTimeout(() => ghost.remove(), 0);
+    };
+
+    const handleDragEnd = () => {
+        isDragging = false;
+        dragCount = 0;
+    };
+
+    const handleDropOnTarget = (e) => {
+        e.preventDefault();
+        isDragging = false;
+
+        try {
+            const trackIds = JSON.parse(e.dataTransfer.getData('text/plain'));
+            const droppedTracks = tracks.filter(t => trackIds.includes(t.id));
+            if (droppedTracks.length > 0) {
+                tracksToAdd = droppedTracks;
+                openPlaylistSelector(droppedTracks[0]);
+            }
+        } catch {}
+
+        dragCount = 0;
+    };
+
+    const handleDropTargetDragOver = (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
     };
 </script>
 
@@ -954,15 +1045,19 @@
                             ></div>
                             <div
                                 class="list-item-content"
+                                class:track-selected={selectedTracks.has(track.id)}
                                 role="button"
                                 tabindex="0"
+                                draggable="true"
                                 use:swipeToQueue={track}
-                                on:click={() => playSpecificTrack(globalIndex)}
+                                on:click={(e) => handleTrackSelect(e, track, globalIndex)}
                                 on:keydown={(e) =>
                                     e.key === "Enter" &&
                                     playSpecificTrack(globalIndex)}
                                 on:contextmenu={(e) =>
                                     openContextMenu(e, track)}
+                                on:dragstart={(e) => handleDragStart(e, track)}
+                                on:dragend={handleDragEnd}
                             >
                                 <div class="list-item-num">
                                     {track.trackNumber > 0
@@ -1022,6 +1117,22 @@
                 {/each}
             </div>
         {/if}
+    </div>
+{/if}
+
+{#if isDragging}
+    <div 
+        class="drop-target-pill"
+        on:drop={handleDropOnTarget}
+        on:dragover={handleDropTargetDragOver}
+        in:scale={{ start: 0.8, duration: 200, opacity: 0 }}
+        out:fade={{ duration: 150 }}
+    >
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+        </svg>
+        <span>Drop to add to playlist{dragCount > 1 ? ` (${dragCount})` : ''}</span>
     </div>
 {/if}
 
@@ -1817,6 +1928,61 @@
         }
         100% {
             transform: scale(1);
+        }
+    }
+
+    /* --- DRAG-AND-DROP STYLES --- */
+    .track-selected {
+        background: rgba(var(--accent-rgb, 181, 52, 209), 0.15) !important;
+        border-left: 2px solid var(--accent-color, #b534d1);
+    }
+
+    .drop-target-pill {
+        position: fixed;
+        bottom: 120px;
+        right: 24px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 14px 24px;
+        background: rgba(20, 20, 20, 0.85);
+        backdrop-filter: blur(30px) saturate(150%);
+        -webkit-backdrop-filter: blur(30px) saturate(150%);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        border-radius: 16px;
+        color: white;
+        font-size: 14px;
+        font-weight: 700;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255,255,255,0.05);
+        z-index: 99999;
+        cursor: copy;
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .drop-target-pill:hover {
+        transform: scale(1.05);
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6), 0 0 20px rgba(var(--accent-rgb, 181, 52, 209), 0.3);
+        border-color: var(--accent-color, #b534d1);
+    }
+
+    .drop-target-pill svg {
+        color: var(--accent-color, #b534d1);
+    }
+
+    .list-item-content[draggable="true"] {
+        cursor: grab;
+    }
+    .list-item-content[draggable="true"]:active {
+        cursor: grabbing;
+    }
+
+    /* Hide drag affordance on mobile — touch swipe takes priority */
+    @media (hover: none) and (pointer: coarse) {
+        .list-item-content[draggable="true"] {
+            cursor: default;
+        }
+        .drop-target-pill {
+            display: none;
         }
     }
 </style>

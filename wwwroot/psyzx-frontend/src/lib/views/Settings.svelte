@@ -215,6 +215,8 @@
                 <button class:active={$visShape === 'DNA'} on:click={() => visShape.set('DNA')}>DNA</button>
                 <button class:active={$visShape === 'Synthwave'} on:click={() => visShape.set('Synthwave')}>Synth</button>
                 <button class:active={$visShape === 'PSPWaves'} on:click={() => visShape.set('PSPWaves')}>Waves</button>
+                <button class:active={$visShape === 'PSPWaves2'} on:click={() => visShape.set('PSPWaves2')}>Waves2</button>
+                <button class:active={$visShape === 'PSPWaves3'} on:click={() => visShape.set('PSPWaves3')}>Waves3</button>
             </div>
         </div>
 

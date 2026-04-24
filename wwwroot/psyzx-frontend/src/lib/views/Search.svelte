@@ -1,5 +1,5 @@
 <script>
-    import { currentPlaylist, currentIndex, shuffleHistory, isLowQualityImages, albumsMap, artistsMap, appSessionVersion } from '../../store.js';
+    import { currentPlaylist, currentIndex, shuffleHistory, isLowQualityImages, albumsMap, artistsMap, appSessionVersion, searchFilter } from '../../store.js';
     import { api } from '../api.js';
     import { fade, scale } from 'svelte/transition';
 
@@ -248,7 +248,19 @@
             Searching...
         </div>
     {:else}
-        {#if resultsArtists.length > 0}
+        <div class="search-filter-bar">
+            {#each [['all', 'All'], ['artists', 'Artists'], ['albums', 'Albums'], ['tracks', 'Tracks']] as [val, label]}
+                <button 
+                    class="filter-pill" 
+                    class:active={$searchFilter === val}
+                    on:click={() => searchFilter.set(val)}
+                >
+                    {label}
+                </button>
+            {/each}
+        </div>
+
+        {#if ($searchFilter === 'all' || $searchFilter === 'artists') && resultsArtists.length > 0}
             <h2>Artists</h2>
             <div class="grid-container">
                 {#each resultsArtists as artist}
@@ -278,7 +290,7 @@
             </div>
         {/if}
 
-        {#if resultsAlbums.length > 0}
+        {#if ($searchFilter === 'all' || $searchFilter === 'albums') && resultsAlbums.length > 0}
             <h2>Albums</h2>
             <div class="grid-container">
                 {#each resultsAlbums as album}
@@ -311,7 +323,7 @@
             </div>
         {/if}
 
-        {#if resultsTracks.length > 0}
+        {#if ($searchFilter === 'all' || $searchFilter === 'tracks') && resultsTracks.length > 0}
             <h2>Tracks</h2>
             <div class="track-list">
                 {#each resultsTracks as track}
@@ -338,7 +350,10 @@
             </div>
         {/if}
 
-        {#if resultsArtists.length === 0 && resultsAlbums.length === 0 && resultsTracks.length === 0}
+        {#if (($searchFilter === 'all' && resultsArtists.length === 0 && resultsAlbums.length === 0 && resultsTracks.length === 0) ||
+              ($searchFilter === 'artists' && resultsArtists.length === 0) ||
+              ($searchFilter === 'albums' && resultsAlbums.length === 0) ||
+              ($searchFilter === 'tracks' && resultsTracks.length === 0))}
             <div class="empty-state">No results found for "{query}"</div>
         {/if}
         
@@ -354,6 +369,43 @@
         width: 100%;
         max-width: 100%;
         overflow-x: hidden;
+    }
+
+    .search-filter-bar {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 20px;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+        padding: 2px 0;
+    }
+    .search-filter-bar::-webkit-scrollbar { display: none; }
+
+    .filter-pill {
+        padding: 8px 20px;
+        border-radius: 20px;
+        border: 1px solid rgba(255,255,255,0.1);
+        background: rgba(255,255,255,0.04);
+        color: var(--text-secondary, rgba(255,255,255,0.6));
+        font-size: 13px;
+        font-weight: 700;
+        cursor: pointer;
+        white-space: nowrap;
+        transition: all 0.2s ease;
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        flex-shrink: 0;
+    }
+    .filter-pill:hover {
+        background: rgba(255,255,255,0.08);
+        color: var(--text-primary, white);
+    }
+    .filter-pill.active {
+        background: var(--accent-color, rgb(181, 52, 209));
+        color: #000;
+        border-color: transparent;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
     }
 
     @media (max-width: 768px) {

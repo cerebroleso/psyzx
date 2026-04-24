@@ -1,7 +1,10 @@
 <script>
     import { get } from 'svelte/store';
-    import { allTracks, albumsMap, currentPlaylist, currentIndex, isPlaying, isShuffle, shuffleHistory } from '../../store.js';
+    import { allTracks, albumsMap, currentPlaylist, currentIndex, isPlaying, isShuffle, shuffleHistory, userQueue } from '../../store.js';
     import { formatTime } from '../utils.js';
+    import { togglePlayGlobal } from '../audio.js';
+    import { flip } from 'svelte/animate';
+    import { fade, fly } from 'svelte/transition';
 
     $: poolTracks = [...$allTracks].sort((a, b) => a.title.localeCompare(b.title));
     
@@ -10,10 +13,10 @@
 
     const togglePlayView = () => {
         if (isPlayingPlaylist) {
-            document.querySelector('audio').pause();
+            togglePlayGlobal();
         } else {
             if (poolTracks.some(t => t.id === $currentPlaylist[$currentIndex]?.id)) {
-                document.querySelector('audio').play(); // Se è già caricata la pool ma in pausa
+                togglePlayGlobal();
             } else {
                 currentPlaylist.set(poolTracks);
                 if ($isShuffle) { shuffleHistory.set([]); currentIndex.set(Math.floor(Math.random() * poolTracks.length)); } 
@@ -86,9 +89,9 @@
         <div style="text-align:center;">#</div><div>Title</div><div style="text-align:right;">Time</div>
     </div>
     
-    {#each poolTracks as track, index}
+    {#each poolTracks as track, index (track.id)}
         {@const album = $albumsMap.get(track.albumId)}
-        <div class="list-item" class:active={$currentPlaylist.length > 0 && $currentPlaylist[$currentIndex]?.id === track.id}>
+        <div class="list-item" class:active={$currentPlaylist.length > 0 && $currentPlaylist[$currentIndex]?.id === track.id} animate:flip={{duration: 600}} in:fly={{y: 30, duration: 500, delay: 100}} out:fade={{duration: 300}}>
             <div class="swipe-bg"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg></div>
             <div class="list-item-content" role="button" tabindex="0" use:swipeToQueue={track} on:click={() => playSpecificTrack(index)} on:keydown={(e) => e.key === 'Enter' && playSpecificTrack(index)}>
                 <div class="list-item-num">{index + 1}</div>

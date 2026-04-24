@@ -1,6 +1,6 @@
 <script>
     import { onMount } from 'svelte';
-    import { fade, scale } from 'svelte/transition';
+    import { fade, scale, fly } from 'svelte/transition';
     import { api } from '../api.js';
     import { playlistUpdateSignal, appSessionVersion } from '../../store.js';
 
@@ -60,6 +60,59 @@
             isCreating = false;
         }
     };
+
+    // WS1: Drag-and-drop onto playlist cards
+    let dragHoveredPlaylistId = null;
+    let pendingDropTrackIds = null;
+    let showDropToast = false;
+    let dropToastText = '';
+    let dropToastTimeout;
+
+    const onCardDragOver = (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; };
+    const onCardDragEnter = (e, playlistId) => { e.preventDefault(); dragHoveredPlaylistId = playlistId; };
+    const onCardDragLeave = () => { dragHoveredPlaylistId = null; };
+
+    const onCardDrop = async (e, playlist) => {
+        e.preventDefault();
+        dragHoveredPlaylistId = null;
+        try {
+            const trackIds = JSON.parse(e.dataTransfer.getData('text/plain'));
+            await addTracksToPlaylistAndToast(playlist, trackIds);
+        } catch {}
+    };
+
+    const addTracksToPlaylistAndToast = async (playlist, trackIds) => {
+        if (!trackIds || trackIds.length === 0) return;
+        const count = await api.addTracksToPlaylist(playlist.id, trackIds);
+        if (count > 0) {
+            dropToastText = `Added ${count} track${count > 1 ? 's' : ''} to "${playlist.name}"`;
+            showDropToast = true;
+            clearTimeout(dropToastTimeout);
+            dropToastTimeout = setTimeout(() => { showDropToast = false; }, 3000);
+            loadPlaylists();
+        }
+    };
+
+    // WS1: Listen for pending drops from Sidebar
+    const handlePendingDrop = (e) => {
+        pendingDropTrackIds = e.detail?.trackIds || null;
+    };
+
+    onMount(() => {
+        window.addEventListener('playlist-drop-pending', handlePendingDrop);
+        return () => window.removeEventListener('playlist-drop-pending', handlePendingDrop);
+    });
+
+    // If we have pending track IDs and user clicks a playlist card, add them
+    const handlePendingClick = async (playlist) => {
+        if (pendingDropTrackIds && pendingDropTrackIds.length > 0) {
+            await addTracksToPlaylistAndToast(playlist, pendingDropTrackIds);
+            pendingDropTrackIds = null;
+        } else {
+            // Normal navigation
+            window.location.hash = `#playlist/${playlist.id}`;
+        }
+    };
 </script>
 
 <div class="playlists-container" in:fade={{duration: 200}}>
@@ -76,7 +129,16 @@
         </div>
 
         {#each userPlaylists as playlist}
-            <a href="#playlist/{playlist.id}" class="card playlist-card">
+            <a 
+                href="#playlist/{playlist.id}" 
+                class="card playlist-card" 
+                class:drag-hover={dragHoveredPlaylistId === playlist.id || pendingDropTrackIds}
+                on:click|preventDefault={() => handlePendingClick(playlist)}
+                on:dragover={onCardDragOver}
+                on:dragenter={(e) => onCardDragEnter(e, playlist.id)}
+                on:dragleave={onCardDragLeave}
+                on:drop={(e) => onCardDrop(e, playlist)}
+            >
                 <div class="playlist-cover-wrapper">
                     {#if playlist.covers && playlist.covers.length >= 4}
                         <div class="dynamic-grid-cover">
@@ -100,6 +162,21 @@
         {/each}
     </div>
 </div>
+
+{#if showDropToast}
+    <div class="drop-toast" in:fly={{y: 20, duration: 300}} out:fade={{duration: 200}}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+        <span>{dropToastText}</span>
+    </div>
+{/if}
+
+{#if pendingDropTrackIds}
+    <div class="pending-drop-hint" in:fly={{y: 20, duration: 300}} out:fade={{duration: 200}}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+        <span>Click a playlist to add {pendingDropTrackIds.length} track{pendingDropTrackIds.length > 1 ? 's' : ''}</span>
+        <button class="dismiss-btn" on:click={() => pendingDropTrackIds = null}>✕</button>
+    </div>
+{/if}
 
 {#if showCreateModal}
     <div class="modal-backdrop" role="button" tabindex="-1" use:portal in:fade={{duration: 200}} out:fade={{duration: 150}} on:click={closeCreateModal} on:keydown={(e) => e.key === 'Escape' && closeCreateModal()}>
@@ -199,4 +276,40 @@
     }
     .btn-submit:hover:not(:disabled) { transform: translateY(-2px); filter: brightness(1.1); }
     .btn-submit:disabled { opacity: 0.5; cursor: not-allowed; filter: grayscale(0.5); }
+
+    /* WS1: Drag hover glow on playlist cards */
+    .playlist-card.drag-hover {
+        background: rgba(96, 165, 250, 0.08) !important;
+        box-shadow: 0 0 0 2px var(--accent-color, #60a5fa), 0 8px 24px rgba(0,0,0,0.3) !important;
+        transform: scale(1.02);
+    }
+
+    /* Drop toast */
+    .drop-toast {
+        position: fixed; bottom: 100px; left: 50%; transform: translateX(-50%);
+        display: flex; align-items: center; gap: 10px;
+        padding: 12px 20px; background: rgba(34, 197, 94, 0.15);
+        border: 1px solid rgba(34, 197, 94, 0.35);
+        backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+        border-radius: 14px; color: #4ade80;
+        font-size: 14px; font-weight: 600;
+        z-index: 99999; white-space: nowrap;
+    }
+
+    /* Pending drop hint bar */
+    .pending-drop-hint {
+        position: fixed; bottom: 100px; left: 50%; transform: translateX(-50%);
+        display: flex; align-items: center; gap: 10px;
+        padding: 12px 20px; background: rgba(96, 165, 250, 0.12);
+        border: 1px solid rgba(96, 165, 250, 0.3);
+        backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+        border-radius: 14px; color: #60a5fa;
+        font-size: 14px; font-weight: 600;
+        z-index: 99999; white-space: nowrap;
+    }
+    .dismiss-btn {
+        background: none; border: none; color: rgba(255,255,255,0.4);
+        cursor: pointer; padding: 2px 4px; font-size: 14px;
+        margin-left: 4px;
+    }
 </style>

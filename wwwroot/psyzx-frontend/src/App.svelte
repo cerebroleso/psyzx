@@ -25,7 +25,7 @@
     import Auth from './lib/views/Auth.svelte';
     
     import { api } from './lib/api.js';
-    import { allTracks, artistsMap, albumsMap, accentColor, isGlobalColorActive, isMaxGlassActive, appSessionVersion } from './store.js';
+    import { allTracks, artistsMap, albumsMap, accentColor, isGlobalColorActive, isMaxGlassActive, appSessionVersion, activeDownloads } from './store.js';
     
     let currentHash = '';
     let isMobileSidebarOpen = false;
@@ -239,6 +239,55 @@
     };
 
     let showDeadlockWarning = false;
+
+    // Silent library refresh (no loading screen) — called when downloads finish
+    const silentLibraryRefresh = async () => {
+        try {
+            await api.scanLibrary();
+            let data = await api.getTracks();
+            if (data?.length > 0) {
+                await localDB.set('psyzx_library_cache', data);
+                let statsData = null;
+                try { statsData = await api.getStats(); } catch(e) {}
+                buildLibrary(data, statsData);
+            }
+        } catch (e) {
+            console.error('Silent library refresh failed:', e);
+        }
+    };
+
+    // --- GLOBAL DOWNLOAD QUEUE POLLING ---
+    // Mirrors Downloader.svelte logic but runs app-wide so Library spinner cards
+    // appear regardless of which page is open.
+    let globalQueueInterval = null;
+    let globalWasProcessing = false;
+
+    const pollDownloadQueue = async () => {
+        try {
+            const data = await api.getQueue();
+            if (data) {
+                if (data.active > 0 || data.queued > 0) {
+                    globalWasProcessing = true;
+                    if (data.currentTrack) {
+                        activeDownloads.update(dl => {
+                            const exists = dl.find(d => d.name === data.currentTrack);
+                            if (!exists) {
+                                return [...dl, { id: `dl-${Date.now()}`, name: data.currentTrack, coverPath: null, progress: 0, type: 'album' }];
+                            }
+                            return dl;
+                        });
+                    }
+                } else {
+                    if (globalWasProcessing) {
+                        globalWasProcessing = false;
+                        activeDownloads.set([]);
+                        appSessionVersion.set(Date.now());
+                        window.dispatchEvent(new CustomEvent('library-updated'));
+                    }
+                }
+            }
+        } catch { /* silent — server may be offline */ }
+    };
     
     onMount(() => {
         currentHash = window.location.hash;
@@ -255,10 +304,17 @@
         };
 
         window.addEventListener('ios-hardware-deadlock', triggerWarning);
+        window.addEventListener('library-updated', silentLibraryRefresh);
+
+        // Start global download queue polling
+        pollDownloadQueue();
+        globalQueueInterval = setInterval(pollDownloadQueue, 2000);
 
         return () => {
             window.removeEventListener('hashchange', handleHashChange);
             window.removeEventListener('ios-hardware-deadlock', triggerWarning);
+            window.removeEventListener('library-updated', silentLibraryRefresh);
+            if (globalQueueInterval) clearInterval(globalQueueInterval);
         };
     });
 

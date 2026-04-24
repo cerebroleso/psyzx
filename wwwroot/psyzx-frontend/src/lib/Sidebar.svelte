@@ -93,6 +93,49 @@
         { id: '#account', icon: 'M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z', text: 'Account' },
         { id: '#settings', icon: 'M19.43 12.98c.04-.32.07-.64.07-.98s-.03-.66-.07-.98l2.11-1.65c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.3-.61-.22l-2.49 1c-.52-.4-1.08-.73-1.69-.98l-.38-2.65C14.46 2.18 14.25 2 13.96 2h-3.92c-.29 0-.5.18-.54.45l-.38 2.65c-.61.25-1.17.59-1.69.98l-2.49-1c-.23-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64l2.11 1.65c-.04.32-.07.65-.07.98s.03.66.07.98l-2.11 1.65c-.19.15-.24.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.04.27.25.45.54.45h3.92c.29 0 .5-.18.54-.45l.38-2.65c.61-.25 1.17-.59 1.69-.98l2.49 1c.23.09.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.65zM12 15.5c-1.93 0-3.5-1.57-3.5-3.5s1.57-3.5 3.5-3.5 3.5 1.57 3.5 3.5-1.57 3.5-3.5 3.5z', text: 'Settings' }
     ];
+
+    // WS1: Drag-and-drop target state for Playlists nav item
+    let isDragOverPlaylists = false;
+    let dragHoverTimer = null;
+
+    const onPlaylistsDragEnter = (e) => {
+        e.preventDefault();
+        isDragOverPlaylists = true;
+        // After 600ms hover, auto-navigate to Playlists view
+        clearTimeout(dragHoverTimer);
+        dragHoverTimer = setTimeout(() => {
+            if (isDragOverPlaylists) {
+                window.location.hash = '#playlists';
+            }
+        }, 600);
+    };
+
+    const onPlaylistsDragOver = (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+    };
+
+    const onPlaylistsDragLeave = () => {
+        isDragOverPlaylists = false;
+        clearTimeout(dragHoverTimer);
+    };
+
+    const onPlaylistsDrop = (e) => {
+        e.preventDefault();
+        isDragOverPlaylists = false;
+        clearTimeout(dragHoverTimer);
+        try {
+            const trackIds = JSON.parse(e.dataTransfer.getData('text/plain'));
+            if (Array.isArray(trackIds) && trackIds.length > 0) {
+                // Navigate to playlists and dispatch the pending drop event
+                window.location.hash = '#playlists';
+                // Small delay so Playlists.svelte has time to mount
+                setTimeout(() => {
+                    window.dispatchEvent(new CustomEvent('playlist-drop-pending', { detail: { trackIds } }));
+                }, 300);
+            }
+        } catch {}
+    };
 </script>
 
 <svelte:window bind:innerWidth />
@@ -115,17 +158,38 @@
 
     <nav>
         {#each menu as item}
-            <a 
-            href={item.id}
-            class:active={visualHash === item.id || (item.id === '#/' && (visualHash === '' || visualHash === '#/'))} 
-            on:click|preventDefault={() => handleNav(item.id)}>
-                <span class="icon-wrap">
-                    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="{item.icon}"></path>
-                    </svg>
-                </span>
-                <span>{item.text}</span>
-            </a>
+            {#if item.id === '#playlists'}
+                <a 
+                    href={item.id}
+                    class:active={visualHash === item.id}
+                    class:drag-target={isDragOverPlaylists}
+                    on:click|preventDefault={() => handleNav(item.id)}
+                    on:dragenter={onPlaylistsDragEnter}
+                    on:dragover={onPlaylistsDragOver}
+                    on:dragleave={onPlaylistsDragLeave}
+                    on:drop={onPlaylistsDrop}
+                >
+                    <span class="icon-wrap">
+                        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="{item.icon}"></path>
+                        </svg>
+                    </span>
+                    <span>{item.text}</span>
+                </a>
+            {:else}
+                <a 
+                    href={item.id}
+                    class:active={visualHash === item.id || (item.id === '#/' && (visualHash === '' || visualHash === '#/'))} 
+                    on:click|preventDefault={() => handleNav(item.id)}
+                >
+                    <span class="icon-wrap">
+                        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="{item.icon}"></path>
+                        </svg>
+                    </span>
+                    <span>{item.text}</span>
+                </a>
+            {/if}
         {/each}
     </nav>
     
@@ -200,5 +264,17 @@
         -webkit-backface-visibility: hidden;
         pointer-events: none;}
         aside.open { transform: translate3d(0, 0, 0) !important; box-shadow: 20px 0 50px rgba(0,0,0,0.8); visibility: visible; transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), visibility 0s 0s;         pointer-events: auto !important;}
+    }
+
+    /* WS1: Drag-and-drop target glow on Playlists item */
+    a.drag-target {
+        color: var(--accent-color, #60a5fa) !important;
+        background: rgba(96, 165, 250, 0.12) !important;
+        box-shadow: 0 0 0 2px var(--accent-color, #60a5fa), 0 0 20px rgba(96, 165, 250, 0.25) !important;
+        border-radius: 12px;
+        transition: all 0.2s ease !important;
+    }
+    a.drag-target svg {
+        color: var(--accent-color, #60a5fa) !important;
     }
 </style>

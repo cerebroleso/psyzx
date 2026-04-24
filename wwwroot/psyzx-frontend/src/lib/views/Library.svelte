@@ -1,7 +1,7 @@
 <script>
-    import { artistsMap, appSessionVersion, viewSize } from '../../store.js';
+    import { artistsMap, albumsMap, appSessionVersion, viewSize, activeDownloads } from '../../store.js';
     import { onMount } from 'svelte';
-    import { fade, scale } from 'svelte/transition';
+    import { fade, scale, fly } from 'svelte/transition';
 
     function portal(node) {
         document.body.appendChild(node);
@@ -16,8 +16,10 @@
     // --- Filter & Sort State ---
     let visibleCount = 40;
     let searchQuery = '';
-    let activeSort = 'az'; // az, za, most_albums, most_tracks, most_played, duplicates
+    let activeSort = 'az'; // az, za, most_albums, most_tracks, most_played, duplicates, recently_added
     let enrichedStats = new Map();
+    let libraryViewMode = typeof localStorage !== 'undefined' ? (localStorage.getItem('psyzx_library_view') || 'artists') : 'artists';
+    let showSortModal = false;
 
     // --- Artist Duplicates State ---
     let duplicates = [];
@@ -55,6 +57,20 @@
 
         return () => observer.disconnect();
     });
+
+    // WS2: Track download state transitions for auto-refresh feedback
+    let wasDownloading = false;
+    let showDownloadCompleteToast = false;
+    let downloadToastTimeout;
+
+    $: if ($activeDownloads.length > 0) {
+        wasDownloading = true;
+    } else if (wasDownloading && $activeDownloads.length === 0) {
+        wasDownloading = false;
+        showDownloadCompleteToast = true;
+        clearTimeout(downloadToastTimeout);
+        downloadToastTimeout = setTimeout(() => { showDownloadCompleteToast = false; }, 4000);
+    }
 
     async function fetchArtistStats() {
         try {
@@ -136,7 +152,27 @@
                 const diff = (statsB.playCount || 0) - (statsA.playCount || 0);
                 return diff !== 0 ? diff : a.name.localeCompare(b.name);
             }
+            if (activeSort === 'recently_added') {
+                const maxIdA = Math.max(...(Array.from(a.albums || []).map(Number)), 0);
+                const maxIdB = Math.max(...(Array.from(b.albums || []).map(Number)), 0);
+                return maxIdB - maxIdA;
+            }
             
+            return 0;
+        });
+
+    // --- Album View Sort Engine ---
+    $: filteredAlbums = Array.from($albumsMap.values())
+        .filter(a => {
+            if (searchQuery && !a.title.toLowerCase().includes(searchQuery.toLowerCase()) && !a.artistName?.toLowerCase().includes(searchQuery.toLowerCase())) return false;
+            return true;
+        })
+        .sort((a, b) => {
+            if (activeSort === 'az') return a.title.localeCompare(b.title);
+            if (activeSort === 'za') return b.title.localeCompare(a.title);
+            if (activeSort === 'most_played') return (b.playCount || 0) - (a.playCount || 0);
+            if (activeSort === 'most_tracks') return (b.tracks?.length || 0) - (a.tracks?.length || 0);
+            if (activeSort === 'recently_added') return (b.id || 0) - (a.id || 0);
             return 0;
         });
 
@@ -255,6 +291,29 @@
         viewSize.set(size);
         localStorage.setItem('psyzx_view_size', size);
     };
+
+    const toggleLibraryView = (mode) => {
+        libraryViewMode = mode;
+        localStorage.setItem('psyzx_library_view', mode);
+        visibleCount = 40;
+    };
+
+    const sortOptions = [
+        { value: 'az', label: 'A to Z', icon: '↓' },
+        { value: 'za', label: 'Z to A', icon: '↑' },
+        { value: 'most_played', label: 'Most Played', icon: '🔥' },
+        { value: 'most_albums', label: 'Most Albums', icon: '💿' },
+        { value: 'most_tracks', label: 'Most Tracks', icon: '🎵' },
+        { value: 'recently_added', label: 'Recently Added', icon: '🕒' },
+        { value: 'duplicates', label: 'Possible Duplicates', icon: '⚠️' },
+    ];
+
+    const setSort = (value) => {
+        activeSort = value;
+        showSortModal = false;
+    };
+
+    const goAlbum = (id) => { window.location.hash = `#album/${id}`; };
 </script>
 
 <svelte:window on:click={closeContextMenu} />
@@ -300,33 +359,69 @@
     {/if}
 </div>
 
+{#if $activeDownloads.length > 0}
+    <div class="download-progress-banner" in:fade={{duration: 200}} out:fade={{duration: 150}}>
+        <div class="ios-spinner banner-spinner">
+            {#each Array(12) as _, i}
+                <div style="transform: rotate({i * 30}deg); animation-delay: {-(1.1 - (i * 0.083))}s;"></div>
+            {/each}
+        </div>
+        <span class="banner-text">Downloading new music... Library will auto-refresh when complete.</span>
+    </div>
+{/if}
+
+{#if showDownloadCompleteToast}
+    <div class="download-complete-toast" in:fly={{y: -20, duration: 300}} out:fade={{duration: 200}}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+        <span>Downloads complete — library updated.</span>
+    </div>
+{/if}
+
 <div class="controls-bar">
-    <!-- <div class="search-wrapper">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="11" cy="11" r="8"></circle>
-            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-        </svg>
-        <input 
-            type="text" 
-            bind:value={searchQuery} 
-            placeholder="Filter library..." 
-        />
-    </div> -->
+    <div class="view-toggle">
+        <button class="toggle-btn" class:active={libraryViewMode === 'artists'} on:click={() => toggleLibraryView('artists')} aria-label="Artist View">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+            <span>Artists</span>
+        </button>
+        <button class="toggle-btn" class:active={libraryViewMode === 'albums'} on:click={() => toggleLibraryView('albums')} aria-label="Album View">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="12" cy="12" r="4"></circle><circle cx="12" cy="12" r="1"></circle></svg>
+            <span>Albums</span>
+        </button>
+    </div>
     
-    <div class="sort-wrapper">
-        <select class="sort-select" bind:value={activeSort}>
-            <option value="az">A to Z</option>
-            <option value="za">Z to A</option>
-            <option value="most_played">Most Played</option>
-            <option value="most_albums">Most Albums</option>
-            <option value="most_tracks">Most Tracks</option>
-            <option value="duplicates">Possible Duplicates</option>
-        </select>
+    <button class="sort-trigger" on:click={() => showSortModal = !showSortModal}>
+        <span>{sortOptions.find(o => o.value === activeSort)?.label || 'Sort'}</span>
         <svg class="sort-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="6 9 12 15 18 9"></polyline>
         </svg>
-    </div>
+    </button>
 </div>
+
+{#if showSortModal}
+    <div class="sort-modal-backdrop" on:click={() => showSortModal = false} transition:fade={{duration: 150}}>
+        <div class="sort-modal-card" on:click|stopPropagation in:scale={{start: 0.95, duration: 200, opacity: 0}}>
+            <div class="sort-modal-header">
+                <h3>Sort By</h3>
+                <button class="btn-close" on:click={() => showSortModal = false} aria-label="Close">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
+            </div>
+            <div class="sort-modal-list">
+                {#each sortOptions as opt}
+                    {#if !(libraryViewMode === 'albums' && (opt.value === 'most_albums' || opt.value === 'duplicates'))}
+                        <button class="sort-option" class:active={activeSort === opt.value} on:click={() => setSort(opt.value)}>
+                            <span class="sort-icon">{opt.icon}</span>
+                            <span>{opt.label}</span>
+                            {#if activeSort === opt.value}
+                                <svg class="check-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent-color)" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                            {/if}
+                        </button>
+                    {/if}
+                {/each}
+            </div>
+        </div>
+    </div>
+{/if}
 
 {#if showModal}
     <div use:portal>
@@ -431,34 +526,95 @@
     </div>
 {/if}
 
-<div class="grid-container {$viewSize || 'medium'}">
-    {#each visibleArtists as artist (artist.id)}
-        <div class="card" role="button" tabindex="0" on:click={() => goArtist(artist.id)}>
-            <img
-                use:smoothLoad
-                src={artist.imagePath ? `/api/Tracks/image?path=${encodeURIComponent(artist.imagePath.split('?')[0])}&size=thumb&v=${$appSessionVersion}` : DEFAULT_PLACEHOLDER}
-                alt=""
-                loading="lazy"
-                decoding="async"
-                class="sleek-cover"
-                on:error={(e) => {
-                    handleImageError(e);
-                    setTimeout(() => e.target.classList.add('loaded'), 50);
-                }}
-            >
-            <div class="card-bottom">
-                <div class="card-title">{artist.name}</div>
-                <button class="more-options-btn" aria-label="Artist Options" on:click|stopPropagation={(e) => openContextMenu(e, artist.id)}>
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <circle cx="12" cy="12" r="1.5"></circle>
-                        <circle cx="12" cy="5" r="1.5"></circle>
-                        <circle cx="12" cy="19" r="1.5"></circle>
-                    </svg>
-                </button>
+{#if libraryViewMode === 'artists'}
+    <div class="grid-container {$viewSize || 'medium'}">
+        {#each $activeDownloads.filter(d => d.type === 'artist') as dl (dl.id)}
+            <div class="card downloading-card">
+                <div class="download-overlay">
+                    <div class="ios-spinner">
+                        {#each Array(12) as _, i}
+                            <div style="transform: rotate({i * 30}deg); animation-delay: {-(1.1 - (i * 0.083))}s;"></div>
+                        {/each}
+                    </div>
+                    <div class="dl-name">{dl.name}</div>
+                </div>
+                {#if dl.coverPath}
+                    <img src={dl.coverPath} alt="" class="sleek-cover loaded" />
+                {:else}
+                    <div class="sleek-cover placeholder-bg loaded"></div>
+                {/if}
+                <div class="card-bottom"><div class="card-title">{dl.name}</div></div>
             </div>
-        </div>
-    {/each}
-</div>
+        {/each}
+        {#each visibleArtists as artist (artist.id)}
+            <div class="card" role="button" tabindex="0" on:click={() => goArtist(artist.id)}>
+                <img
+                    use:smoothLoad
+                    src={artist.imagePath ? `/api/Tracks/image?path=${encodeURIComponent(artist.imagePath.split('?')[0])}&size=thumb&v=${$appSessionVersion}` : DEFAULT_PLACEHOLDER}
+                    alt=""
+                    loading="lazy"
+                    decoding="async"
+                    class="sleek-cover"
+                    on:error={(e) => {
+                        handleImageError(e);
+                        setTimeout(() => e.target.classList.add('loaded'), 50);
+                    }}
+                >
+                <div class="card-bottom">
+                    <div class="card-title">{artist.name}</div>
+                    <button class="more-options-btn" aria-label="Artist Options" on:click|stopPropagation={(e) => openContextMenu(e, artist.id)}>
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="1.5"></circle>
+                            <circle cx="12" cy="5" r="1.5"></circle>
+                            <circle cx="12" cy="19" r="1.5"></circle>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        {/each}
+    </div>
+{:else}
+    <div class="grid-container {$viewSize || 'medium'}">
+        {#each $activeDownloads.filter(d => d.type === 'album') as dl (dl.id)}
+            <div class="card downloading-card">
+                <div class="download-overlay">
+                    <div class="ios-spinner">
+                        {#each Array(12) as _, i}
+                            <div style="transform: rotate({i * 30}deg); animation-delay: {-(1.1 - (i * 0.083))}s;"></div>
+                        {/each}
+                    </div>
+                    <div class="dl-name">{dl.name}</div>
+                </div>
+                {#if dl.coverPath}
+                    <img src={dl.coverPath} alt="" class="sleek-cover loaded" />
+                {:else}
+                    <div class="sleek-cover placeholder-bg loaded"></div>
+                {/if}
+                <div class="card-bottom"><div class="card-title">{dl.name}</div></div>
+            </div>
+        {/each}
+        {#each filteredAlbums.slice(0, visibleCount) as album (album.id)}
+            <div class="card" role="button" tabindex="0" on:click={() => goAlbum(album.id)}>
+                <img
+                    use:smoothLoad
+                    src={album.coverPath ? `/api/Tracks/image?path=${encodeURIComponent(album.coverPath.split('?')[0])}&size=thumb&v=${$appSessionVersion}` : DEFAULT_PLACEHOLDER}
+                    alt=""
+                    loading="lazy"
+                    decoding="async"
+                    class="sleek-cover"
+                    on:error={(e) => {
+                        handleImageError(e);
+                        setTimeout(() => e.target.classList.add('loaded'), 50);
+                    }}
+                >
+                <div class="card-bottom">
+                    <div class="card-title">{album.title}</div>
+                    <div class="card-subtitle">{album.artistName || 'Unknown Artist'}</div>
+                </div>
+            </div>
+        {/each}
+    </div>
+{/if}
 
 <div bind:this={observerTarget} style="height: 1px; width: 100%;"></div>
 
@@ -503,44 +659,154 @@
         border-color: rgba(255, 255, 255, 0.2);
     }
 
-    .sort-wrapper {
-        position: relative;
+    /* --- View Toggle --- */
+    .view-toggle {
+        display: flex;
+        gap: 0;
+        background: rgba(255,255,255,0.04);
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 12px;
+        overflow: hidden;
+    }
+    .toggle-btn {
+        display: flex; align-items: center; gap: 6px;
+        padding: 10px 16px;
+        background: transparent;
+        border: none;
+        color: var(--text-secondary, rgba(255,255,255,0.5));
+        font-size: 13px; font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s ease;
+    }
+    .toggle-btn.active {
+        background: rgba(255,255,255,0.1);
+        color: var(--text-primary, white);
+    }
+    @media (hover: hover) {
+        .toggle-btn:hover:not(.active) { background: rgba(255,255,255,0.06); }
     }
 
-    .sort-select {
+    /* --- Sort Trigger Button --- */
+    .sort-trigger {
+        display: flex; align-items: center; gap: 6px;
         background: rgba(255, 255, 255, 0.04);
         border: 1px solid rgba(255, 255, 255, 0.08);
         color: white;
-        padding: 12px 36px 12px 16px;
+        padding: 10px 16px;
         border-radius: 12px;
-        font-size: 14px;
-        outline: none;
+        font-size: 13px; font-weight: 600;
         cursor: pointer;
-        appearance: none;
-        -webkit-appearance: none;
         transition: all 0.2s ease;
+        margin-left: auto;
     }
-
-    .sort-select:hover {
-        background: rgba(255, 255, 255, 0.08);
-    }
-
-    .sort-select:focus {
-        border-color: rgba(255, 255, 255, 0.2);
-    }
-
-    .sort-select option {
-        background: #1e1e1e;
-        color: white;
-    }
+    .sort-trigger:hover { background: rgba(255,255,255,0.08); }
 
     .sort-chevron {
-        position: absolute;
-        right: 12px;
-        top: 50%;
-        transform: translateY(-50%);
-        pointer-events: none;
         color: rgba(255, 255, 255, 0.5);
+        flex-shrink: 0;
+    }
+
+    /* --- Sort Modal --- */
+    .sort-modal-backdrop {
+        position: fixed; inset: 0;
+        background: rgba(0,0,0,0.5);
+        backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+        z-index: 999999;
+        display: flex; align-items: center; justify-content: center;
+    }
+    .sort-modal-card {
+        background: rgba(20, 20, 20, 0.9);
+        backdrop-filter: blur(40px) saturate(150%);
+        -webkit-backdrop-filter: blur(40px) saturate(150%);
+        border: 1px solid rgba(255,255,255,0.1);
+        border-top: 1px solid rgba(255,255,255,0.2);
+        border-radius: 20px;
+        padding: 20px;
+        width: 90%; max-width: 340px;
+        box-shadow: 0 24px 48px rgba(0,0,0,0.5);
+    }
+    .sort-modal-header {
+        display: flex; justify-content: space-between; align-items: center;
+        margin-bottom: 16px;
+    }
+    .sort-modal-header h3 {
+        margin: 0; color: white; font-weight: 800; font-size: 18px;
+    }
+    .sort-modal-list {
+        display: flex; flex-direction: column; gap: 4px;
+    }
+    .sort-option {
+        display: flex; align-items: center; gap: 12px;
+        padding: 12px 14px;
+        background: transparent;
+        border: none; border-radius: 10px;
+        color: var(--text-secondary, rgba(255,255,255,0.6));
+        font-size: 14px; font-weight: 600;
+        cursor: pointer;
+        transition: all 0.15s ease;
+        text-align: left;
+    }
+    .sort-option.active {
+        color: var(--text-primary, white);
+        background: rgba(255,255,255,0.06);
+    }
+    .sort-option:hover { background: rgba(255,255,255,0.08); color: white; }
+    .sort-icon { font-size: 16px; width: 24px; text-align: center; }
+    .check-icon { margin-left: auto; flex-shrink: 0; }
+
+    /* --- Download Overlay & iOS Spinner --- */
+    .downloading-card {
+        pointer-events: none;
+        position: relative;
+    }
+    .download-overlay {
+        position: absolute; inset: 0;
+        background: rgba(0,0,0,0.6);
+        border-radius: 12px;
+        z-index: 10;
+        display: flex; flex-direction: column;
+        align-items: center; justify-content: center;
+        gap: 12px;
+    }
+    .dl-name {
+        font-size: 11px; font-weight: 700;
+        color: rgba(255,255,255,0.7);
+        text-align: center;
+        max-width: 80%;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .placeholder-bg {
+        background: rgba(255,255,255,0.05);
+        aspect-ratio: 1;
+        border-radius: 8px;
+    }
+    .ios-spinner {
+        position: relative;
+        width: 32px; height: 32px;
+    }
+    .ios-spinner > div {
+        position: absolute;
+        width: 2.5px; height: 8px;
+        background: rgba(255,255,255,0.85);
+        border-radius: 2px;
+        left: 50%; top: 50%;
+        margin-left: -1.25px; margin-top: -16px;
+        transform-origin: 50% 16px;
+        animation: ios-fade 1.1s infinite linear;
+    }
+    @keyframes ios-fade {
+        0%, 39%, 100% { opacity: 0.15; }
+        40% { opacity: 1; }
+    }
+
+    /* Card subtitle for album view */
+    .card-subtitle {
+        font-size: 12px;
+        color: var(--text-secondary, rgba(255,255,255,0.5));
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        margin-top: 2px;
     }
 
     /* Context Menu Modal */
@@ -605,12 +871,39 @@
     .sleek-cover.loaded { opacity: 1; transform: scale(1); filter: blur(0); }
 
     /* --- Card Bottom & 3-Dots Logic --- */
-    .card-bottom { position: relative; display: flex; align-items: center; justify-content: space-between; margin-top: 8px; }
+    .card-bottom { position: relative; display: flex; flex-direction: column; margin-top: 8px; }
     .card-title { flex-grow: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; transition: max-width 0.2s ease; }
-    .more-options-btn { position: absolute; right: 0; background: transparent; border: none; color: rgba(255, 255, 255, 0.6); cursor: pointer; padding: 4px; border-radius: 50%; display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.2s ease, background 0.2s ease, color 0.2s ease; }
+    .more-options-btn { position: absolute; right: 0; top: 0; background: transparent; border: none; color: rgba(255, 255, 255, 0.6); cursor: pointer; padding: 4px; border-radius: 50%; display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.2s ease, background 0.2s ease, color 0.2s ease; }
     .more-options-btn:hover { color: white; background: rgba(255, 255, 255, 0.1); }
     @media (hover: hover) {
         .card:hover .card-title { max-width: calc(100% - 32px); }
         .card:hover .more-options-btn { opacity: 1; }
+    }
+
+    /* WS2: Download progress banner */
+    .download-progress-banner {
+        display: flex; align-items: center; gap: 12px;
+        padding: 12px 16px; margin-bottom: 16px;
+        background: rgba(59, 130, 246, 0.08);
+        border: 0.5px solid rgba(59, 130, 246, 0.25);
+        border-radius: 12px; color: #60a5fa;
+        font-size: 13px; font-weight: 500;
+        animation: pulse-border 2s ease-in-out infinite;
+    }
+    @keyframes pulse-border {
+        0%, 100% { border-color: rgba(59, 130, 246, 0.25); }
+        50% { border-color: rgba(59, 130, 246, 0.55); }
+    }
+    .banner-spinner { width: 20px; height: 20px; flex-shrink: 0; }
+    .banner-spinner > div { width: 2px; height: 6px; margin-top: -12px; }
+
+    /* WS2: Download complete toast */
+    .download-complete-toast {
+        display: flex; align-items: center; gap: 10px;
+        padding: 12px 18px; margin-bottom: 16px;
+        background: rgba(34, 197, 94, 0.1);
+        border: 0.5px solid rgba(34, 197, 94, 0.35);
+        border-radius: 12px; color: #4ade80;
+        font-size: 13px; font-weight: 600;
     }
 </style>

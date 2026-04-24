@@ -1,10 +1,11 @@
 <script>
-    import { onMount } from 'svelte';
+    import { onMount, onDestroy } from 'svelte';
     import { fade, scale, fly } from 'svelte/transition';
     import { flip } from 'svelte/animate';
     import { api } from '../api.js';
     import { currentPlaylist, currentIndex, isPlaying, isShuffle, isRepeat, shuffleHistory, isGlobalColorActive, isMaxGlassActive, isLowQualityImages, userQueue, albumsMap, playlistUpdateSignal, appSessionVersion } from '../../store.js';
     import { formatTime } from '../utils.js';
+    import { togglePlayGlobal } from '../audio.js';
 
     export let playlistId;
 
@@ -25,6 +26,23 @@
         $playlistUpdateSignal;
         if (playlistId) loadPlaylist();
     }
+
+    // WS4: Listen for direct playlist-tracks-changed events (fired by api.addToPlaylist)
+    // This ensures live refresh even if the store signal doesn't trigger reactivity.
+    const handlePlaylistChanged = (e) => {
+        if (e.detail?.playlistId == playlistId) {
+            loadPlaylist();
+        }
+    };
+
+    onMount(() => {
+        loadPlaylist();
+        window.addEventListener('playlist-tracks-changed', handlePlaylistChanged);
+    });
+
+    onDestroy(() => {
+        window.removeEventListener('playlist-tracks-changed', handlePlaylistChanged);
+    });
 
     async function loadPlaylist() {
         if (playlistId) {
@@ -58,14 +76,12 @@
 
     const togglePlayPlaylist = () => {
         if (tracks.length === 0) return;
-        const audio = document.querySelector('audio');
-        if (!audio) return;
 
         if (isPlayingPlaylist) {
-            audio.pause();
+            togglePlayGlobal();
         } else {
             if ($currentPlaylist?.some(t => tracks.find(pt => pt.id === t.id))) {
-                audio.play(); 
+                togglePlayGlobal(); 
             } else {
                 currentPlaylist.set(tracks);
                 if ($isShuffle) { 

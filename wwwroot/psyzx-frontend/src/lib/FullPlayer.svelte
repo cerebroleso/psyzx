@@ -60,6 +60,9 @@
     let progressContainerEl;
     let isClosing = false;
     let isClosingByDrag = false;
+    let isImmersive = false;
+    let isImmersiveVisActive = false;
+    let immersiveLyricsEl;
     
     // Tap & Info State
     let coverClick = false;
@@ -80,7 +83,7 @@
         isVisEnabled = localStorage.getItem('psyzx_vis_enabled') !== 'false';
     };
 
- // --- THREE.JS VISUALIZER ACTION (OPTIMIZED) ---
+    // --- THREE.JS VISUALIZER ACTION (OPTIMIZED) ---
     function threeVisualizer(node) {
         let isDestroyed = false;
         let cleanup = () => {}; 
@@ -97,9 +100,14 @@
             let currentTunnelSpeed = 0.15;  
             let currentDnaTwist = 0.15;
             
+            // Color transition states
+            let targetColor = new THREE.Color(0xffffff);
+            let currentColor = new THREE.Color(0xffffff);
+            let lastColorString = '';
+            
             // --- CUSTOMIZABLE PSP SETTINGS ---
-            let rippleIntensity = 0.1; // Modify this to make the micro-ripples larger or smaller
-            let maxTiltDegrees = 10.0; // The maximum rotation angle during heavy bass
+            let rippleIntensity = 0.1;
+            let maxTiltDegrees = 10.0; 
             
             // PSP Wave States
             let transitionFactor = 0; 
@@ -113,7 +121,8 @@
 
             const lerp = (start, end, factor) => (1 - factor) * start + factor * end;
 
-            let visShape = localStorage.getItem('psyzx_vis_shape') || 'PSPWaves';
+            // Defaulting to the beautiful PS3-style fragment shader
+            let visShape = localStorage.getItem('psyzx_vis_shape') || 'PSPWaves2'; 
             let visMovement = localStorage.getItem('psyzx_vis_movement') || 'Hypnotic';
             
             let rawY = parseInt(localStorage.getItem('psyzx_vis_ypos'));
@@ -157,10 +166,104 @@
                 }
 
                 let geometry;
+                let material;
                 isPointsCloud = false; 
 
                 switch (visShape) {
-                    case 'PSPWaves': {
+                    case 'PSPWaves2': { // <--- The PS3 Fragment Shader Port
+                        geometry = new THREE.PlaneGeometry(2, 2); // Fullscreen quad
+                        
+                        const psp2Uniforms = {
+                            uTime: { value: 0.0 },
+                            uAudio: { value: 0.0 },
+                            uColor: { value: currentColor.clone() }, 
+                            uLightMode: { value: false } 
+                        };
+                        
+                        const psp2Vert = `
+                            varying vec2 vUv;
+                            void main() {
+                                vUv = uv;
+                                // Renders quad directly to screen coordinates, bypassing camera perspective
+                                gl_Position = vec4(position.xy, 0.99, 1.0); 
+                            }
+                        `;
+                        
+                        const psp2Frag = `
+                            precision highp float;
+                            uniform float uTime;
+                            uniform float uAudio;
+                            uniform vec3 uColor;
+                            uniform bool uLightMode;
+                            varying vec2 vUv;
+
+                            const float waveWidthFactor = 1.5;
+
+                            vec3 calcSine(
+                                vec2 uv, float speed, float frequency, float amplitude,
+                                float phaseShift, float verticalOffset, vec3 baseColor,
+                                float lineWidth, float sharpness, bool invertFalloff
+                            ) {
+                                // Audio drives amplitude dynamically
+                                float dynamicAmp = amplitude + (uAudio * amplitude * 1.5);
+                                float angle = uTime * speed * frequency * -1.0 + (phaseShift + uv.x) * 2.0;
+                                float waveY = sin(angle) * dynamicAmp + verticalOffset;
+                                
+                                float deltaY = waveY - uv.y;
+                                float distanceVal = distance(waveY , uv.y);
+
+                                if (invertFalloff) {
+                                    if (deltaY > 0.0) distanceVal = distanceVal * 4.0;
+                                } else {
+                                    if (deltaY < 0.0) distanceVal = distanceVal * 4.0;
+                                }
+
+                                // Audio thickens the glowing lines on beat
+                                float dynamicWidth = lineWidth + (uAudio * 0.05);
+                                float smoothVal = smoothstep(dynamicWidth * waveWidthFactor, 0.0, distanceVal);
+                                float scaleVal = pow(smoothVal, sharpness);
+
+                                return min(baseColor * scaleVal, baseColor);
+                            }
+
+                            void main() {
+                                vec2 uv = vUv;
+                                vec3 accumulatedColor = vec3(0.0);
+                                
+                                // Base color dynamically shifted by the CSS accent and boosted on beats
+                                vec3 color = uColor * (0.5 + uAudio * 0.5);
+
+                                accumulatedColor += calcSine(uv, 0.2, 0.20, 0.2, 0.0, 0.5, color, 0.1, 15.0, false);
+                                accumulatedColor += calcSine(uv, 0.4, 0.40, 0.15, 0.0, 0.5, color, 0.1, 17.0, false);
+                                accumulatedColor += calcSine(uv, 0.3, 0.60, 0.15, 0.0, 0.5, color, 0.05, 23.0, false);
+                                accumulatedColor += calcSine(uv, 0.1, 0.26, 0.07, 0.0, 0.3, color, 0.1, 17.0, true);
+                                accumulatedColor += calcSine(uv, 0.3, 0.36, 0.07, 0.0, 0.3, color, 0.1, 17.0, true);
+                                accumulatedColor += calcSine(uv, 0.5, 0.46, 0.07, 0.0, 0.3, color, 0.05, 23.0, true);
+                                accumulatedColor += calcSine(uv, 0.2, 0.58, 0.05, 0.0, 0.3, color, 0.2, 15.0, true);
+
+                                float maxChannel = max(max(accumulatedColor.r, accumulatedColor.g), accumulatedColor.b);
+                                if (maxChannel <= 0.0) discard;
+
+                                vec3 outputColor = uLightMode ? vec3(1.0) - clamp(accumulatedColor, 0.0, 1.0) : accumulatedColor;
+                                gl_FragColor = vec4(outputColor, 1.0);
+                            }
+                        `;
+                        
+                        material = new THREE.ShaderMaterial({
+                            vertexShader: psp2Vert,
+                            fragmentShader: psp2Frag,
+                            uniforms: psp2Uniforms,
+                            transparent: true,
+                            depthWrite: false,
+                            blending: THREE.AdditiveBlending
+                        });
+                        
+                        visualizerMesh = new THREE.Mesh(geometry, material);
+                        visualizerMesh.frustumCulled = false; 
+                        scene.add(visualizerMesh);
+                        return; 
+                    }
+                    case 'PSPWaves': { // <--- The original 3D Geometry Ribbons
                         const segments = Math.max(160, visDetail * 5); 
                         const width = 240;
                         geometry = new THREE.BufferGeometry();
@@ -212,12 +315,12 @@
                 }
 
                 if (isPointsCloud) {
-                    const material = new THREE.PointsMaterial({ color: 0xffffff, size: 0.2, transparent: true, opacity: 0.8 });
+                    material = new THREE.PointsMaterial({ color: currentColor.getHex(), size: 0.2, transparent: true, opacity: 0.8 });
                     visualizerMesh = new THREE.Points(geometry, material);
                 } else {
                     const isPSP = visShape === 'PSPWaves';
-                    const material = new THREE.MeshBasicMaterial({
-                        color: 0xffffff,
+                    material = new THREE.MeshBasicMaterial({
+                        color: currentColor.getHex(),
                         wireframe: !isPSP,
                         transparent: true,
                         opacity: isPSP ? 0.5 : (visShape === 'Tunnel' || visShape === 'Wormhole' ? 0.25 : 0.15),
@@ -258,7 +361,7 @@
             buildVisualizerMesh(); 
 
             const handleSettingsUpdate = () => {
-                const newShape = localStorage.getItem('psyzx_vis_shape') || 'PSPWaves';
+                const newShape = localStorage.getItem('psyzx_vis_shape') || 'PSPWaves2';
                 let nDet = parseInt(localStorage.getItem('psyzx_vis_detail'));
                 const newDetail = isNaN(nDet) ? 16 : nDet;
                 const newSides = localStorage.getItem('psyzx_vis_sides') || 'Default';
@@ -276,7 +379,7 @@
                 const nInt = parseFloat(localStorage.getItem('psyzx_vis_intensity'));
                 visIntensity = isNaN(nInt) ? 0.3 : nInt;
 
-                if (visualizerMesh) {
+                if (visualizerMesh && visShape !== 'PSPWaves2') {
                     if (!['Tunnel', 'Synthwave', 'PSPWaves'].includes(visShape)) {
                         visualizerMesh.position.y = visYPos;
                     } else if (visShape === 'PSPWaves') {
@@ -306,15 +409,43 @@
             resizeObserver.observe(node);
 
             let time = 0; 
+            let frameCounter = 0;
 
             const animate = () => {
                 visualizerRafId = requestAnimationFrame(animate);
-                time += 0.01;
+                
+                // Sync CSS --accent-color globally 
+                if (frameCounter++ % 30 === 0 && visualizerMesh) {
+                    const playerEl = document.getElementById('full-player');
+                    if (playerEl) {
+                        const currentAccent = getComputedStyle(playerEl).getPropertyValue('--accent-color').trim();
+                        if (currentAccent && currentAccent !== lastColorString) {
+                            lastColorString = currentAccent;
+                            try {
+                                targetColor.setStyle(currentAccent);
+                            } catch(e) {}
+                        }
+                    }
+                }
+
+                // --- SMOOTH COLOR LERPING ---
+                // Gently shift the current color toward the target color every frame
+                currentColor.lerp(targetColor, 0.05);
+
+                if (visualizerMesh) {
+                    // Apply the smoothed color to the correct material type
+                    if (visShape === 'PSPWaves2' && visualizerMesh.material.uniforms) {
+                        visualizerMesh.material.uniforms.uColor.value.copy(currentColor);
+                    } else if (visualizerMesh.material && visualizerMesh.material.color) {
+                        visualizerMesh.material.color.copy(currentColor);
+                    }
+                }
+
+                time += 0.01 * ($isPlaying ? visSpeed : 0.1);
                 activeSpeedMultiplier = lerp(activeSpeedMultiplier, $isPlaying ? visSpeed : 0.05, 0.05);
 
                 if (visualizerMesh) {
-                    
-                    // 1. Fetch and smooth FFT data BEFORE doing shape logic
+                    // Fetch and smooth FFT data BEFORE doing shape logic
                     let rawFftData = null;
                     try { rawFftData = getFftData(); } catch(e) {}
                     if (!rawFftData || rawFftData.length === 0) {
@@ -350,9 +481,16 @@
                         trebleIntensity = (trebleSum / (rawFftData.length - trebleStart)) / 255.0;
                     }
 
-                    // 2. Handle PSPWaves base expansion
-                    if (visShape === 'PSPWaves') {
-                        // FIX: Only expand if playing AND there is actual audio output
+                    // PSPWaves2 Specific Logic
+                    if (visShape === 'PSPWaves2') {
+                        if (visualizerMesh.material.uniforms) {
+                            visualizerMesh.material.uniforms.uTime.value = time;
+                            const targetAudio = $isPlaying ? (audioIntensity * visIntensity) : 0.0;
+                            visualizerMesh.material.uniforms.uAudio.value = lerp(visualizerMesh.material.uniforms.uAudio.value, targetAudio, 0.1);
+                        }
+                    }
+                    // Legacy PSPWaves Base logic
+                    else if (visShape === 'PSPWaves') {
                         const isActuallyPlaying = $isPlaying && audioIntensity > 0.002;
 
                         if (isActuallyPlaying) {
@@ -370,8 +508,8 @@
                         }
                     }
 
-                    // 3. Process geometry updates for all shapes
-                    if (rawFftData && smoothedFftData) {
+                    // Process geometry updates for all 3D shapes
+                    if (visShape !== 'PSPWaves2' && rawFftData && smoothedFftData) {
                         const positions = visualizerMesh.geometry.attributes.position;
                         
                         if (visShape === 'Tunnel') {
@@ -417,7 +555,6 @@
                                 let waveY = 0;
                                 const baseAmp = 1.5; 
                                 
-                                // Significantly reduced the main amplitude so the ocean doesn't "rise"
                                 const fullAmp = 4.0 * visIntensity; 
                                 const currentAmp = baseAmp + (transitionFactor * fullAmp);
                                 
@@ -429,8 +566,6 @@
                                     waveY += Math.cos(xVal * 2.5 - speed * 1.1) * (currentAmp * 0.25);
                                 }
 
-                                // MICRO-RIPPLE LOGIC
-                                // Tiny, high-frequency details that ride on top of the main crests
                                 if ($isPlaying) {
                                     const rippleAmp = Math.pow(localAudio, 2.0) * rippleIntensity * visIntensity * transitionFactor; 
                                     if (rippleAmp > 0.01) {
@@ -450,20 +585,16 @@
                                 positions.setXYZ(i, vertex.x, vertex.y, vertex.z);
                             }
                             
-                            // SUBTLE, DYNAMIC TILT LOGIC (-15 to +15 Degrees)
-                            let targetRotX = Math.sin(time * 0.3) * 0.05; // Base ambient tilt
+                            let targetRotX = Math.sin(time * 0.3) * 0.05;
                             let targetRotY = Math.cos(time * 0.2) * 0.04;
                             let targetRotZ = 0;
 
                             if ($isPlaying && dynamicBass > 0.05) {
-                                // maxTiltDegrees converted to radians is ~0.261 for 15 degrees
                                 const maxRad = maxTiltDegrees * (Math.PI / 180.0);
-                                // Pseudo-random organic sway mapped to the beat
                                 const sway = (Math.sin(time * 3.1) + Math.cos(time * 2.7)) * 0.5; 
                                 targetRotZ = sway * maxRad * Math.min(1.0, dynamicBass * 1.5);
                             }
 
-                            // Smoothly ease into the target rotation so it looks natural
                             visualizerMesh.rotation.x = lerp(visualizerMesh.rotation.x, targetRotX, 0.1);
                             visualizerMesh.rotation.y = lerp(visualizerMesh.rotation.y, targetRotY, 0.1);
                             visualizerMesh.rotation.z = lerp(visualizerMesh.rotation.z, targetRotZ, 0.08);
@@ -517,9 +648,9 @@
                             }
                         }
                         positions.needsUpdate = true;
-                    } else if (!$isPlaying && visualizerMesh) {
-                       if (visMovement === 'Pulsate' && !['Tunnel','Synthwave','PSPWaves'].includes(visShape)) { visualizerMesh.scale.setScalar(visDimension); }
-                       if (camera.fov > 75) { camera.fov -= 1.0; camera.updateProjectionMatrix(); }
+                    } else if (!$isPlaying && visualizerMesh && visShape !== 'PSPWaves2') {
+                        if (visMovement === 'Pulsate' && !['Tunnel','Synthwave','PSPWaves'].includes(visShape)) { visualizerMesh.scale.setScalar(visDimension); }
+                        if (camera.fov > 75) { camera.fov -= 1.0; camera.updateProjectionMatrix(); }
                     }
                 }
                 renderer.render(scene, camera);
@@ -616,10 +747,31 @@
         if (!isClosingByDrag) dragY = 0; 
     };
 
-    $: if (typeof document !== 'undefined') {
-        if (isOpen && isMobile) document.body.classList.add('modal-open'); 
-        else document.body.classList.remove('modal-open'); 
+    // WS6: Immersive mode toggle + Escape key handler
+    const toggleImmersive = () => { isImmersive = !isImmersive; };
+    const exitImmersive = () => { isImmersive = false; };
+
+    const handleImmersiveKey = (e) => {
+        if (e.key === 'Escape' && isImmersive) {
+            e.stopPropagation();
+            exitImmersive();
+        }
+    };
+
+    // WS6: Auto-scroll immersive lyrics
+    $: if (immersiveLyricsEl && effectiveLyricIdx >= 0 && isImmersive && !isUserScrolling) {
+        const activeLine = immersiveLyricsEl.querySelectorAll('.immersive-lyric-line')[effectiveLyricIdx];
+        if (activeLine) {
+            immersiveLyricsEl.scrollTo({ 
+                top: activeLine.offsetTop - immersiveLyricsEl.clientHeight / 2 + activeLine.clientHeight / 2, 
+                behavior: 'smooth' 
+            });
+        }
     }
+
+    // WS5: iOS PLAYER BAR GLITCH FIX
+    // We rely solely on the modal-open CSS class applied by App.svelte/FullPlayer
+    // Setting body.style.overflow inline causes iOS layout thrashing which breaks fixed bars.
 
     let wasPlayerElPresent = false;
 
@@ -848,6 +1000,7 @@
 
     const handleGlobalKeyDown = (e) => {
         if (e.key === 'Escape') {
+            if (isImmersive) { exitImmersive(); return; }
             if (isLyricsFullScreen) isLyricsFullScreen = false;
             else if (showQueue) showQueue = false;
             else if (isOpen) handleClose();
@@ -932,10 +1085,19 @@
             blurTimerFinished = false; // 2. Reset the 500ms lock
             activeHighResUrl = "";     // 3. Clear URL (safe because opacity is instantly 0)
 
+            // WS9: Show gray placeholder immediately instead of stale album art
+            // while waiting for the new image to load on slow connections.
+            lowResCoverUrl = DEFAULT_PLACEHOLDER;
+
             // Start the minimum 500ms "Blur Lock"
             setTimeout(() => {
                 if (currentAlbumId === aId) {
                     blurTimerFinished = true;
+                    // WS9: Restore real low-res URL after blur timer,
+                    // so it's ready as a fallback behind the hi-res layer.
+                    if (album?.coverPath) {
+                        lowResCoverUrl = `/api/Tracks/image?path=${encodeURIComponent(album.coverPath)}&v=${$appSessionVersion}&quality=low`;
+                    }
                     checkReveal(aId);
                 }
             }, 500);
@@ -1005,6 +1167,10 @@
     $: effectiveLyricIdx = (() => {
         const time = (isSeekingBar && pendingSeekTime !== null) ? pendingSeekTime : $playerCurrentTime;
         if (!lyrics || lyrics.length === 0) return -1;
+        // WS10: Don't highlight any lyric in the first second of playback.
+        // Many LRC files have the first line at a very low timestamp (0.2s etc.)
+        // which causes premature highlighting before the singer starts.
+        if (time < 1) return -1;
         if (time < lyrics[0].t) return -1;
         return lyrics.findLastIndex(l => time >= l.t);
     })();
@@ -1081,13 +1247,21 @@
                 
                 <div class="fp-header">
                     <span class="fp-header-title">NOW PLAYING</span>
-                    <button class="btn-icon" style="padding: 0; margin-top: -10px; opacity: 0.5;" on:click={openDiagnostics} aria-label="Diagnostics">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <circle cx="12" cy="12" r="10"></circle>
-                            <line x1="12" y1="16" x2="12" y2="12"></line>
-                            <line x1="12" y1="8" x2="12.01" y2="8"></line>
-                        </svg>
-                    </button>
+                    {#if isMobile}
+                        <button class="btn-icon" style="padding: 0; margin-top: -10px; opacity: 0.5;" on:click={openDiagnostics} aria-label="Diagnostics">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <circle cx="12" cy="12" r="10"></circle>
+                                <line x1="12" y1="16" x2="12" y2="12"></line>
+                                <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                            </svg>
+                        </button>
+                    {:else}
+                        <button class="btn-icon" style="padding: 0; margin-top: -10px; opacity: 0.6;" on:click={toggleImmersive} aria-label="Immersive Mode">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>
+                            </svg>
+                        </button>
+                    {/if}
                 </div>
             </div>
 
@@ -1213,8 +1387,11 @@
                     <button aria-label="Next" class="btn-icon" on:click={playNext}>
                         <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4"></polygon><line x1="19" x2="19" y1="5" y2="19"></line></svg>
                     </button>
-                    <button aria-label="Repeat" class="btn-icon" class:active={$isRepeat} on:click={() => isRepeat.set(!$isRepeat)}>
+                    <button aria-label="Repeat" class="btn-icon" class:active={$isRepeat !== 'off'} on:click={() => { const cycle = { off: 'all', all: 'one', one: 'off' }; isRepeat.set(cycle[$isRepeat] || 'off'); }} style="position: relative;">
                         <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m17 2 4 4-4 4"></path><path d="M3 11v-1a4 4 0 0 1 4-4h14"></path><path d="m7 22-4-4 4-4"></path><path d="M21 13v1a4 4 0 0 1-4 4H3"></path></svg>
+                        {#if $isRepeat === 'one'}
+                            <span style="position: absolute; top: -2px; right: -4px; font-size: 9px; font-weight: 900; color: var(--accent-color); background: var(--bg-primary, #111); border-radius: 50%; width: 14px; height: 14px; display: flex; align-items: center; justify-content: center; line-height: 1;">1</span>
+                        {/if}
                     </button>
                 </div>
 
@@ -1352,6 +1529,112 @@
             </div>
         </div>
     {/if}
+{/if}
+
+{#if isImmersive && !isMobile}
+    <div 
+        class="immersive-backdrop" 
+        use:portal={true}
+        in:fade={{duration: 500}}
+        out:fade={{duration: 300}}
+        on:keydown={handleImmersiveKey}
+    >
+        <!-- Blurred Background -->
+        <div class="immersive-bg" style="opacity: {isImmersiveVisActive ? 0 : 1}; transition: opacity 0.5s ease;">
+            <img 
+                src={activeHighResUrl || lowResCoverUrl} 
+                alt="" 
+                class="immersive-bg-img" 
+                on:error={handleImageError}
+            />
+        </div>
+
+        <!-- Visualizer -->
+        {#if isImmersiveVisActive}
+            <div class="immersive-visualizer-wrapper" style="position: absolute; inset: 0; z-index: 0;" in:fade={{duration: 500}} out:fade={{duration: 500}}>
+                <div class="visualizer-bg" style="z-index: 0; opacity: 1; -webkit-mask-image: none; mask-image: none; mix-blend-mode: normal;" use:threeVisualizer></div>
+            </div>
+        {/if}
+
+        <!-- Toggle Visualizer Button -->
+        <button class="immersive-vis-toggle-btn" class:active={isImmersiveVisActive} on:click={() => isImmersiveVisActive = !isImmersiveVisActive} aria-label="Toggle Visualizer">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M2 12h4l2-9 5 18 4-15 3 6h2"></path>
+            </svg>
+        </button>
+
+        <!-- Close Button -->
+        <button class="immersive-close-btn" on:click={exitImmersive} aria-label="Exit Immersive">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"></path>
+            </svg>
+        </button>
+
+        <!-- Main Content -->
+        <div class="immersive-content">
+            <!-- Left: Album Art -->
+            <div class="immersive-art-section">
+                <img 
+                    class="immersive-cover" 
+                    src={activeHighResUrl || lowResCoverUrl} 
+                    alt="Album Cover" 
+                    on:error={handleImageError}
+                />
+                <div class="immersive-track-info">
+                    <div class="immersive-title">{track ? track.title : '---'}</div>
+                    <div class="immersive-artist">{album ? album.artistName : '---'}</div>
+                </div>
+            </div>
+
+            <!-- Right: Karaoke Lyrics -->
+            <div class="immersive-lyrics-section">
+                <div class="immersive-lyrics-scroll" bind:this={immersiveLyricsEl} on:wheel={handleUserScroll}>
+                    {#each lyrics as line, i}
+                        <div 
+                            class="immersive-lyric-line" 
+                            class:active={i === effectiveLyricIdx}
+                            class:past={i < effectiveLyricIdx}
+                            on:click={() => { activePlayer.currentTime = line.t; }}
+                        >
+                            {line.text}
+                        </div>
+                    {/each}
+                </div>
+            </div>
+        </div>
+
+        <!-- Bottom Controls Bar -->
+        <div class="immersive-controls">
+            <div class="immersive-progress-row">
+                <span class="immersive-time">{formatTime($playerCurrentTime)}</span>
+                <div class="immersive-progress-track">
+                    <div class="immersive-progress-fill" style="width: {$playerDuration > 0 ? ($playerCurrentTime / $playerDuration) * 100 : 0}%"></div>
+                </div>
+                <span class="immersive-time">{formatTime($playerDuration)}</span>
+            </div>
+            <div class="immersive-buttons">
+                <button aria-label="Shuffle" class="btn-icon immersive-btn" class:active={$isShuffle} on:click={() => isShuffle.set(!$isShuffle)}>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 18h1.4c1.3 0 2.5-.6 3.3-1.7l6.1-8.6c.7-1.1 2-1.7 3.3-1.7H22"></path><path d="m18 2 4 4-4 4"></path><path d="M2 6h1.9c1.5 0 2.9.9 3.6 2.2"></path><path d="M22 18h-5.9c-1.3 0-2.6-.7-3.3-1.8l-.5-.8"></path><path d="m18 14 4 4-4 4"></path></svg>
+                </button>
+                <button aria-label="Previous" class="btn-icon immersive-btn" on:click={playPrev}>
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="19 20 9 12 19 4 19 20"></polygon><line x1="5" x2="5" y1="19" y2="5"></line></svg>
+                </button>
+                <button aria-label="Play/Pause" class="immersive-play-btn" on:click={togglePlay}>
+                    {#if $isPlaying}
+                        <svg width="32" height="32" viewBox="0 0 24 24" fill="currentColor"><rect width="4" height="16" x="7" y="4" rx="1" /><rect width="4" height="16" x="13" y="4" rx="1" /></svg>
+                    {:else}
+                        <svg width="32" height="32" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                    {/if}
+                </button>
+                <button aria-label="Next" class="btn-icon immersive-btn" on:click={playNext}>
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 4 15 12 5 20 5 4"></polygon><line x1="19" x2="19" y1="5" y2="19"></line></svg>
+                </button>
+                <button aria-label="Repeat" class="btn-icon immersive-btn" class:active={$isRepeat !== 'off'} on:click={() => { const cycle = { off: 'all', all: 'one', one: 'off' }; isRepeat.set(cycle[$isRepeat] || 'off'); }}>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m17 2 4 4-4 4"></path><path d="M3 11v-1a4 4 0 0 1 4-4h14"></path><path d="m7 22-4-4 4-4"></path><path d="M21 13v1a4 4 0 0 1-4 4H3"></path></svg>
+                </button>
+            </div>
+        </div>
+    </div>
 {/if}
 
 {#if showDiagnostics}
@@ -2084,9 +2367,9 @@
     }
     .lyrics-header-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
     .lyrics-header-row h3 { margin: 0; font-size: 14px; color: var(--accent-color, #ffffff) !important; text-transform: uppercase; letter-spacing: 1px; font-weight: 800; }
-    .lyric-line { font-size: 16px; font-weight: 600; color: rgba(255,255,255,0.3); margin-bottom: 16px; transition: all 0.4s cubic-bezier(0.2, 0.8, 0.2, 1); transform-origin: left center; cursor: pointer; }
-    .lyric-line:hover { color: rgba(255,255,255,0.6); }
-    .lyric-line.active { color: white; font-size: 22px; font-weight: 800; text-shadow: 0 0 16px rgba(255,255,255,0.4); }
+    .lyric-line { font-size: 18px; font-weight: 600; color: rgba(255,255,255,0.4); margin-bottom: 20px; transition: all 0.4s cubic-bezier(0.2, 0.8, 0.2, 1); transform-origin: left center; cursor: pointer; }
+    .lyric-line:hover { color: rgba(255,255,255,0.8); }
+    .lyric-line.active { color: white; font-size: 28px; font-weight: 900; text-shadow: 0 0 24px rgba(255,255,255,0.6); }
 
     .lyrics-scroll-box { flex: 1; overflow-y: auto; padding-right: 8px; display: flex; flex-direction: column; scroll-behavior: smooth; position: relative; scrollbar-width: none; -ms-overflow-style: none;}
     .lyrics-scroll-box::-webkit-scrollbar { display: none; }
@@ -2129,5 +2412,209 @@
         animation: buffer-wave 1.2s infinite linear;
         z-index: 5;
         pointer-events: none;
+    }
+
+    /* ═══════════════════════════════════════════════════════════════════════
+       WS6: IMMERSIVE MODE (Desktop Only)
+       ═══════════════════════════════════════════════════════════════════════ */
+    .immersive-backdrop {
+        position: fixed; inset: 0;
+        z-index: 99999999;
+        background: #000;
+        display: flex; flex-direction: column;
+        overflow: hidden;
+    }
+
+    .immersive-bg {
+        position: absolute; inset: -100px;
+        z-index: 0;
+        transition: opacity 0.5s ease;
+    }
+    .immersive-bg.hidden { opacity: 0; }
+    .immersive-bg-img {
+        width: 100%; height: 100%;
+        object-fit: cover;
+        filter: blur(80px) brightness(0.3) saturate(1.4);
+        transform: scale(1.3);
+    }
+
+    .immersive-close-btn {
+        position: absolute; top: 24px; right: 24px;
+        z-index: 10;
+        background: rgba(255,255,255,0.08);
+        border: 1px solid rgba(255,255,255,0.12);
+        border-radius: 50%;
+        width: 48px; height: 48px;
+        display: flex; align-items: center; justify-content: center;
+        color: rgba(255,255,255,0.8);
+        cursor: pointer;
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+    }
+    .immersive-close-btn:hover {
+        background: rgba(255,255,255,0.15);
+        color: white;
+        transform: scale(1.05);
+    }
+
+    .immersive-vis-toggle-btn {
+        position: absolute; top: 24px; left: 24px;
+        z-index: 10;
+        background: rgba(255,255,255,0.08);
+        border: 1px solid rgba(255,255,255,0.12);
+        border-radius: 50%;
+        width: 48px; height: 48px;
+        display: flex; align-items: center; justify-content: center;
+        color: rgba(255,255,255,0.8);
+        cursor: pointer;
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+    }
+    .immersive-vis-toggle-btn:hover {
+        background: rgba(255,255,255,0.15);
+        color: #fff;
+        transform: scale(1.05);
+    }
+    .immersive-vis-toggle-btn.active {
+        background: rgba(255,255,255,0.25);
+        color: #fff;
+        border-color: rgba(255,255,255,0.4);
+        box-shadow: 0 0 15px rgba(255,255,255,0.2);
+    }
+
+    .immersive-content {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 64px;
+        padding: 60px 80px 0;
+        position: relative; z-index: 1;
+        min-height: 0;
+    }
+
+    .immersive-art-section {
+        display: flex; flex-direction: column;
+        align-items: center; gap: 24px;
+        flex-shrink: 0;
+        max-width: 380px;
+    }
+    .immersive-cover {
+        width: 340px; height: 340px;
+        border-radius: 16px;
+        object-fit: cover;
+        box-shadow: 0 32px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.08);
+        transition: transform 0.4s ease;
+    }
+    .immersive-cover:hover { transform: scale(1.02); }
+
+    .immersive-track-info { text-align: center; max-width: 340px; }
+    .immersive-title {
+        font-size: 22px; font-weight: 800;
+        color: white;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        letter-spacing: -0.5px;
+    }
+    .immersive-artist {
+        font-size: 15px; font-weight: 500;
+        color: rgba(255,255,255,0.55);
+        margin-top: 4px;
+    }
+
+    .immersive-lyrics-section {
+        flex: 1;
+        max-width: 550px;
+        max-height: calc(100vh - 220px);
+        display: flex; flex-direction: column;
+        min-height: 0;
+    }
+    .immersive-lyrics-scroll {
+        overflow-y: auto;
+        padding: 40px 0;
+        scroll-behavior: smooth;
+        mask-image: linear-gradient(transparent, black 15%, black 85%, transparent);
+        -webkit-mask-image: linear-gradient(transparent, black 15%, black 85%, transparent);
+    }
+    .immersive-lyrics-scroll::-webkit-scrollbar { display: none; }
+
+    .immersive-lyric-line {
+        font-size: 32px;
+        font-weight: 700;
+        color: rgba(255,255,255,0.25);
+        padding: 14px 0;
+        line-height: 1.4;
+        letter-spacing: -0.5px;
+        cursor: pointer;
+        transition: color 0.4s ease, transform 0.4s ease, opacity 0.4s ease;
+    }
+    .immersive-lyric-line.active {
+        color: white;
+        font-weight: 900;
+        font-size: 36px;
+        transform: scale(1.05);
+        transform-origin: left center;
+        text-shadow: 0 0 40px rgba(255,255,255,0.4);
+    }
+    .immersive-lyric-line.past {
+        color: rgba(255,255,255,0.35);
+    }
+    .immersive-lyric-line:hover:not(.active) {
+        color: rgba(255,255,255,0.5);
+    }
+
+    .immersive-controls {
+        position: relative; z-index: 2;
+        padding: 20px 80px 32px;
+        background: linear-gradient(transparent, rgba(0,0,0,0.7));
+    }
+    .immersive-progress-row {
+        display: flex; align-items: center; gap: 12px;
+        margin-bottom: 16px;
+    }
+    .immersive-time {
+        font-size: 12px; color: rgba(255,255,255,0.5);
+        font-weight: 600; min-width: 40px;
+        font-variant-numeric: tabular-nums;
+    }
+    .immersive-progress-track {
+        flex: 1; height: 4px;
+        background: rgba(255,255,255,0.12);
+        border-radius: 4px;
+        overflow: hidden;
+    }
+    .immersive-progress-fill {
+        height: 100%;
+        background: white;
+        border-radius: 4px;
+        transition: width 0.1s linear;
+    }
+
+    .immersive-buttons {
+        display: flex; align-items: center;
+        justify-content: center; gap: 32px;
+    }
+    .immersive-btn {
+        color: rgba(255,255,255,0.6) !important;
+        transition: color 0.2s, transform 0.2s !important;
+    }
+    .immersive-btn:hover { color: white !important; transform: scale(1.1); }
+    .immersive-btn.active { color: var(--accent-color) !important; }
+
+    .immersive-play-btn {
+        width: 64px; height: 64px;
+        border-radius: 50%;
+        background: white;
+        color: black;
+        border: none;
+        display: flex; align-items: center; justify-content: center;
+        cursor: pointer;
+        transition: transform 0.2s, box-shadow 0.2s;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    }
+    .immersive-play-btn:hover {
+        transform: scale(1.06);
+        box-shadow: 0 12px 32px rgba(0,0,0,0.5);
     }
 </style>

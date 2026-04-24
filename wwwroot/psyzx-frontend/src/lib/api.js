@@ -76,9 +76,16 @@ const parseLRC = (lrcText) => {
         if (match) {
             const minutes = parseFloat(match[1]);
             const seconds = parseFloat(match[2]);
+            const timestamp = (minutes * 60) + seconds;
             const cleanText = line.replace(timeRegex, "").trim();
             if (cleanText) {
-                parsedLyrics.push({ t: (minutes * 60) + seconds, text: cleanText });
+                // WS10: Filter out metadata lines that sit at t=0 and contain only
+                // symbols, brackets, or placeholder chars like ♪ — these highlight
+                // immediately before the singer starts, causing the "out of sync" feel.
+                if (timestamp < 0.5 && /^[♪♫♬◆\[\]\(\)\{\}\-_~*\s]+$/.test(cleanText)) {
+                    continue;
+                }
+                parsedLyrics.push({ t: timestamp, text: cleanText });
             }
         }
     }
@@ -207,8 +214,9 @@ export const fetchLyricsOnFrontend = async (trackId, artist, title) => {
         // Fallback for Plain Lyrics (Genius, OVH, Lyrist, Popcat)
         if (!finalLyrics || finalLyrics.length === 0) {
             const lines = lyricsText.split('\n').filter(l => l.trim().length > 0);
-            // Simulating timestamps for plain text (3 seconds per line)
-            finalLyrics = lines.map((l, i) => ({ t: i * 3, text: l.trim() }));
+            // WS10: Start at t=5s (typical song intro) with 4s per line for a more
+            // realistic pace. This avoids the first lyric highlighting immediately.
+            finalLyrics = lines.map((l, i) => ({ t: 5 + (i * 4), text: l.trim() }));
         }
         
         // 2. Save result to Cache
@@ -413,7 +421,7 @@ export const api = {
 
     async getPlaylists() {
         try {
-            const res = await this.fetchWithTimeout(`/Playlists?v=${get(appSessionVersion)}`);
+            const res = await this.fetchWithTimeout(`/Playlists?v=${get(appSessionVersion)}&_t=${Date.now()}`);
             if (!res.ok) throw new Error('SERVER_ERROR');
             return await res.json();
         } catch {
@@ -423,7 +431,7 @@ export const api = {
 
     async getPlaylist(id) {
         try {
-            const res = await this.fetchWithTimeout(`/Playlists/${id}?v=${get(appSessionVersion)}`);
+            const res = await this.fetchWithTimeout(`/Playlists/${id}?v=${get(appSessionVersion)}&_t=${Date.now()}`);
             if (!res.ok) throw new Error('SERVER_ERROR');
             return await res.json();
         } catch {
@@ -463,11 +471,35 @@ export const api = {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ trackId })
             });
-            if (res.ok) playlistUpdateSignal.update(n => n + 1);
+            if (res.ok) {
+                playlistUpdateSignal.update(n => n + 1);
+                // WS4: Fire event so mounted Playlist components refresh immediately
+                window.dispatchEvent(new CustomEvent('playlist-tracks-changed', { detail: { playlistId } }));
+            }
             return res.ok;
         } catch {
             return false;
         }
+    },
+
+    async addTracksToPlaylist(playlistId, trackIds) {
+        let successCount = 0;
+        for (const trackId of trackIds) {
+            try {
+                const res = await this.fetchWithTimeout(`/Playlists/${playlistId}/tracks`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ trackId })
+                });
+                if (res.ok) successCount++;
+            } catch { /* continue with remaining tracks */ }
+        }
+        if (successCount > 0) {
+            playlistUpdateSignal.update(n => n + 1);
+            // WS4: Fire event so mounted Playlist components refresh immediately
+            window.dispatchEvent(new CustomEvent('playlist-tracks-changed', { detail: { playlistId } }));
+        }
+        return successCount;
     },
 
     async removeTrackFromPlaylist(playlistId, trackId) {

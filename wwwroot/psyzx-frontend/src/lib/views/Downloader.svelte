@@ -2,6 +2,7 @@
     import { onMount, onDestroy } from 'svelte';
     import { fade } from 'svelte/transition';
     import { api } from '../api.js';
+    import { activeDownloads, appSessionVersion } from '../../store.js';
 
     let dlUrl = '';
     let queueStatus = 'Server Ready';
@@ -23,16 +24,39 @@
         } catch(e) {}
     }
 
+    let wasProcessing = false;
+
     const updateQueue = async () => {
         try {
             const data = await api.getQueue();
             if (data) {
                 if (data.active > 0 || data.queued > 0) {
                     isProcessing = true;
+                    wasProcessing = true;
                     queueStatus = `<div style="color: #fbbf24; margin-bottom: 8px;">⚙️ Processing: ${data.active} | ⏳ Queued: ${data.queued}</div><div style"">🎵 Track: ${data.currentTrack || "Fetching metadata..."}</div>`;
+                    
+                    // Update activeDownloads store for Library grid spinners
+                    if (data.currentTrack) {
+                        activeDownloads.update(dl => {
+                            // Prevent duplicates — replace if same track name
+                            const exists = dl.find(d => d.name === data.currentTrack);
+                            if (!exists) {
+                                return [...dl, { id: `dl-${Date.now()}`, name: data.currentTrack, coverPath: null, progress: 0, type: 'album' }];
+                            }
+                            return dl;
+                        });
+                    }
                 } else {
                     isProcessing = false;
                     queueStatus = `Server Ready`;
+                    
+                    // Download just finished — trigger library refresh
+                    if (wasProcessing) {
+                        wasProcessing = false;
+                        activeDownloads.set([]); // Clear spinner cards
+                        appSessionVersion.set(Date.now()); // Force reactive image refreshes
+                        window.dispatchEvent(new CustomEvent('library-updated'));
+                    }
                 }
             }
         } catch(e) {}

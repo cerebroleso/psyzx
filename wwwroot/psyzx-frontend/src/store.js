@@ -15,8 +15,36 @@ export const currentPlaylist = writable([]);
 export const currentIndex = writable(0);
 export const isPlaying = writable(false);
 
-export const isShuffle = writable(false);
-export const isRepeat = writable(false);
+// Helpers for initial state (must be declared before first use)
+const getStorageBool = (key, defaultVal) => {
+    if (typeof window !== 'undefined') {
+        const saved = localStorage.getItem(key);
+        if (saved !== null) return saved === 'true';
+    }
+    return defaultVal;
+};
+
+const getStorageString = (key, defaultVal) => {
+    if (typeof window !== 'undefined') {
+        return localStorage.getItem(key) || defaultVal;
+    }
+    return defaultVal;
+};
+
+const getStorageJSON = (key, defaultVal) => {
+    if (typeof window !== 'undefined') {
+        const saved = localStorage.getItem(key);
+        try {
+            return saved ? JSON.parse(saved) : defaultVal;
+        } catch (e) {
+            return defaultVal;
+        }
+    }
+    return defaultVal;
+};
+
+export const isShuffle = writable(getStorageBool('psyzx_shuffle', false));
+export const isRepeat = writable(getStorageString('psyzx_repeat', 'off')); // 'off' | 'all' | 'one'
 export const shuffleHistory = writable([]);
 export const shuffleFuture = writable([]);
 export const userQueue = writable([]);
@@ -28,6 +56,12 @@ export const playerCurrentTime = writable(0);
 export const playerDuration = writable(0);
 
 export const accentColor = writable('rgb(181, 52, 209)');
+
+// Search filter persistence
+export const searchFilter = writable(getStorageString('psyzx_search_filter', 'all')); // 'all' | 'artists' | 'albums' | 'tracks'
+
+// Active downloads (array of { id, name, coverPath, progress, type })
+export const activeDownloads = writable([]);
 
 export const totalCacheSize = writable('0 MB');
 export const cachedTrackIds = writable(new Set());
@@ -84,22 +118,6 @@ export const refreshOfflineCache = async () => {
 
 refreshOfflineCache();
 
-// Helpers for initial state
-const getStorageBool = (key, defaultVal) => {
-    if (typeof window !== 'undefined') {
-        const saved = localStorage.getItem(key);
-        if (saved !== null) return saved === 'true';
-    }
-    return defaultVal;
-};
-
-const getStorageString = (key, defaultVal) => {
-    if (typeof window !== 'undefined') {
-        return localStorage.getItem(key) || defaultVal;
-    }
-    return defaultVal;
-};
-
 export const isCacheDebugActive = writable(getStorageBool('psyzx_cache_debug', false));
 export const isGaplessModeActive = writable(getStorageBool('psyzx_gapless', false));
 export const isGlobalColorActive = writable(getStorageBool('psyzx_global_color', false));
@@ -131,6 +149,9 @@ bindToLocal(isCacheDebugActive, 'psyzx_cache_debug');
 bindToLocal(isGlobalColorActive, 'psyzx_global_color');
 bindToLocal(isMaxGlassActive, 'psyzx_max_glass');
 bindToLocal(isDesktopSwapActive, 'psyzx_desktop_swap');
+bindToLocal(isShuffle, 'psyzx_shuffle');
+bindToLocal(isRepeat, 'psyzx_repeat');
+bindToLocal(searchFilter, 'psyzx_search_filter');
 
 bindToLocal(visEnabled, 'psyzx_vis_enabled', true);
 bindToLocal(visIntensity, 'psyzx_vis_intensity', true);
@@ -142,19 +163,6 @@ bindToLocal(visDetail, 'psyzx_vis_detail', true);
 bindToLocal(visSides, 'psyzx_vis_sides', true);
 
 // eq
-
-// Helper to get JSON from localStorage safely
-const getStorageJSON = (key, defaultVal) => {
-    if (typeof window !== 'undefined') {
-        const saved = localStorage.getItem(key);
-        try {
-            return saved ? JSON.parse(saved) : defaultVal;
-        } catch (e) {
-            return defaultVal;
-        }
-    }
-    return defaultVal;
-};
 
 export const eqPreset = writable(getStorageString('psyzx_eq_preset', 'Flat'));
 export const eqBandValues = writable(getStorageJSON('psyzx_eq_bands', [0, 0, 0, 0, 0, 0]));
