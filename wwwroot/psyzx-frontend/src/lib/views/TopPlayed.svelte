@@ -1,7 +1,7 @@
 <script>
     import { get } from 'svelte/store';
     import { allTracks, albumsMap, currentPlaylist, currentIndex, isPlaying, isShuffle, shuffleHistory, userQueue } from '../../store.js';
-    import { togglePlayGlobal } from '../audio.js';
+    import { togglePlayGlobal, unlockAudioContext } from '../audio.js';
     import { flip } from 'svelte/animate';
     import { fade, fly } from 'svelte/transition';
 
@@ -11,6 +11,7 @@
     $: isPlayingPlaylist = $isPlaying && $currentPlaylist.length === topTracks.length && $currentPlaylist[0]?.id === topTracks[0]?.id;
 
     const togglePlayView = () => {
+        if (typeof window !== "undefined") unlockAudioContext();
         if (isPlayingPlaylist) {
             togglePlayGlobal();
         } else {
@@ -31,7 +32,7 @@
         else { currentIndex.set(0); }
     };
 
-    const playSpecificTrack = (index) => { shuffleHistory.set([]); currentPlaylist.set(topTracks); currentIndex.set(index); };
+    const playSpecificTrack = (index) => { if (typeof window !== "undefined") unlockAudioContext(); shuffleHistory.set([]); currentPlaylist.set(topTracks); currentIndex.set(index); };
 
     function swipeToQueue(node, track) {
         let startX = 0, currentX = 0, isSwiping = false, hasVibrated = false;

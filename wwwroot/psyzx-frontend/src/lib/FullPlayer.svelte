@@ -707,6 +707,13 @@
     $: if (isOpen) {
         isClosing = false; isClosingByDrag = false;
         dragY = 0; startY = 0; isDragging = false;
+        if (typeof document !== 'undefined' && isMobile) {
+            document.body.classList.add('modal-open');
+        }
+    } else {
+        if (typeof document !== 'undefined') {
+            document.body.classList.remove('modal-open');
+        }
     }
 
     $: if (!isOpen && !isClosingByDrag) {
@@ -930,7 +937,7 @@
     };
 
     const togglePlay = () => togglePlayGlobal();
-    const playNext = () => playNextGlobal(api);
+    const playNext = (isManual = false) => playNextGlobal(api, isManual);
     const playPrev = () => playPrevGlobal();
 
     const triggerScrollToTop = () => {
@@ -945,13 +952,17 @@
 
     const goArtist = () => {
         if (album && album.artistId) {
-            handleClose(); window.location.hash = `#artist/${album.artistId}`; triggerScrollToTop();
+            if (isMobile) handleClose(); 
+            window.location.hash = `#artist/${album.artistId}`; 
+            triggerScrollToTop();
         }
     };
     
     const goAlbum = () => {
         if (track && track.albumId) {
-            handleClose(); window.location.hash = `#album/${track.albumId}`; triggerScrollToTop();
+            if (isMobile) handleClose(); 
+            window.location.hash = `#album/${track.albumId}`; 
+            triggerScrollToTop();
         }
     };
 
@@ -1213,7 +1224,7 @@
 {#if isOpen}
     <div 
         class="player-transition-wrapper" 
-        style="position: fixed; inset: 0; z-index: 9990; pointer-events: none;"
+        style="position: fixed; inset: 0; z-index: 10002; pointer-events: none;"
         in:fly={{ y: '100%', duration: 550, easing: quintOut, opacity: 1 }}
         out:fly={{ y: '100%', duration: isClosingByDrag ? 15 : 350, easing: isClosingByDrag ? linear : expoIn, opacity: 1 }}
     >
@@ -1384,7 +1395,7 @@
                         {/if}
                     </button>
 
-                    <button aria-label="Next" class="btn-icon" on:click={playNext}>
+                    <button aria-label="Next" class="btn-icon" on:click={() => playNext(true)}>
                         <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4"></polygon><line x1="19" x2="19" y1="5" y2="19"></line></svg>
                     </button>
                     <button aria-label="Repeat" class="btn-icon" class:active={$isRepeat !== 'off'} on:click={() => { const cycle = { off: 'all', all: 'one', one: 'off' }; isRepeat.set(cycle[$isRepeat] || 'off'); }} style="position: relative;">
@@ -1626,7 +1637,7 @@
                         <svg width="32" height="32" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
                     {/if}
                 </button>
-                <button aria-label="Next" class="btn-icon immersive-btn" on:click={playNext}>
+                <button aria-label="Next" class="btn-icon immersive-btn" on:click={() => playNext(true)}>
                     <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 4 15 12 5 20 5 4"></polygon><line x1="19" x2="19" y1="5" y2="19"></line></svg>
                 </button>
                 <button aria-label="Repeat" class="btn-icon immersive-btn" class:active={$isRepeat !== 'off'} on:click={() => { const cycle = { off: 'all', all: 'one', one: 'off' }; isRepeat.set(cycle[$isRepeat] || 'off'); }}>
@@ -1865,6 +1876,7 @@
         color: white !important;
         overflow: hidden !important; 
         isolation: isolate !important;
+        z-index: 10001 !important;
         will-change: transform;
         -webkit-backface-visibility: hidden;
         backface-visibility: hidden;

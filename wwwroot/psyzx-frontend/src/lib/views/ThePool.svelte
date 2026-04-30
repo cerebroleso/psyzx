@@ -2,16 +2,17 @@
     import { get } from 'svelte/store';
     import { allTracks, albumsMap, currentPlaylist, currentIndex, isPlaying, isShuffle, shuffleHistory, userQueue } from '../../store.js';
     import { formatTime } from '../utils.js';
-    import { togglePlayGlobal } from '../audio.js';
+    import { togglePlayGlobal, unlockAudioContext } from '../audio.js';
     import { flip } from 'svelte/animate';
     import { fade, fly } from 'svelte/transition';
 
-    $: poolTracks = [...$allTracks].sort((a, b) => a.title.localeCompare(b.title));
+    $: poolTracks = [...$allTracks].sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
     
     // FIX: Reattività corretta per l'icona Play/Pause
     $: isPlayingPlaylist = $isPlaying && $currentPlaylist.length > 0 && poolTracks.some(t => t.id === $currentPlaylist[$currentIndex]?.id);
 
     const togglePlayView = () => {
+        if (typeof window !== "undefined") unlockAudioContext();
         if (isPlayingPlaylist) {
             togglePlayGlobal();
         } else {
@@ -32,7 +33,7 @@
         else { currentIndex.set(0); }
     };
 
-    const playSpecificTrack = (index) => { shuffleHistory.set([]); currentPlaylist.set(poolTracks); currentIndex.set(index); };
+    const playSpecificTrack = (index) => { if (typeof window !== "undefined") unlockAudioContext(); shuffleHistory.set([]); currentPlaylist.set(poolTracks); currentIndex.set(index); };
 
     function swipeToQueue(node, track) {
         // ... (stessa funzione di swipe di ThePool che avevi prima, omessa per abbreviare ma immutata, solo colore hover: var(--accent-color))

@@ -71,13 +71,13 @@ export let isEngineInitialized = false;
 export let isWebAudioMode;
 
 {
-    const saved = typeof window !== 'undefined' ? localStorage.getItem('psyzx_webaudio_gapless') : null;
-    isWebAudioMode = saved === null ? true : saved === 'true';
+    const saved = typeof window !== 'undefined' ? localStorage.getItem('psyzx_gapless') : null;
+    isWebAudioMode = saved === null ? false : saved === 'true';
 }
 
 export const setWebAudioGaplessMode = (enabled) => {
     isWebAudioMode = enabled;
-    if (typeof window !== 'undefined') localStorage.setItem('psyzx_webaudio_gapless', String(enabled));
+    if (typeof window !== 'undefined') localStorage.setItem('psyzx_gapless', String(enabled));
 };
 
 export const getBufferedPct = () => {
@@ -1390,7 +1390,7 @@ export const loadAndPlayUrl = async (url) => {
     radioSeedTrackId = null;
 
     if (!isEngineInitialized) unlockAudioContext();
-    if (audioCtx?.state === 'suspended') await audioCtx.resume().catch(() => { });
+    const resumePromise = audioCtx?.state === 'suspended' ? audioCtx.resume().catch(() => { }) : Promise.resolve();
 
     if (mseActive) teardownMse();
 
@@ -1439,6 +1439,8 @@ export const loadAndPlayUrl = async (url) => {
     };
     try { startHtml5(); } catch { }
 
+    await resumePromise;
+
     if (!isWebAudioMode) return;
 
     const currentPos = get(playerCurrentTime);
@@ -1452,9 +1454,9 @@ export const loadAndPlayUrl = async (url) => {
         teardownMse();
         if (currentLoadId === pendingLoadId) stopWebAudio();
         currentBuffer = null;
-        isPlaying.set(false);
         isBuffering.set(true);
         startBufferSound();
+        isPlaying.set(false);
 
         // FIX: Reset time and duration instantly so UI doesn't hold onto the old track's values
         playerCurrentTime.set(0);
@@ -1556,14 +1558,15 @@ export const togglePlayGlobal = async () => {
     } else {
         if (!html5ActivePlayer) return;
         if (html5ActivePlayer.paused) {
-            await playStateCue(false);
-            if (audioCtx?.state === 'suspended') await audioCtx.resume().catch(() => { });
+            const cuePromise = playStateCue(false);
+            const resumePromise = audioCtx?.state === 'suspended' ? audioCtx.resume().catch(() => { }) : Promise.resolve();
             const aGain = html5ActivePlayer === playerA ? gainA : gainB;
             if (aGain && audioCtx) {
                 aGain.gain.cancelScheduledValues(audioCtx.currentTime);
                 aGain.gain.value = 1;
             }
             const p = html5ActivePlayer.play(); if (p) p.catch(() => { });
+            await Promise.all([cuePromise, resumePromise]);
             isPlaying.set(true);
             startSyntheticClock();
             const dur = html5ActivePlayer.duration;
@@ -1668,6 +1671,7 @@ const makeCueTone = () => {
 };
 
 export const playStateCue = async (isPausing) => {
+    console.trace('playStateCue called', isPausing);
     if (!audioCtx) return;
     try {
         if (audioCtx.state === 'suspended') await audioCtx.resume();
@@ -1683,6 +1687,7 @@ export const playStateCue = async (isPausing) => {
 };
 
 export const playSkipCue = async (dir) => {
+    console.trace('playSkipCue called', dir);
     if (!audioCtx) return;
     try {
         if (audioCtx.state === 'suspended') await audioCtx.resume();
@@ -1849,11 +1854,10 @@ export const playNextGlobal = async (api, forceManualCue = false) => {
 
     if (!playlist.length) return;
 
-    const currentTime = get(playerCurrentTime);
-    const duration = get(playerDuration);
-    const isAutoAdvance = duration > 0 && (duration - currentTime <= 0.5);
-
-    if (!isAutoAdvance || forceManualCue) playSkipCue('next');
+    // BUGFIX 5: Explicitly rely on the UI flagging this as a manual action,
+    // rather than guessing based on floating-point timestamps which desync
+    // when physical duration mismatches metadata duration.
+    if (forceManualCue) playSkipCue('next');
 
     if (queue.length > 0) {
         const nextTrack = queue[0];

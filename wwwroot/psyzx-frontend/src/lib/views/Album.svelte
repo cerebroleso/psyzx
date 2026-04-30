@@ -137,21 +137,20 @@
         setTimeout(() => (mounted = true), 50);
     });
 
-    // 2. REFACTORED TO USE NEW ENGINE
-    const togglePlayAlbum = async () => {
+    const togglePlayAlbum = () => {
         if (typeof window !== "undefined") {
-            await unlockAudioContext(); // Await the unified setup/prime
+            unlockAudioContext(); 
         }
 
         if (isPlayingAlbum) {
-            togglePlayGlobal(); // Replaces querySelector('audio').pause()
+            togglePlayGlobal(); 
         } else {
             if (
                 $currentPlaylist.some((t) =>
                     tracks.find((pt) => pt.id === t.id),
                 )
             ) {
-                togglePlayGlobal(); // Replaces querySelector('audio').play()
+                togglePlayGlobal(); 
             } else {
                 currentPlaylist.set(tracks);
                 if ($isShuffle) {
@@ -175,14 +174,13 @@
         }
     };
 
-    // 3. REFACTORED TO USE NEW ENGINE
-    const playSpecificTrack = async (index) => {
+    const playSpecificTrack = (index) => {
         if (typeof window !== "undefined") {
-            await unlockAudioContext(); // Await the unified setup/prime
+            unlockAudioContext();
         }
         shuffleHistory.set([]);
         shuffleFuture.set([]);
-        userQueue.set([]); // Clear queue explicitly when picking a specific track to play immediately
+        userQueue.set([]); 
         currentPlaylist.set(tracks);
         currentIndex.set(index);
     };
@@ -219,18 +217,14 @@
         }
     };
 
-    // Context Menu State
     let contextMenu = { show: false, x: 0, y: 0, track: null };
 
     const openContextMenu = (e, track) => {
-        e.preventDefault(); // Block default browser menu
+        e.preventDefault(); 
         let x = e.clientX;
         let y = e.clientY;
-
-        // Prevent menu from clipping off-screen
         if (x + 220 > window.innerWidth) x -= 220;
         if (y + 180 > window.innerHeight) y -= 180;
-
         contextMenu = { show: true, x, y, track };
     };
 
@@ -238,7 +232,6 @@
         contextMenu.show = false;
     };
 
-    // Global click listener to close menu
     const handleGlobalClick = () => {
         if (contextMenu.show) closeContextMenu();
     };
@@ -287,7 +280,6 @@
 
             node.style.transform = `translate3d(${currentX}px, 0, 0)`;
 
-            // Swipe Right (Add to Queue)
             if (currentX > 0) {
                 bgRight.style.width = "0px";
                 bgLeft.style.width = `${currentX}px`;
@@ -305,7 +297,6 @@
                     hasVibrated = false;
                 }
             }
-            // Swipe Left (Add to Playlist)
             else if (currentX < 0) {
                 bgLeft.style.width = "0px";
                 const width = Math.abs(currentX);
@@ -364,206 +355,260 @@
         };
     }
 
-    // ─── PS2 TOWER SCENE ────────────────────────────────────────────────
-    let hoveredTower = null; // { title, playCount, x, y }
+    // ─── FULLSCREEN PS2 REACTIVE TOWER SCENE ─────────────────────────────
+    let hoveredTower = null; 
 
-    /** Svelte action: runs when the canvas is mounted, tears down on destroy */
     function initPS2(canvas) {
-        // ── Scene ──────────────────────────────────────────────────────
+        // ── Basic Setup ────────────────────────────
         const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x000000);
-        scene.fog = new THREE.FogExp2(0x000000, 0.016);
+        scene.background = new THREE.Color( 0x050505 );
+        
+        // Multi-layered Real PS2 Fog Simulation
+        scene.fog = new THREE.FogExp2(0x050505, 0.015);
 
-        // ── Renderer ───────────────────────────────────────────────────
-        const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-        renderer.toneMapping = THREE.ReinhardToneMapping;
-        renderer.toneMappingExposure = 1.5;
+        // Standard Top-Down Perspective Camera from your recreation
+        const camera = new THREE.PerspectiveCamera( 25, window.innerWidth / window.innerHeight, 1, 1100 );
+        const cameraTarget = new THREE.Vector3(0, 0, 0);
+        camera.position.set(0, 0, 107);
+        camera.lookAt(cameraTarget);
 
-        // ── Camera ─────────────────────────────────────────────────────
-        const camera = new THREE.PerspectiveCamera(60, 2, 0.1, 500);
+        const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.setSize(window.innerWidth, window.innerHeight);
 
-        // ── Grid maths ─────────────────────────────────────────────────
-        const COLS      = Math.min(4, tracks.length);
-        const ROWS      = Math.ceil(tracks.length / COLS);
-        const SPACING_X = 9;
-        const SPACING_Z = 9;
-        const GRID_DEPTH = (ROWS - 1) * SPACING_Z;
+        // Lighting
+        const spotLight = new THREE.SpotLight( 0xffffff, 1.2 );
+        spotLight.position.set( 0, 0, 100 );
+        scene.add( spotLight );
+        scene.add(new THREE.AmbientLight(0x404040, 1)); // Soft ambient to see colors
 
-        // Camera sits behind/above one end, looking into the receding fog
-        camera.position.set(0, 22, GRID_DEPTH / 2 + 38);
-        camera.lookAt(0, 8, -GRID_DEPTH / 4);
+        // ── Reactive Track Pillars ──────────────────
+        const trackMeshes = [];
+        
+        // Layout perfectly centered grid 
+        const cols = Math.ceil(Math.sqrt(tracks.length));
+        const rows = Math.ceil(tracks.length / cols);
+        const spacing = 1.4; 
+        
+        const offsetX = ((cols - 1) * spacing) / 2;
+        const offsetY = ((rows - 1) * spacing) / 2;
 
-        // ── Towers (InstancedMesh) ──────────────────────────────────────
-        const towerGeo = new THREE.BoxGeometry(4, 1, 4);
-        const towerMat = new THREE.MeshStandardMaterial({
-            color: 0xd0d0d0,
-            roughness: 0.92,
-            metalness: 0.0,
-        });
-        const mesh = new THREE.InstancedMesh(towerGeo, towerMat, tracks.length);
-        mesh.frustumCulled = false;
-        scene.add(mesh);
-
-        const dummy = new THREE.Object3D();
         tracks.forEach((track, i) => {
-            const col    = i % COLS;
-            const row    = Math.floor(i / COLS);
-            const height = maxPlay > 0
-                ? ((track.playCount || 0) / maxPlay) * 160 + 8
-                : 8;
-            const x = (col - (COLS - 1) / 2) * SPACING_X;
-            const z = GRID_DEPTH / 2 - row * SPACING_Z;
+            const col = i % cols;
+            const row = Math.floor(i / cols);
 
-            dummy.position.set(x, height / 2, z);
-            dummy.scale.set(1, height, 1);
-            dummy.updateMatrix();
-            mesh.setMatrixAt(i, dummy.matrix);
+            // Reactive Height based on Playcount logic
+            const zDepth = maxPlay > 0 
+                ? 5 + ((track.playCount || 0) / maxPlay) * 15
+                : 5 + Math.random() * 5;
+
+            const geometry = new THREE.BoxGeometry(1.1, 1.1, zDepth);
+            const ranGrey = new THREE.Color(`hsl(189, 0%, ${40 + Math.floor(Math.random() * 30)}%)`);
+            
+            const material = new THREE.MeshPhongMaterial({
+                color: ranGrey, 
+                transparent: true, 
+                refractionRatio: 0.7, 
+                reflectivity: 0.9,
+                emissive: ranGrey,
+                emissiveIntensity: 0.15
+            });
+
+            const cube = new THREE.Mesh(geometry, material);
+            // Arrange flatly and stretch outward in Z like original
+            cube.position.set( (col * spacing) - offsetX, (row * spacing) - offsetY, 70 );
+            
+            cube.userData = { 
+                track: track, 
+                index: i,
+                baseColor: ranGrey.clone()
+            };
+
+            scene.add(cube);
+            trackMeshes.push(cube);
         });
-        mesh.instanceMatrix.needsUpdate = true;
 
-        // ── Particle dust ──────────────────────────────────────────────
-        const PARTICLE_COUNT = 450;
-        const pPos = new Float32Array(PARTICLE_COUNT * 3);
-        for (let i = 0; i < PARTICLE_COUNT; i++) {
-            pPos[i * 3]     = (Math.random() - 0.5) * 160;
-            pPos[i * 3 + 1] = (Math.random() - 0.5) * 60 + 20;
-            pPos[i * 3 + 2] = (Math.random() - 0.5) * (GRID_DEPTH + 90);
-        }
-        const particleGeo = new THREE.BufferGeometry();
-        particleGeo.setAttribute('position', new THREE.BufferAttribute(pPos, 3));
-        const particleMat = new THREE.PointsMaterial({
-            color: 0xaabbff,
-            size: 0.35,
+        // ── Authentic Glass Boxes ───────────────────
+        const glassBoxGeo = new THREE.BoxGeometry( 1, 1, 1 );
+        const glassBoxMat = new THREE.MeshPhongMaterial( { color: 0x474141, transparent: true, opacity: 0.8 } ); 
+
+        const glassCubes = [
+            new THREE.Mesh(glassBoxGeo, glassBoxMat),
+            new THREE.Mesh(glassBoxGeo, glassBoxMat),
+            new THREE.Mesh(glassBoxGeo, glassBoxMat),
+            new THREE.Mesh(glassBoxGeo, glassBoxMat),
+            new THREE.Mesh(glassBoxGeo, glassBoxMat)
+        ];
+        
+        glassCubes[0].position.set(-4, 1, 85);
+        glassCubes[1].position.set(3.5, 2, 86);
+        glassCubes[2].position.set(-0.5, .5, 81);
+        glassCubes[2].rotation.set(.3, .4, .1);
+        glassCubes[3].position.set(-2.8, -2, 88);
+        glassCubes[4].position.set(3, -1.3, 80);
+        
+        glassCubes.forEach(c => scene.add(c));
+
+        // ── Complex Fog Layers ──────────────────────
+        // Generating a soft smoke texture entirely through code
+        const texCanvas = document.createElement('canvas');
+        texCanvas.width = 128; texCanvas.height = 128;
+        const ctx = texCanvas.getContext('2d');
+        const grad = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+        grad.addColorStop(0, 'rgba(255, 255, 255, 0.15)');
+        grad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, 128, 128);
+        const smokeTex = new THREE.CanvasTexture(texCanvas);
+
+        const smokeGeo = new THREE.PlaneGeometry(35, 35);
+        const smokeMat = new THREE.MeshBasicMaterial({
+            map: smokeTex,
             transparent: true,
-            opacity: 0.75,
             blending: THREE.AdditiveBlending,
             depthWrite: false,
+            color: 0x2244bb // iconic PS2 blue tint
         });
-        scene.add(new THREE.Points(particleGeo, particleMat));
 
-        // ── Lights ─────────────────────────────────────────────────────
-        scene.add(new THREE.AmbientLight(0x080820, 1.2));
+        const fogPlanes = [];
+        for(let i=0; i<45; i++) {
+            const plane = new THREE.Mesh(smokeGeo, smokeMat);
+            plane.position.set(
+                (Math.random() - 0.5) * 60,
+                (Math.random() - 0.5) * 60,
+                80 + Math.random() * 25
+            );
+            plane.rotation.z = Math.random() * Math.PI * 2;
+            scene.add(plane);
+            fogPlanes.push({ mesh: plane, speed: (Math.random() * 0.002) + 0.001 });
+        }
 
-        const blueLight   = new THREE.PointLight(0x2244ff, 3.5, 130);
-        const purpleLight = new THREE.PointLight(0x9922cc, 2.2, 90);
-        scene.add(blueLight, purpleLight);
-
-        // ── Post-processing ────────────────────────────────────────────
-        const composer  = new EffectComposer(renderer);
+        // ── Post Processing (Bloom for highlights) ──
+        const composer = new EffectComposer(renderer);
         composer.addPass(new RenderPass(scene, camera));
-        const bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.75, 0.4, 0.82);
+        const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.8, 0.4, 0.85);
         composer.addPass(bloom);
 
-        // ── Resize helper ──────────────────────────────────────────────
-        const syncSize = () => {
-            const w = canvas.offsetWidth  || 800;
-            const h = canvas.offsetHeight || 440;
-            if (w === 0 || h === 0) return;
-            camera.aspect = w / h;
-            camera.updateProjectionMatrix();
-            renderer.setSize(w, h, false);
-            composer.setSize(w, h);
-            bloom.resolution.set(w, h);
-        };
-        syncSize();
-        const ro = new ResizeObserver(syncSize);
-        ro.observe(canvas);
-
-        // ── Raycasting (click + hover) ──────────────────────────────────
+        // ── Raycaster & Interactions ────────────────
         const raycaster = new THREE.Raycaster();
-        const mouse     = new THREE.Vector2();
+        const mouse = new THREE.Vector2();
+        let activeHoverMesh = null;
 
-        const getMouseNDC = (e) => {
-            const r = canvas.getBoundingClientRect();
-            mouse.x =  ((e.clientX - r.left) / r.width)  * 2 - 1;
-            mouse.y = -((e.clientY - r.top)  / r.height) * 2 + 1;
-        };
-
-        const onClick = (e) => {
-            getMouseNDC(e);
-            raycaster.setFromCamera(mouse, camera);
-            const hits = raycaster.intersectObject(mesh);
-            if (hits.length && hits[0].instanceId != null) {
-                playSpecificTrack(hits[0].instanceId);
-            }
+        const updateMouse = (e) => {
+            mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
         };
 
         const onMouseMove = (e) => {
-            getMouseNDC(e);
+            updateMouse(e);
             raycaster.setFromCamera(mouse, camera);
-            const hits = raycaster.intersectObject(mesh);
-            if (hits.length && hits[0].instanceId != null) {
-                const idx = hits[0].instanceId;
-                const r   = canvas.getBoundingClientRect();
-                hoveredTower = {
-                    title:     tracks[idx]?.title ?? '',
-                    playCount: tracks[idx]?.playCount ?? 0,
-                    x: e.clientX - r.left,
-                    y: e.clientY - r.top,
-                };
-                canvas.style.cursor = 'pointer';
+            
+            const intersects = raycaster.intersectObjects(trackMeshes);
+            
+            if (intersects.length > 0) {
+                const hitMesh = intersects[0].object;
+                
+                if (activeHoverMesh !== hitMesh) {
+                    // Reset old hover
+                    if (activeHoverMesh) {
+                        activeHoverMesh.material.emissive.copy(activeHoverMesh.userData.baseColor);
+                        activeHoverMesh.material.emissiveIntensity = 0.15;
+                    }
+                    // Apply new bold highlight
+                    activeHoverMesh = hitMesh;
+                    activeHoverMesh.material.emissive.setHex(0x00ffff); // Cyan hover glow
+                    activeHoverMesh.material.emissiveIntensity = 0.8;
+                    
+                    hoveredTower = {
+                        title: hitMesh.userData.track.title,
+                        playCount: hitMesh.userData.track.playCount || 0,
+                        x: e.clientX,
+                        y: e.clientY
+                    };
+                    canvas.style.cursor = 'pointer';
+                }
             } else {
-                hoveredTower = null;
-                canvas.style.cursor = 'default';
+                if (activeHoverMesh) {
+                    activeHoverMesh.material.emissive.copy(activeHoverMesh.userData.baseColor);
+                    activeHoverMesh.material.emissiveIntensity = 0.15;
+                    activeHoverMesh = null;
+                    hoveredTower = null;
+                    canvas.style.cursor = 'default';
+                }
             }
         };
 
-        canvas.addEventListener('click',     onClick);
-        canvas.addEventListener('mousemove', onMouseMove);
+        const onClick = (e) => {
+            if (activeHoverMesh) {
+                playSpecificTrack(tracks.findIndex(t => t.id === activeHoverMesh.userData.track.id));
+            }
+        };
 
-        // ── Animation loop ─────────────────────────────────────────────
-        const CAM_Z_START = camera.position.z;
-        const CAM_Z_END   = -GRID_DEPTH / 4;
-        let t = 0, raf;
+        window.addEventListener('mousemove', onMouseMove);
+        window.addEventListener('click', onClick);
+
+        // Resize handler for absolute fullscreen
+        const onResize = () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+        };
+        window.addEventListener('resize', onResize);
+
+        // ── Animation Loop ──────────────────────────
+        const clock = new THREE.Clock();
+        let t = 0;
+        let raf;
 
         const animate = () => {
-            raf = requestAnimationFrame(animate);
-            t += 0.004;
+            raf = requestAnimationFrame( animate );
+            t = clock.getElapsedTime();
 
-            // Sweeping point lights
-            blueLight.position.set(
-                Math.sin(t * 0.75) * 55,
-                36,
-                Math.cos(t * 0.45) * 38,
-            );
-            purpleLight.position.set(
-                Math.cos(t * 1.1)  * 44,
-                26,
-                Math.sin(t * 0.65) * 52,
-            );
+            // Glass rotation from Original
+            glassCubes[0].rotation.z -= 0.002;
+            glassCubes[0].rotation.x += 0.002;
+            glassCubes[1].rotation.x -= 0.002;
+            glassCubes[1].rotation.z -= 0.002;
+            glassCubes[2].rotation.x += 0.002;
+            glassCubes[3].rotation.x += 0.002;
+            glassCubes[3].rotation.y -= 0.002;
+            glassCubes[4].rotation.x += 0.002;
+            glassCubes[4].rotation.y -= 0.002;
 
-            // Particles drift toward the lens, reset when they pass
-            const pa = particleGeo.attributes.position.array;
-            for (let i = 0; i < PARTICLE_COUNT; i++) {
-                pa[i * 3 + 2] += 0.38;
-                if (pa[i * 3 + 2] > camera.position.z + 18)
-                    pa[i * 3 + 2] -= GRID_DEPTH + 90;
-            }
-            particleGeo.attributes.position.needsUpdate = true;
+            // Animate complex fog mist layers
+            fogPlanes.forEach(fp => {
+                fp.mesh.rotation.z += fp.speed;
+            });
 
-            // Slow forward pan, seamless loop
-            camera.position.z -= 0.014;
-            if (camera.position.z < CAM_Z_END) camera.position.z = CAM_Z_START;
+            // Camera float: Viewable statically until user closes, 
+            // drifting slowly in a figure-8 to give a living breathing feel
+            camera.position.x = Math.sin(t * 0.2) * 1.5;
+            camera.position.y = Math.cos(t * 0.1) * 1.5;
+            camera.lookAt(cameraTarget);
 
             composer.render();
         };
         animate();
 
-        // ── Cleanup ────────────────────────────────────────────────────
         return {
             destroy() {
                 cancelAnimationFrame(raf);
-                canvas.removeEventListener('click',     onClick);
-                canvas.removeEventListener('mousemove', onMouseMove);
-                ro.disconnect();
+                window.removeEventListener('mousemove', onMouseMove);
+                window.removeEventListener('click', onClick);
+                window.removeEventListener('resize', onResize);
                 renderer.dispose();
-                towerGeo.dispose();
-                towerMat.dispose();
-                particleGeo.dispose();
-                particleMat.dispose();
+                // Clear out geometries
+                glassBoxGeo.dispose();
+                glassBoxMat.dispose();
+                smokeGeo.dispose();
+                smokeMat.dispose();
+                trackMeshes.forEach(m => {
+                    m.geometry.dispose();
+                    m.material.dispose();
+                });
                 hoveredTower = null;
-            },
+            }
         };
     }
 
@@ -603,7 +648,6 @@
     };
 
     const addToPlaylist = async (playlistId) => {
-        // Support batch add from drag-and-drop multi-select
         if (tracksToAdd.length > 0) {
             const count = await api.addTracksToPlaylist(playlistId, tracksToAdd.map(t => t.id));
             if (count > 0) {
@@ -633,7 +677,6 @@
     let dragCount = 0;
     let tracksToAdd = [];
 
-    // Track multi-selection (desktop Ctrl/Cmd + click)
     const handleTrackSelect = (e, track, globalIndex) => {
         if (e.ctrlKey || e.metaKey) {
             e.preventDefault();
@@ -653,7 +696,6 @@
     };
 
     const handleDragStart = (e, track) => {
-        // Only allow drag on desktop (mouse events)
         if (e.touches) return;
 
         isDragging = true;
@@ -669,7 +711,6 @@
         e.dataTransfer.effectAllowed = 'copy';
         e.dataTransfer.setData('text/plain', JSON.stringify(draggedTracks.map(t => t.id)));
 
-        // Custom drag image
         const ghost = document.createElement('div');
         ghost.className = 'drag-ghost-el';
         ghost.textContent = dragCount > 1 ? `${dragCount} tracks` : track.title;
@@ -915,16 +956,28 @@
 
         {#if viewMode === "ps2"}
             <div
-                id="ps2-tower-container"
-                class="active-view"
-                in:fade={{ duration: 200 }}
+                use:portal
+                class="ps2-fullscreen-overlay"
+                in:fade={{ duration: 300 }}
+                out:fade={{ duration: 250 }}
             >
+                <button 
+                    class="btn-close-ps2" 
+                    on:click={() => viewMode = 'list'}
+                >
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                    Exit PS2 View
+                </button>
+
                 <canvas class="ps2-canvas" use:initPS2></canvas>
 
                 {#if hoveredTower}
                     <div
                         class="ps2-hud"
-                        style="left: {hoveredTower.x}px; top: {hoveredTower.y - 64}px;"
+                        style="left: {hoveredTower.x}px; top: {hoveredTower.y - 70}px;"
                     >
                         <span class="ps2-hud-title">{hoveredTower.title}</span>
                         <span class="ps2-hud-plays">{hoveredTower.playCount} plays</span>
@@ -1323,6 +1376,84 @@
 </div>
 
 <style>
+    /* ─── NEW FULLSCREEN PS2 STYLES ──────────────────────────── */
+    .ps2-fullscreen-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        background: #000;
+        z-index: 9999999;
+        overflow: hidden;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .btn-close-ps2 {
+        position: absolute;
+        top: 24px;
+        right: 24px;
+        z-index: 10000000;
+        background: rgba(255, 255, 255, 0.1);
+        color: white;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        padding: 10px 20px;
+        border-radius: 30px;
+        cursor: pointer;
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        font-weight: 600;
+        font-size: 14px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        transition: all 0.2s ease;
+    }
+    
+    .btn-close-ps2:hover {
+        background: rgba(255, 255, 255, 0.2);
+        transform: scale(1.05);
+    }
+
+    .ps2-canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+        cursor: default;
+    }
+
+    .ps2-hud {
+        position: absolute;
+        transform: translateX(-50%);
+        background: rgba(0, 0, 0, 0.9);
+        border: 1px solid rgba(0, 255, 255, 0.6);
+        border-radius: 8px;
+        padding: 6px 14px;
+        pointer-events: none;
+        white-space: nowrap;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+        box-shadow: 0 0 20px rgba(0, 255, 255, 0.3);
+        z-index: 10000000;
+    }
+    .ps2-hud-title {
+        color: #fff;
+        font-size: 14px;
+        font-weight: 800;
+    }
+    .ps2-hud-plays {
+        color: rgba(0, 255, 255, 0.9);
+        font-size: 11px;
+        font-weight: bold;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+
+    /* ─── EXISTING STYLES ────────────────────────────────────── */
     .album-meta {
         display: flex;
         align-items: center;
@@ -1343,21 +1474,20 @@
     .desktop-dot {
         display: inline;
     }
-    /* Base Desktop Styles for the Cover */
     .cover-wrapper {
-        width: 232px; /* Matches your Artist wrapper size for consistency */
+        width: 232px; 
         height: 232px;
-        flex-shrink: 0; /* Prevents the image from being squeezed by text */
+        flex-shrink: 0; 
         border-radius: 12px;
         overflow: hidden;
         box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
-        background: #222; /* Placeholder color while loading */
+        background: #222; 
     }
 
     .cover-wrapper img {
         width: 100%;
         height: 100%;
-        object-fit: cover; /* Ensures the image fills the square without stretching */
+        object-fit: cover; 
         display: block;
     }
     .view-wrapper {
@@ -1498,72 +1628,7 @@
         gap: 8px;
         text-transform: uppercase;
     }
-    .ps2-scroll-wrapper {
-        width: 100%;
-        overflow-x: auto;
-        overflow-y: hidden;
-        padding-bottom: 40px;
-    }
-    .ps2-grid {
-        display: flex;
-        gap: 24px;
-        align-items: flex-end;
-        height: 350px;
-        padding: 40px 24px 0 24px;
-        perspective: 1200px;
-        transform-style: preserve-3d;
-        width: max-content;
-    }
-    .ps2-tower-container-3d {
-        position: relative;
-        width: 36px;
-        height: var(--tower-h);
-        transform-style: preserve-3d;
-        transform: rotateX(-15deg) rotateY(-30deg);
-        transition: transform 0.3s ease;
-        cursor: pointer;
-        flex-shrink: 0;
-    }
-    /* ── PS2 Tower Scene ─────────────────────────────── */
-    #ps2-tower-container {
-        position: relative;
-        width: 100%;
-        height: 500px;
-        border-radius: 16px;
-        overflow: hidden;
-        background: #000;
-    }
 
-    .ps2-canvas {
-        display: block;
-        width: 100%;
-        height: 100%;
-    }
-
-    .ps2-hud {
-        position: absolute;
-        transform: translateX(-50%);
-        background: rgba(0, 0, 0, 0.88);
-        border: 1px solid rgba(80, 120, 255, 0.55);
-        border-radius: 6px;
-        padding: 5px 12px;
-        pointer-events: none;
-        white-space: nowrap;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 2px;
-        box-shadow: 0 0 12px rgba(60, 100, 255, 0.3);
-    }
-    .ps2-hud-title {
-        color: #fff;
-        font-size: 12px;
-        font-weight: 700;
-    }
-    .ps2-hud-plays {
-        color: rgba(140, 170, 255, 0.85);
-        font-size: 10px;
-    }
     .btn-add-playlist {
         background: none;
         border: none;
@@ -1585,7 +1650,6 @@
     }
 
     @media (max-width: 768px) {
-        /* 1. Tighten the main card padding */
         .album-header-block {
             padding: 16px 12px 12px 12px !important;
             margin-bottom: 16px !important;
@@ -1598,15 +1662,13 @@
             text-align: center;
         }
 
-        /* FIX: Resize the WRAPPER, not just the image */
         .cover-wrapper {
-            width: 200px !important; /* Increased from 180 for better visibility */
+            width: 200px !important; 
             height: 200px !important;
-            margin: 0 auto; /* Forces horizontal centering */
-            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.5); /* Slightly smaller shadow for mobile */
+            margin: 0 auto; 
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.5); 
         }
 
-        /* Ensure image fills the new wrapper size */
         .cover-wrapper img {
             width: 100% !important;
             height: 100% !important;
@@ -1620,12 +1682,10 @@
             text-align: center;
         }
 
-        /* 2. Fix the separator and meta text */
         .header-separator {
             margin: 12px 0 !important;
         }
 
-        /* Boost font size slightly - 7px was likely too small to read */
         .album-info-text,
         .duration-highlight {
             font-size: 12px;
@@ -1636,9 +1696,8 @@
             margin-bottom: 4px;
         }
 
-        /* 3. Action bar alignment */
         .action-bar {
-            justify-content: center; /* Center buttons on mobile */
+            justify-content: center; 
             gap: 20px !important;
             margin-top: 8px;
         }
@@ -1648,22 +1707,22 @@
             font-size: 14px;
         }
         .album-meta {
-            flex-direction: column; /* Stack Artist and Meta on separate lines */
+            flex-direction: column; 
             justify-content: center;
             gap: 6px;
         }
         
         .desktop-dot {
-            display: none; /* Hide the dot between Artist and Meta on mobile */
+            display: none; 
         }
         
         .meta-secondary {
             justify-content: center;
-            row-gap: 8px; /* Gives the kbps badge breathing room if it drops to a 3rd line */
+            row-gap: 8px; 
         }
 
         .kbps-badge-inline {
-            margin-left: 2px !important; /* Remove the heavy desktop margin so it centers properly */
+            margin-left: 2px !important; 
         }
     }
 
@@ -1779,7 +1838,6 @@
         }
     }
 
-    /* SWIPE BACKGROUNDS */
     .swipe-bg-left,
     .swipe-bg-right {
         position: absolute;
@@ -1814,7 +1872,6 @@
         transition: transform 0.2s;
     }
 
-    /* iOS 8 Ringer Style Toast */
     .toast-notification {
         position: fixed;
         top: 50%;
@@ -1839,7 +1896,7 @@
             0 20px 50px rgba(0, 0, 0, 0.5),
             inset 0 1px 0 rgba(255, 255, 255, 0.1);
         border: 1px solid rgba(255, 255, 255, 0.05);
-        pointer-events: none; /* PREVENTS THE UI FROM FREEZING */
+        pointer-events: none; 
     }
     .toast-icon {
         width: 56px;
@@ -1848,7 +1905,6 @@
         stroke: white;
     }
 
-    /* CONTEXT MENU */
     .context-menu-glass {
         position: fixed;
         width: 220px;
@@ -1920,18 +1976,11 @@
         animation: pulse 1.5s infinite;
     }
     @keyframes pulse {
-        0% {
-            transform: scale(1);
-        }
-        50% {
-            transform: scale(0.95);
-        }
-        100% {
-            transform: scale(1);
-        }
+        0% { transform: scale(1); }
+        50% { transform: scale(0.95); }
+        100% { transform: scale(1); }
     }
 
-    /* --- DRAG-AND-DROP STYLES --- */
     .track-selected {
         background: rgba(var(--accent-rgb, 181, 52, 209), 0.15) !important;
         border-left: 2px solid var(--accent-color, #b534d1);
@@ -1976,7 +2025,6 @@
         cursor: grabbing;
     }
 
-    /* Hide drag affordance on mobile — touch swipe takes priority */
     @media (hover: none) and (pointer: coarse) {
         .list-item-content[draggable="true"] {
             cursor: default;

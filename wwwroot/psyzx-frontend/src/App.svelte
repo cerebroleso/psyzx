@@ -501,10 +501,9 @@
                 <RightSidebar />
             </aside>
         </div>
-
-        <Player on:toggleFull={() => isFullPlayerOpen = !isFullPlayerOpen} />
     </div>
 
+    <Player on:toggleFull={() => isFullPlayerOpen = !isFullPlayerOpen} />
     <FullPlayer isOpen={isFullPlayerOpen} on:close={() => isFullPlayerOpen = false} />
 {/if}
 

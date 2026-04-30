@@ -5,7 +5,7 @@
     import { api } from '../api.js';
     import { currentPlaylist, currentIndex, isPlaying, isShuffle, isRepeat, shuffleHistory, isGlobalColorActive, isMaxGlassActive, isLowQualityImages, userQueue, albumsMap, playlistUpdateSignal, appSessionVersion } from '../../store.js';
     import { formatTime } from '../utils.js';
-    import { togglePlayGlobal } from '../audio.js';
+    import { togglePlayGlobal, unlockAudioContext } from '../audio.js';
 
     export let playlistId;
 
@@ -48,7 +48,7 @@
         if (playlistId) {
             playlist = await api.getPlaylist(playlistId);
             if (playlist && playlist.tracks) {
-                tracks = playlist.tracks;
+                tracks = [...playlist.tracks].reverse();
                 // Patch albumsMap so Player/FullPlayer can resolve cover art and artist name
                 albumsMap.update(map => {
                     tracks.forEach(t => {
@@ -76,6 +76,7 @@
 
     const togglePlayPlaylist = () => {
         if (tracks.length === 0) return;
+        if (typeof window !== "undefined") unlockAudioContext();
 
         if (isPlayingPlaylist) {
             togglePlayGlobal();
@@ -107,6 +108,7 @@
     };
 
     const playSpecificTrack = (index) => { 
+        if (typeof window !== "undefined") unlockAudioContext();
         shuffleHistory.set([]); 
         currentPlaylist.set(tracks); 
         currentIndex.set(index); 

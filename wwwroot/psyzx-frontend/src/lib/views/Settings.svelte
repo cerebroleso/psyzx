@@ -20,7 +20,7 @@
             currentScrubSound = localStorage.getItem('psyzx_scrub_sound') || 'speed';
             
             // FIX: Enforce requested defaults if not set by the user yet
-            if (localStorage.getItem('psyzx_webaudio_gapless') === null) {
+            if (localStorage.getItem('psyzx_gapless') === null) {
                 isGaplessModeActive.set(false);
                 setWebAudioGaplessMode(false);
             }

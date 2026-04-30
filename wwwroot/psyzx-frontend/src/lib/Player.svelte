@@ -108,9 +108,9 @@
 
   $: if (track && album) {
     updateMediaSession(track, album, {
-      play: () => activePlayer.play(),
-      pause: () => activePlayer.pause(),
-      next: playNext,
+      play: () => { if (!$isPlaying && !$isBuffering) togglePlayGlobal(); },
+      pause: () => { if ($isPlaying) togglePlayGlobal(); },
+      next: () => playNext(true), // <-- Explicit flag passed here
       prev: playPrev,
       seek: (time) => {
         activePlayer.currentTime = time;
@@ -122,7 +122,7 @@
         );
       },
     });
-  }
+}
 
   const safeSetStorage = (k, v) => {
     try {
@@ -225,7 +225,7 @@
         togglePlay();
         break;
       case "l":
-        if (e.shiftKey) playNext();
+        if (e.shiftKey) playNext(true); // <-- Explicit flag passed here
         else
           activePlayer.currentTime = Math.min(
             activePlayer.duration,
@@ -354,6 +354,10 @@
       preloadNextUrl(streamUrl);
     } else {
       loadAndPlayUrl(streamUrl, track?.id);
+      
+      if (track && track.durationSeconds > 0) {
+        playerDuration.set(track.durationSeconds);
+      }
 
       if (track) {
         albumsMap.update((map) => {
@@ -373,7 +377,7 @@
   }
 
   const togglePlay = () => togglePlayGlobal();
-  const playNext = () => playNextGlobal(api);
+  const playNext = (isManual = false) => playNextGlobal(api, isManual);
   const playPrev = () => playPrevGlobal();
 
   const handleSeek = (e) => {
@@ -483,7 +487,7 @@
       class:disabled={!track}
       role="button"
       tabindex="0"
-      on:click={() => track && dispatch("toggleFull")}
+      on:click|stopPropagation={() => track && dispatch("toggleFull")}
       on:mousemove={handleMouseMove}
       style="--m-x: {mouseX}px; --m-y: {mouseY}px;"
     >
@@ -549,7 +553,7 @@
           >
         {/if}
       </button>
-      <button class="btn-icon hide-on-mobile" on:click={playNext}>
+      <button class="btn-icon hide-on-mobile" on:click={() => playNext(true)}>
         <svg
           width="24"
           height="24"
