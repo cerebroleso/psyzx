@@ -19,10 +19,6 @@
     } from "../../store.js";
     import { formatTime } from "../utils.js";
     import { api } from "../api.js";
-    import * as THREE from 'three';
-    import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
-    import { RenderPass }     from 'three/examples/jsm/postprocessing/RenderPass.js';
-    import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 
     // 1. IMPORT ONLY WHAT IS NEEDED FROM THE NEW ENGINE
     import { unlockAudioContext, togglePlayGlobal } from "../audio.js";
@@ -355,262 +351,27 @@
         };
     }
 
-    // ─── FULLSCREEN PS2 REACTIVE TOWER SCENE ─────────────────────────────
-    let hoveredTower = null; 
+    // ─── GLASSMORPHIC TRACK HEATMAP ─────────────────────────────────
+    let hoveredHeatbar = null;
+    let heatbarMouseX = 0;
+    let heatbarMouseY = 0;
 
-    function initPS2(canvas) {
-        // ── Basic Setup ────────────────────────────
-        const scene = new THREE.Scene();
-        scene.background = new THREE.Color( 0x050505 );
-        
-        // Multi-layered Real PS2 Fog Simulation
-        scene.fog = new THREE.FogExp2(0x050505, 0.015);
-
-        // Standard Top-Down Perspective Camera from your recreation
-        const camera = new THREE.PerspectiveCamera( 25, window.innerWidth / window.innerHeight, 1, 1100 );
-        const cameraTarget = new THREE.Vector3(0, 0, 0);
-        camera.position.set(0, 0, 107);
-        camera.lookAt(cameraTarget);
-
-        const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
-        renderer.setPixelRatio(window.devicePixelRatio);
-        renderer.setSize(window.innerWidth, window.innerHeight);
-
-        // Lighting
-        const spotLight = new THREE.SpotLight( 0xffffff, 1.2 );
-        spotLight.position.set( 0, 0, 100 );
-        scene.add( spotLight );
-        scene.add(new THREE.AmbientLight(0x404040, 1)); // Soft ambient to see colors
-
-        // ── Reactive Track Pillars ──────────────────
-        const trackMeshes = [];
-        
-        // Layout perfectly centered grid 
-        const cols = Math.ceil(Math.sqrt(tracks.length));
-        const rows = Math.ceil(tracks.length / cols);
-        const spacing = 1.4; 
-        
-        const offsetX = ((cols - 1) * spacing) / 2;
-        const offsetY = ((rows - 1) * spacing) / 2;
-
-        tracks.forEach((track, i) => {
-            const col = i % cols;
-            const row = Math.floor(i / cols);
-
-            // Reactive Height based on Playcount logic
-            const zDepth = maxPlay > 0 
-                ? 5 + ((track.playCount || 0) / maxPlay) * 15
-                : 5 + Math.random() * 5;
-
-            const geometry = new THREE.BoxGeometry(1.1, 1.1, zDepth);
-            const ranGrey = new THREE.Color(`hsl(189, 0%, ${40 + Math.floor(Math.random() * 30)}%)`);
-            
-            const material = new THREE.MeshPhongMaterial({
-                color: ranGrey, 
-                transparent: true, 
-                refractionRatio: 0.7, 
-                reflectivity: 0.9,
-                emissive: ranGrey,
-                emissiveIntensity: 0.15
-            });
-
-            const cube = new THREE.Mesh(geometry, material);
-            // Arrange flatly and stretch outward in Z like original
-            cube.position.set( (col * spacing) - offsetX, (row * spacing) - offsetY, 70 );
-            
-            cube.userData = { 
-                track: track, 
-                index: i,
-                baseColor: ranGrey.clone()
-            };
-
-            scene.add(cube);
-            trackMeshes.push(cube);
-        });
-
-        // ── Authentic Glass Boxes ───────────────────
-        const glassBoxGeo = new THREE.BoxGeometry( 1, 1, 1 );
-        const glassBoxMat = new THREE.MeshPhongMaterial( { color: 0x474141, transparent: true, opacity: 0.8 } ); 
-
-        const glassCubes = [
-            new THREE.Mesh(glassBoxGeo, glassBoxMat),
-            new THREE.Mesh(glassBoxGeo, glassBoxMat),
-            new THREE.Mesh(glassBoxGeo, glassBoxMat),
-            new THREE.Mesh(glassBoxGeo, glassBoxMat),
-            new THREE.Mesh(glassBoxGeo, glassBoxMat)
-        ];
-        
-        glassCubes[0].position.set(-4, 1, 85);
-        glassCubes[1].position.set(3.5, 2, 86);
-        glassCubes[2].position.set(-0.5, .5, 81);
-        glassCubes[2].rotation.set(.3, .4, .1);
-        glassCubes[3].position.set(-2.8, -2, 88);
-        glassCubes[4].position.set(3, -1.3, 80);
-        
-        glassCubes.forEach(c => scene.add(c));
-
-        // ── Complex Fog Layers ──────────────────────
-        // Generating a soft smoke texture entirely through code
-        const texCanvas = document.createElement('canvas');
-        texCanvas.width = 128; texCanvas.height = 128;
-        const ctx = texCanvas.getContext('2d');
-        const grad = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
-        grad.addColorStop(0, 'rgba(255, 255, 255, 0.15)');
-        grad.addColorStop(1, 'rgba(255, 255, 255, 0)');
-        ctx.fillStyle = grad;
-        ctx.fillRect(0, 0, 128, 128);
-        const smokeTex = new THREE.CanvasTexture(texCanvas);
-
-        const smokeGeo = new THREE.PlaneGeometry(35, 35);
-        const smokeMat = new THREE.MeshBasicMaterial({
-            map: smokeTex,
-            transparent: true,
-            blending: THREE.AdditiveBlending,
-            depthWrite: false,
-            color: 0x2244bb // iconic PS2 blue tint
-        });
-
-        const fogPlanes = [];
-        for(let i=0; i<45; i++) {
-            const plane = new THREE.Mesh(smokeGeo, smokeMat);
-            plane.position.set(
-                (Math.random() - 0.5) * 60,
-                (Math.random() - 0.5) * 60,
-                80 + Math.random() * 25
-            );
-            plane.rotation.z = Math.random() * Math.PI * 2;
-            scene.add(plane);
-            fogPlanes.push({ mesh: plane, speed: (Math.random() * 0.002) + 0.001 });
-        }
-
-        // ── Post Processing (Bloom for highlights) ──
-        const composer = new EffectComposer(renderer);
-        composer.addPass(new RenderPass(scene, camera));
-        const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.8, 0.4, 0.85);
-        composer.addPass(bloom);
-
-        // ── Raycaster & Interactions ────────────────
-        const raycaster = new THREE.Raycaster();
-        const mouse = new THREE.Vector2();
-        let activeHoverMesh = null;
-
-        const updateMouse = (e) => {
-            mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
-            mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
-        };
-
-        const onMouseMove = (e) => {
-            updateMouse(e);
-            raycaster.setFromCamera(mouse, camera);
-            
-            const intersects = raycaster.intersectObjects(trackMeshes);
-            
-            if (intersects.length > 0) {
-                const hitMesh = intersects[0].object;
-                
-                if (activeHoverMesh !== hitMesh) {
-                    // Reset old hover
-                    if (activeHoverMesh) {
-                        activeHoverMesh.material.emissive.copy(activeHoverMesh.userData.baseColor);
-                        activeHoverMesh.material.emissiveIntensity = 0.15;
-                    }
-                    // Apply new bold highlight
-                    activeHoverMesh = hitMesh;
-                    activeHoverMesh.material.emissive.setHex(0x00ffff); // Cyan hover glow
-                    activeHoverMesh.material.emissiveIntensity = 0.8;
-                    
-                    hoveredTower = {
-                        title: hitMesh.userData.track.title,
-                        playCount: hitMesh.userData.track.playCount || 0,
-                        x: e.clientX,
-                        y: e.clientY
-                    };
-                    canvas.style.cursor = 'pointer';
-                }
-            } else {
-                if (activeHoverMesh) {
-                    activeHoverMesh.material.emissive.copy(activeHoverMesh.userData.baseColor);
-                    activeHoverMesh.material.emissiveIntensity = 0.15;
-                    activeHoverMesh = null;
-                    hoveredTower = null;
-                    canvas.style.cursor = 'default';
-                }
-            }
-        };
-
-        const onClick = (e) => {
-            if (activeHoverMesh) {
-                playSpecificTrack(tracks.findIndex(t => t.id === activeHoverMesh.userData.track.id));
-            }
-        };
-
-        window.addEventListener('mousemove', onMouseMove);
-        window.addEventListener('click', onClick);
-
-        // Resize handler for absolute fullscreen
-        const onResize = () => {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            composer.setSize(window.innerWidth, window.innerHeight);
-        };
-        window.addEventListener('resize', onResize);
-
-        // ── Animation Loop ──────────────────────────
-        const clock = new THREE.Clock();
-        let t = 0;
-        let raf;
-
-        const animate = () => {
-            raf = requestAnimationFrame( animate );
-            t = clock.getElapsedTime();
-
-            // Glass rotation from Original
-            glassCubes[0].rotation.z -= 0.002;
-            glassCubes[0].rotation.x += 0.002;
-            glassCubes[1].rotation.x -= 0.002;
-            glassCubes[1].rotation.z -= 0.002;
-            glassCubes[2].rotation.x += 0.002;
-            glassCubes[3].rotation.x += 0.002;
-            glassCubes[3].rotation.y -= 0.002;
-            glassCubes[4].rotation.x += 0.002;
-            glassCubes[4].rotation.y -= 0.002;
-
-            // Animate complex fog mist layers
-            fogPlanes.forEach(fp => {
-                fp.mesh.rotation.z += fp.speed;
-            });
-
-            // Camera float: Viewable statically until user closes, 
-            // drifting slowly in a figure-8 to give a living breathing feel
-            camera.position.x = Math.sin(t * 0.2) * 1.5;
-            camera.position.y = Math.cos(t * 0.1) * 1.5;
-            camera.lookAt(cameraTarget);
-
-            composer.render();
-        };
-        animate();
-
-        return {
-            destroy() {
-                cancelAnimationFrame(raf);
-                window.removeEventListener('mousemove', onMouseMove);
-                window.removeEventListener('click', onClick);
-                window.removeEventListener('resize', onResize);
-                renderer.dispose();
-                // Clear out geometries
-                glassBoxGeo.dispose();
-                glassBoxMat.dispose();
-                smokeGeo.dispose();
-                smokeMat.dispose();
-                trackMeshes.forEach(m => {
-                    m.geometry.dispose();
-                    m.material.dispose();
-                });
-                hoveredTower = null;
-            }
-        };
-    }
+    const heatbarEnter = (e, track, index) => {
+        heatbarMouseX = e.clientX;
+        heatbarMouseY = e.clientY;
+        hoveredHeatbar = { track, index };
+    };
+    const heatbarMove = (e) => {
+        heatbarMouseX = e.clientX;
+        heatbarMouseY = e.clientY;
+    };
+    const heatbarLeave = () => {
+        hoveredHeatbar = null;
+    };
+    const heatbarClick = (index) => {
+        playSpecificTrack(index);
+        viewMode = 'list';
+    };
 
     let showPlaylistModal = false;
     let trackToAdd = null;
@@ -910,11 +671,11 @@
                 </button>
                 <button
                     class="btn-icon-bar hoverable"
-                    aria-label="PS2 View"
-                    class:active={viewMode === "ps2"}
+                    aria-label="Heatmap View"
+                    class:active={viewMode === "heatmap"}
                     on:click={() =>
-                        (viewMode = viewMode === "ps2" ? "list" : "ps2")}
-                    title="PS2 Tower View"
+                        (viewMode = viewMode === "heatmap" ? "list" : "heatmap")}
+                    title="Track Heatmap"
                 >
                     <svg
                         xmlns="http://www.w3.org/2000/svg"
@@ -924,11 +685,8 @@
                         fill="none"
                         stroke="currentColor"
                         stroke-width="2"
-                        ><rect x="2" y="7" width="20" height="14" rx="2" ry="2"
-                        ></rect><path
-                            d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"
-                        ></path></svg
-                    >
+                        ><rect x="3" y="12" width="3" height="8" rx="1" /><rect x="9" y="8" width="3" height="12" rx="1" /><rect x="15" y="4" width="3" height="16" rx="1" /><rect x="21" y="10" width="0" height="0" />
+                    </svg>
                 </button>
                 <button
                     class="btn-download btn-icon-bar hoverable"
@@ -954,33 +712,57 @@
             </div>
         </div>
 
-        {#if viewMode === "ps2"}
+        {#if viewMode === "heatmap"}
             <div
                 use:portal
-                class="ps2-fullscreen-overlay"
+                class="heatmap-fullscreen-overlay"
                 in:fade={{ duration: 300 }}
                 out:fade={{ duration: 250 }}
             >
                 <button 
-                    class="btn-close-ps2" 
+                    class="btn-close-heatmap" 
                     on:click={() => viewMode = 'list'}
                 >
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <line x1="18" y1="6" x2="6" y2="18"></line>
                         <line x1="6" y1="6" x2="18" y2="18"></line>
                     </svg>
-                    Exit PS2 View
+                    Close
                 </button>
 
-                <canvas class="ps2-canvas" use:initPS2></canvas>
+                <div class="heatmap-title">{album?.title}</div>
 
-                {#if hoveredTower}
+                <div class="heatmap-container">
+                    {#each tracks as track, i}
+                        {@const pct = maxPlay > 0 ? 20 + ((track.playCount || 0) / maxPlay) * 80 : 20 + Math.random() * 40}
+                        <div
+                            class="heatbar-wrapper"
+                            style="--delay: {i * 40}ms; --height: {pct}%;"
+                            on:mouseenter={(e) => heatbarEnter(e, track, i)}
+                            on:mousemove={heatbarMove}
+                            on:mouseleave={heatbarLeave}
+                            on:click={() => heatbarClick(i)}
+                            role="button"
+                            tabindex="0"
+                            on:keydown={(e) => e.key === 'Enter' && heatbarClick(i)}
+                        >
+                            <div 
+                                class="heatbar" 
+                                class:playing={$isPlaying && $currentPlaylist[$currentIndex]?.id === track.id}
+                                style="height: {pct}%; background: linear-gradient(to top, {albumColor}, transparent);"
+                            ></div>
+                            <div class="heatbar-label">{track.trackNumber || i + 1}</div>
+                        </div>
+                    {/each}
+                </div>
+
+                {#if hoveredHeatbar}
                     <div
-                        class="ps2-hud"
-                        style="left: {hoveredTower.x}px; top: {hoveredTower.y - 70}px;"
+                        class="heatbar-tooltip"
+                        style="left: {heatbarMouseX}px; top: {heatbarMouseY - 80}px;"
                     >
-                        <span class="ps2-hud-title">{hoveredTower.title}</span>
-                        <span class="ps2-hud-plays">{hoveredTower.playCount} plays</span>
+                        <span class="heatbar-tooltip-title">{hoveredHeatbar.track.title}</span>
+                        <span class="heatbar-tooltip-plays">{hoveredHeatbar.track.playCount || 0} plays</span>
                     </div>
                 {/if}
             </div>
@@ -1376,81 +1158,105 @@
 </div>
 
 <style>
-    /* ─── NEW FULLSCREEN PS2 STYLES ──────────────────────────── */
-    .ps2-fullscreen-overlay {
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100vw;
-        height: 100vh;
-        background: #000;
+    /* ─── GLASSMORPHIC HEATMAP STYLES ──────────────────────────── */
+    .heatmap-fullscreen-overlay {
+        position: fixed; top: 0; left: 0;
+        width: 100vw; height: 100vh;
+        background: rgba(5, 5, 5, 0.97);
+        backdrop-filter: blur(32px); -webkit-backdrop-filter: blur(32px);
         z-index: 9999999;
         overflow: hidden;
-        display: flex;
-        align-items: center;
-        justify-content: center;
+        display: flex; flex-direction: column;
+        align-items: center; justify-content: center;
     }
 
-    .btn-close-ps2 {
-        position: absolute;
-        top: 24px;
-        right: 24px;
-        z-index: 10000000;
-        background: rgba(255, 255, 255, 0.1);
-        color: white;
-        border: 1px solid rgba(255, 255, 255, 0.2);
-        padding: 10px 20px;
-        border-radius: 30px;
+    .btn-close-heatmap {
+        position: absolute; top: 24px; right: 24px; z-index: 10000000;
+        background: rgba(255, 255, 255, 0.08);
+        color: white; border: 1px solid rgba(255, 255, 255, 0.12);
+        padding: 10px 20px; border-radius: 30px;
         cursor: pointer;
-        backdrop-filter: blur(10px);
-        -webkit-backdrop-filter: blur(10px);
-        font-weight: 600;
-        font-size: 14px;
-        display: flex;
-        align-items: center;
-        gap: 8px;
+        backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+        font-weight: 600; font-size: 14px;
+        display: flex; align-items: center; gap: 8px;
         transition: all 0.2s ease;
     }
-    
-    .btn-close-ps2:hover {
-        background: rgba(255, 255, 255, 0.2);
+    .btn-close-heatmap:hover {
+        background: rgba(255, 255, 255, 0.15);
         transform: scale(1.05);
     }
 
-    .ps2-canvas {
-        display: block;
-        width: 100%;
-        height: 100%;
-        cursor: default;
+    .heatmap-title {
+        position: absolute; top: 32px; left: 32px;
+        font-size: clamp(18px, 3vw, 32px); font-weight: 900;
+        color: rgba(255,255,255,0.15); letter-spacing: -1px;
+        text-transform: uppercase;
     }
 
-    .ps2-hud {
-        position: absolute;
-        transform: translateX(-50%);
-        background: rgba(0, 0, 0, 0.9);
-        border: 1px solid rgba(0, 255, 255, 0.6);
-        border-radius: 8px;
-        padding: 6px 14px;
+    .heatmap-container {
+        display: flex; align-items: flex-end; justify-content: center;
+        gap: 3px; height: 60vh; width: 90vw;
+        padding: 0 16px;
+    }
+
+    .heatbar-wrapper {
+        flex: 1; max-width: 40px; min-width: 4px;
+        height: 100%;
+        display: flex; flex-direction: column;
+        align-items: center; justify-content: flex-end;
+        cursor: pointer;
+        animation: heatbarGrow 0.8s cubic-bezier(0.22, 1, 0.36, 1) var(--delay) both;
+    }
+
+    @keyframes heatbarGrow {
+        0% { opacity: 0; transform: scaleY(0); }
+        100% { opacity: 1; transform: scaleY(1); }
+    }
+
+    .heatbar {
+        width: 100%; border-radius: 4px 4px 0 0;
+        min-height: 4px;
+        transition: filter 0.3s, box-shadow 0.3s, height 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+        box-shadow: 0 0 8px rgba(0,0,0,0.3);
+    }
+    .heatbar-wrapper:hover .heatbar {
+        filter: brightness(1.6) saturate(1.3);
+        box-shadow: 0 0 24px rgba(255,255,255,0.15);
+    }
+    .heatbar.playing {
+        animation: heatbarPulse 1.5s ease-in-out infinite;
+    }
+    @keyframes heatbarPulse {
+        0%, 100% { filter: brightness(1.2); box-shadow: 0 0 12px rgba(255,255,255,0.15); }
+        50% { filter: brightness(1.8) saturate(1.5); box-shadow: 0 0 28px rgba(255,255,255,0.3); }
+    }
+
+    .heatbar-label {
+        font-size: 9px; color: rgba(255,255,255,0.25);
+        margin-top: 6px; font-weight: 600;
+        font-variant-numeric: tabular-nums;
+    }
+
+    .heatbar-tooltip {
+        position: fixed; transform: translateX(-50%);
+        background: rgba(15, 15, 15, 0.9);
+        backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 12px;
+        padding: 10px 18px;
         pointer-events: none;
         white-space: nowrap;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 4px;
-        box-shadow: 0 0 20px rgba(0, 255, 255, 0.3);
+        display: flex; flex-direction: column;
+        align-items: center; gap: 4px;
+        box-shadow: 0 12px 40px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.05);
         z-index: 10000000;
     }
-    .ps2-hud-title {
-        color: #fff;
-        font-size: 14px;
-        font-weight: 800;
+    .heatbar-tooltip-title {
+        color: #fff; font-size: 14px; font-weight: 800;
     }
-    .ps2-hud-plays {
-        color: rgba(0, 255, 255, 0.9);
-        font-size: 11px;
-        font-weight: bold;
-        text-transform: uppercase;
-        letter-spacing: 1px;
+    .heatbar-tooltip-plays {
+        color: var(--accent-color); font-size: 11px;
+        font-weight: bold; text-transform: uppercase; letter-spacing: 1px;
     }
 
     /* ─── EXISTING STYLES ────────────────────────────────────── */

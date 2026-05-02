@@ -70,7 +70,7 @@ public class TracksController : ControllerBase
     }
 
     [HttpGet("stream/{id}")]
-    public async Task<IActionResult> StreamTrack(int id, [FromQuery] int kbps = 192, [FromQuery] string format = "mp3")
+    public async Task<IActionResult> StreamTrack(int id, [FromQuery] int kbps = 192)
     {
         var track = await _context.Tracks.FindAsync(id);
         if (track == null) return NotFound();
@@ -81,17 +81,11 @@ public class TracksController : ControllerBase
         int validTrackBitrate = track.Bitrate > 0 ? track.Bitrate : 320;
         int targetKbps = Math.Min(kbps, validTrackBitrate);
         
-        bool needsTranscode = track.Bitrate > kbps || format == "mp4";
+        bool needsTranscode = track.Bitrate > kbps;
 
         if (needsTranscode)
         {
-            string contentType = format == "mp4" ? "audio/mp4" : "audio/mpeg";
-
-            // 1. Added '-re' to process in real-time (1x speed limit)
-            // 2. Kept '-threads 1' to isolate it to a single core
-            string ffmpegArgs = format == "mp4"
-                ? $"-re -threads 1 -i \"{fullPath}\" -map 0:a:0 -c:a aac -b:a {targetKbps}k -f mp4 -movflags frag_keyframe+empty_moov -"
-                : $"-re -threads 1 -i \"{fullPath}\" -map 0:a:0 -b:a {targetKbps}k -f mp3 -";
+            string ffmpegArgs = $"-re -threads 1 -i \"{fullPath}\" -map 0:a:0 -b:a {targetKbps}k -f mp3 -";
             
             var process = new Process {
                 StartInfo = new ProcessStartInfo {
@@ -106,7 +100,7 @@ public class TracksController : ControllerBase
             };
             process.Start();
             
-            return File(process.StandardOutput.BaseStream, contentType, enableRangeProcessing: false);
+            return File(process.StandardOutput.BaseStream, "audio/mpeg", enableRangeProcessing: false);
         }
         
         // Native files ARE seekable, so range processing stays true here

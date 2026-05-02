@@ -32,7 +32,8 @@
         loadAndPlayUrl,
         preloadNextUrl,
         getBufferedPct,
-        getAudioDiagnostics
+        getAudioDiagnostics,
+        reinitAudioEngine
     } from './audio.js';
     import { api, fetchLyricsOnFrontend } from './api.js';
     import { quintOut, expoIn, expoOut, linear } from 'svelte/easing';
@@ -1140,10 +1141,10 @@
     // --- DIAGNOSTICS STATE ---
     let showDiagnostics = false;
     let diagData = {};
+    let diagRefreshInterval = null;
 
-    const openDiagnostics = () => {
+    const refreshDiagData = () => {
         diagData = getAudioDiagnostics();
-        
         // Scrape hardware network data if the browser supports it
         if (navigator.connection) {
             diagData.networkType = navigator.connection.effectiveType || 'Unknown';
@@ -1154,8 +1155,29 @@
             diagData.downlink = 'N/A';
             diagData.rtt = 'N/A';
         }
-        
+    };
+
+    const openDiagnostics = () => {
+        refreshDiagData();
         showDiagnostics = true;
+        // Auto-refresh diagnostics every 1s while the modal is open
+        if (diagRefreshInterval) clearInterval(diagRefreshInterval);
+        diagRefreshInterval = setInterval(refreshDiagData, 1000);
+    };
+
+    const closeDiagnostics = () => {
+        showDiagnostics = false;
+        if (diagRefreshInterval) { clearInterval(diagRefreshInterval); diagRefreshInterval = null; }
+    };
+
+    const copyDiagnostics = () => {
+        refreshDiagData();
+        const json = JSON.stringify(diagData, null, 2);
+        navigator.clipboard?.writeText(json).then(() => {
+            // Visual feedback
+            const btn = document.getElementById('diag-copy-btn');
+            if (btn) { btn.textContent = 'Copied!'; setTimeout(() => btn.textContent = 'Copy Diagnostics', 1500); }
+        }).catch(() => {});
     };
 
     function triggerLyricsFetch(t) {
@@ -1178,10 +1200,9 @@
     $: effectiveLyricIdx = (() => {
         const time = (isSeekingBar && pendingSeekTime !== null) ? pendingSeekTime : $playerCurrentTime;
         if (!lyrics || lyrics.length === 0) return -1;
-        // WS10: Don't highlight any lyric in the first second of playback.
-        // Many LRC files have the first line at a very low timestamp (0.2s etc.)
-        // which causes premature highlighting before the singer starts.
-        if (time < 1) return -1;
+        // WS10: Don't highlight any lyric before the first timestamp.
+        // This naturally handles both synced (LRC) lyrics where lyrics[0].t
+        // is the real vocal onset, and plain lyrics which we offset to t=8s.
         if (time < lyrics[0].t) return -1;
         return lyrics.findLastIndex(l => time >= l.t);
     })();
@@ -1652,43 +1673,63 @@
         <div class="lyrics-modal-popup" style="z-index: 9999999999;" use:portal={true} in:fly={{y: '100%', duration: 400, easing: expoOut}} out:fly={{y: '100%', duration: 200, easing: expoIn}}>
             <div class="lyrics-modal-header">
                 <h3 class="modal-title">Engine Diagnostics</h3>
-                <button class="btn-icon" on:click={() => showDiagnostics = false}>
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-                </button>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <button class="diag-copy-btn" style="background: rgba(239,68,68,0.2); border-color: rgba(239,68,68,0.3); color: #f87171;" on:click={() => { reinitAudioEngine(); closeDiagnostics(); }}>Reinit Engine</button>
+                    <button id="diag-copy-btn" class="diag-copy-btn" on:click={copyDiagnostics}>Copy Diagnostics</button>
+                    <button class="btn-icon" on:click={closeDiagnostics}>
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                    </button>
+                </div>
             </div>
             <div class="lyrics-scroll-box" style="padding: 24px; text-align: left; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: rgba(255,255,255,0.7); line-height: 1.8;">
-                
+                <div class="diag-live-indicator"><span class="diag-dot"></span> Live — refreshing every 1s</div>
+
+                <div style="margin-bottom: 12px; padding: 12px; background: rgba(0,0,0,0.4); border-radius: 8px; border-left: 3px solid #c084fc;">
+                    <strong style="color: #fff;">Engine State:</strong><br>
+                    Mode: <span style="color: {diagData.mode === 'WebAudio API' ? '#c084fc' : '#facc15'}">{diagData.mode}</span><br>
+                    Initialized: <span style="color: #38bdf8">{diagData.engineInitAt}</span><br>
+                    Silent Prime: <span style="color: {diagData.silentPrimeDone ? '#4ade80' : '#f87171'}">{diagData.silentPrimeDone ? 'DONE' : 'PENDING'}</span><br>
+                    Transitioning: <span style="color: {diagData.isTransitioning ? '#fbbf24' : '#4ade80'}">{diagData.isTransitioning ? 'YES' : 'NO'}</span><br>
+                    Track ID: <span style="color: #cbd5e1">{track?.id || 'None'}</span><br>
+                    Buffering: <span style="color: {$isBuffering ? '#f87171' : '#4ade80'}">{$isBuffering.toString().toUpperCase()}</span>
+                </div>
+
                 <div style="margin-bottom: 12px; padding: 12px; background: rgba(0,0,0,0.4); border-radius: 8px; border-left: 3px solid #60a5fa;">
-                    <strong style="color: #fff;">Network Profile:</strong><br>
+                    <strong style="color: #fff;">AudioContext:</strong><br>
+                    State: <span style="color: {diagData.ctxState === 'running' ? '#4ade80' : (diagData.ctxState === 'suspended' ? '#facc15' : '#f87171')}">{diagData.ctxState}</span><br>
+                    Sample Rate: <span style="color: #38bdf8">{diagData.ctxSampleRate} Hz</span><br>
+                    Base Latency: <span style="color: #38bdf8">{diagData.ctxBaseLatency}</span><br>
+                    Clock: <span style="color: #a3a3a3">{diagData.ctxCurrentTime}s</span>
+                </div>
+
+                <div style="margin-bottom: 12px; padding: 12px; background: rgba(0,0,0,0.4); border-radius: 8px; border-left: 3px solid #f97316;">
+                    <strong style="color: #fff;">iOS Audio Session:</strong><br>
+                    Silent Player: <span style="color: #a3a3a3">{diagData.silentPlayerState}</span><br>
+                    Recovery Pending: <span style="color: {diagData.interruptionRecoveryPending ? '#fbbf24' : '#4ade80'}">{diagData.interruptionRecoveryPending ? 'YES' : 'NO'}</span><br>
+                    Last Ghost Session: <span style="color: {diagData.lastGhostSession !== 'Never' ? '#f87171' : '#4ade80'}">{diagData.lastGhostSession}</span>
+                </div>
+
+                <div style="margin-bottom: 12px; padding: 12px; background: rgba(0,0,0,0.4); border-radius: 8px; border-left: 3px solid #60a5fa;">
+                    <strong style="color: #fff;">Network:</strong><br>
                     Connection: <span style="color: {diagData.networkType === '4g' || diagData.networkType === 'wifi' ? '#4ade80' : '#f87171'}">{diagData.networkType}</span><br>
                     Bandwidth: <span style="color: #38bdf8">{diagData.downlink}</span><br>
                     Latency (RTT): <span style="color: {parseInt(diagData.rtt) < 150 ? '#4ade80' : '#f87171'}">{diagData.rtt}</span>
                 </div>
 
-                <div style="margin-bottom: 12px; padding: 12px; background: rgba(0,0,0,0.4); border-radius: 8px; border-left: 3px solid var(--accent-color);">
-                    <strong style="color: #fff;">WebAudio Pipeline:</strong><br>
-                    Engine Mode: <span style="color: {diagData.mode === 'WebAudio API' ? '#c084fc' : '#facc15'}">{diagData.mode}</span><br>
-                    AudioCtx State: <span style="color: {diagData.ctxState === 'running' ? '#4ade80' : (diagData.ctxState === 'suspended' ? '#facc15' : '#f87171')}">{diagData.ctxState}</span><br>
-                    Track Load ID: <span style="color: #cbd5e1">{track?.id || 'None'}</span><br>
-                    UI Buffering Flag: <span style="color: {$isBuffering ? '#f87171' : '#4ade80'}">{$isBuffering.toString().toUpperCase()}</span>
-                </div>
-
                 <div style="margin-bottom: 12px; padding: 12px; background: rgba(0,0,0,0.4); border-radius: 8px; border-left: 3px solid #fbbf24;">
                     <strong style="color: #fff;">Decoder & Cache:</strong><br>
-                    Current Track Decoded: <span style="color: {diagData.bufferDecoded ? '#4ade80' : '#f87171'}">{diagData.bufferDecoded ? 'READY' : 'WAITING'}</span><br>
+                    Decoded: <span style="color: {diagData.bufferDecoded ? '#4ade80' : '#f87171'}">{diagData.bufferDecoded ? 'READY' : 'WAITING'}</span><br>
                     Active Decodes: <span style="color: {diagData.activeDecodes > 0 ? '#fbbf24' : '#a3a3a3'}">{diagData.activeDecodes} Threads</span><br>
-                    Decoded Buffer Cache: <span style="color: #38bdf8">{diagData.cacheSize} / 5</span>
+                    Buffer Cache: <span style="color: #38bdf8">{diagData.cacheSize} / 5</span>
                 </div>
 
-                <div style="padding: 12px; background: rgba(0,0,0,0.4); border-radius: 8px; border-left: 3px solid #34d399;">
-                    <strong style="color: #fff;">MSE Network Stream:</strong><br>
-                    Stream Complete: <span style="color: {diagData.mseFetchComplete ? '#4ade80' : '#fbbf24'}">{diagData.mseFetchComplete ? 'YES' : 'STREAMING...'}</span><br>
-                    Bytes Downloaded: <span style="color: #38bdf8">{(diagData.mseLoadedBytes / 1024 / 1024).toFixed(2)} MB</span><br>
-                    MSE ReadyState: <span style="color: {diagData.mseReadyState === 'open' ? '#4ade80' : '#facc15'}">{diagData.mseReadyState}</span><br>
-                    MSE Connected to Output: <span style="color: {diagData.mseWired ? '#4ade80' : '#f87171'}">{diagData.mseWired ? 'YES' : 'NO'}</span><br><br>
 
-                    <strong style="color: #fff;">HTML5 Background Keep-Alive:</strong><br>
-                    <span style="color: #a3a3a3">{diagData.html5Status}</span>
+
+                <div style="padding: 12px; background: rgba(0,0,0,0.4); border-radius: 8px; border-left: 3px solid #22d3ee;">
+                    <strong style="color: #fff;">Active HTML5 Player:</strong><br>
+                    State: <span style="color: #a3a3a3">{diagData.html5Status}</span><br>
+                    Error: <span style="color: {diagData.html5Error !== 'None' ? '#f87171' : '#4ade80'}">{diagData.html5Error}</span><br>
+                    Source: <span style="color: #a3a3a3">{diagData.html5Src}</span>
                 </div>
             </div>
         </div>
@@ -2073,6 +2114,27 @@
     }
     .lyrics-modal-header { padding: max(48px, env(safe-area-inset-top)) 24px 16px 24px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.05); }
     .modal-title { margin: 0; font-size: 18px; color: white; font-weight: 800; letter-spacing: -0.5px; }
+
+    .diag-copy-btn {
+        background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.1);
+        color: rgba(255,255,255,0.7); font-size: 11px; font-weight: 600;
+        padding: 6px 14px; border-radius: 8px; cursor: pointer;
+        transition: all 0.2s; font-family: inherit;
+    }
+    .diag-copy-btn:hover { background: rgba(255,255,255,0.15); color: white; }
+    .diag-live-indicator {
+        display: flex; align-items: center; gap: 8px;
+        font-size: 10px; color: rgba(255,255,255,0.4);
+        margin-bottom: 16px; text-transform: uppercase; letter-spacing: 1px;
+    }
+    .diag-dot {
+        width: 6px; height: 6px; border-radius: 50%;
+        background: #4ade80; animation: diagPulse 2s infinite;
+    }
+    @keyframes diagPulse {
+        0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.4); }
+        50% { opacity: 0.6; box-shadow: 0 0 0 4px rgba(74, 222, 128, 0); }
+    }
 
     .popup-version { padding: 40px 24px !important; align-items: center; text-align: center; }
     .popup-version .lyric-line { font-size: 24px; margin-bottom: 24px; transform-origin: center; }

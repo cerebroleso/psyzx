@@ -1082,6 +1082,26 @@ export const destroyEngine = async () => {
     mseWired = false;
 };
 
+// ─── Engine reinit (for debug menu) ──────────────────────────────────────────
+//
+// Performs a full async teardown then immediately re-bootstraps the engine.
+// Preserves the current playback position so the user can resume.
+
+export const reinitAudioEngine = async () => {
+    const savedPos = get(playerCurrentTime);
+    const savedDur = get(playerDuration);
+    const wasPlaying = get(isPlaying);
+
+    await destroyEngine();
+    unlockAudioContext();
+
+    // Restore position state so the UI doesn't flash to 0:00
+    playerCurrentTime.set(savedPos);
+    playerDuration.set(savedDur);
+
+    console.log('[AudioEngine] Reinitialised.', { savedPos, savedDur, wasPlaying });
+};
+
 // ─── Engine bootstrap ─────────────────────────────────────────────────────────
 
 export const unlockAudioContext = () => {

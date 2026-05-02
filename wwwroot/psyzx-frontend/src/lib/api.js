@@ -214,9 +214,10 @@ export const fetchLyricsOnFrontend = async (trackId, artist, title) => {
         // Fallback for Plain Lyrics (Genius, OVH, Lyrist, Popcat)
         if (!finalLyrics || finalLyrics.length === 0) {
             const lines = lyricsText.split('\n').filter(l => l.trim().length > 0);
-            // WS10: Start at t=5s (typical song intro) with 4s per line for a more
-            // realistic pace. This avoids the first lyric highlighting immediately.
-            finalLyrics = lines.map((l, i) => ({ t: 5 + (i * 4), text: l.trim() }));
+            // WS10: Start at t=8s (typical song intro) with 5s per line for a more
+            // realistic pace. This avoids the first lyric highlighting during the
+            // instrumental intro, which felt out of sync with the actual vocals.
+            finalLyrics = lines.map((l, i) => ({ t: 8 + (i * 5), text: l.trim() }));
         }
         
         // 2. Save result to Cache

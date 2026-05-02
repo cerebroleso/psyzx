@@ -44,11 +44,30 @@
         window.removeEventListener('playlist-tracks-changed', handlePlaylistChanged);
     });
 
+    // Set to track recently added track IDs for the green pulse animation
+    let justAdded = new Set();
+
     async function loadPlaylist() {
         if (playlistId) {
             playlist = await api.getPlaylist(playlistId);
             if (playlist && playlist.tracks) {
-                tracks = [...playlist.tracks].reverse();
+                const incoming = [...playlist.tracks].reverse();
+
+                // Smart merge: detect genuinely new tracks to animate them
+                if (tracks.length > 0) {
+                    const existingIds = new Set(tracks.map(t => t.id));
+                    const newTracks = incoming.filter(t => !existingIds.has(t.id));
+                    if (newTracks.length > 0) {
+                        // Mark new tracks for the green pulse highlight
+                        newTracks.forEach(t => justAdded.add(t.id));
+                        justAdded = justAdded; // trigger reactivity
+                        // Clear highlights after 2s
+                        setTimeout(() => { justAdded = new Set(); }, 2000);
+                    }
+                }
+
+                tracks = incoming;
+
                 // Patch albumsMap so Player/FullPlayer can resolve cover art and artist name
                 albumsMap.update(map => {
                     tracks.forEach(t => {
@@ -381,6 +400,7 @@
             {#each tracks as track, index (track.id)}
                 <div class="list-item" 
                      class:active={($currentPlaylist?.length ?? 0) > 0 && $currentPlaylist[$currentIndex]?.id === track.id}
+                     class:just-added={justAdded.has(track.id)}
                      animate:flip={{duration: 600}}
                      in:fly={{y: 30, duration: 500, delay: 100}}
                      out:fade={{duration: 300}}>
@@ -586,6 +606,14 @@
     .list-item.active .list-item-num, .list-item.active .list-item-title { color: var(--accent-color); }
     
     .list-item.active .list-item-num, .list-item.active .list-item-title { color: var(--accent-color); }
+
+    .list-item.just-added {
+        animation: playlistPulse 2s ease-out forwards;
+    }
+    @keyframes playlistPulse {
+        0% { background-color: rgba(74, 222, 128, 0.2); box-shadow: inset 0 0 12px rgba(74, 222, 128, 0.15); }
+        100% { background-color: transparent; box-shadow: none; }
+    }
     
     .swipe-bg-left, .swipe-bg-right { 
         position: absolute; top: 0; bottom: 0; width: 0; 

@@ -101,7 +101,6 @@ function getCleanApiRequest(urlStr) {
     url.searchParams.delete('token');
     url.searchParams.delete('_');
     url.searchParams.delete('kbps');
-    url.searchParams.delete('format');
     return url.toString();
 }
 
@@ -261,6 +260,19 @@ self.addEventListener('message', async event => {
         processQueue();
     }
 
+    if (data.type === 'PRELOAD_IMAGES') {
+        // Proactively cache album cover images at low quality for offline use.
+        // Accepts an array of { path } objects.
+        if (!noDownload && data.images && Array.isArray(data.images)) {
+            data.images.forEach(img => {
+                if (!img.path) return;
+                const coverUrl = `/api/Tracks/image?path=${encodeURIComponent(img.path)}&quality=low`;
+                downloadQueue.push({ type: 'DATA', cacheKey: getCleanApiRequest(coverUrl), url: coverUrl, trackId: 'img-' + img.path });
+            });
+            processQueue();
+        }
+    }
+
     // ── NEW CACHE MANAGEMENT METHODS ──
     if (data.type === 'SET_CACHE_LIMIT') {
         cacheLimit = data.bytes;
@@ -346,10 +358,6 @@ self.addEventListener('fetch', event => {
 
     // ── MEDIA STREAMS ──
     if (url.pathname.startsWith('/api/Tracks/stream')) {
-        // MSE fragmented MP4 streams bypass SW entirely (they use MediaSource API)
-        if (url.searchParams.get('format') === 'mp4') {
-            return;
-        }
         // Standard MP3/audio stream requests — serve from cache if available,
         // ALWAYS fall back to network. Never block playback.
         if (req.method !== 'GET') return;

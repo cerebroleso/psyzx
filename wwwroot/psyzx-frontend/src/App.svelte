@@ -24,6 +24,7 @@
     import Playlist from './lib/views/Playlist.svelte';
     import Auth from './lib/views/Auth.svelte';
     
+    import { hasOfflineCredentials } from './lib/offlineAuth.js';
     import { api } from './lib/api.js';
     import { allTracks, artistsMap, albumsMap, accentColor, isGlobalColorActive, isMaxGlassActive, appSessionVersion, activeDownloads } from './store.js';
     
@@ -143,6 +144,20 @@
             console.error('[AUTH DEBUG] Exception during api.checkAuth():', e);
         }
 
+        // ── NEW OFFLINE BYPASS LOGIC ──
+        // If auth failed (e.g., token expired) BUT we are offline and have cached credentials, let the user in.
+        if (!isAuth && !navigator.onLine) {
+            try {
+                if (hasOfflineCredentials && hasOfflineCredentials()) {
+                    console.warn('[AUTH DEBUG] Token expired, but device is offline. Bypassing login to allow local playback.');
+                    isAuth = true;
+                }
+            } catch (bypassErr) {
+                console.error('[AUTH DEBUG] Failed to verify offline credentials during bypass:', bypassErr);
+            }
+        }
+        // ──────────────────────────────
+
         if (!isAuth) { 
             console.warn('[AUTH DEBUG] Not authenticated. Triggering login screen.');
             console.groupEnd();
@@ -151,6 +166,7 @@
             isLoading = false; 
             return; 
         }
+        
         console.log('[AUTH DEBUG] Authentication confirmed. Booting core...');
         console.groupEnd();
         

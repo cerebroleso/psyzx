@@ -9,6 +9,7 @@
     let memory = '0 MB';
     let logs = ['[System] Boot Sequence OK', '[Net] Connection Stable'];
     let interval;
+    let isOffline = typeof navigator !== 'undefined' ? !navigator.onLine : false;
 
     $: isMobile = innerWidth <= 768;
 
@@ -60,8 +61,13 @@
         if (e.key === 'Escape') closeSidebar();
     };
 
+    const handleOnline = () => { isOffline = false; };
+    const handleOffline = () => { isOffline = true; };
+
     onMount(() => {
         window.addEventListener('keydown', handleKeydown);
+        window.addEventListener('online', handleOnline);
+        window.addEventListener('offline', handleOffline);
         interval = setInterval(() => {
             const mem = performance['memory'];
             if (mem && mem['usedJSHeapSize']) {
@@ -78,6 +84,8 @@
 
     onDestroy(() => {
         window.removeEventListener('keydown', handleKeydown);
+        window.removeEventListener('online', handleOnline);
+        window.removeEventListener('offline', handleOffline);
         clearInterval(interval);
     });
 
@@ -147,7 +155,7 @@
 <aside class:open={isMobileOpen}>
     <div class="logo">
         <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
-        <h2>psyzx</h2>
+        <h2>psyzx{#if isOffline}<span class="offline-badge"><span class="offline-dot"></span>offline</span>{/if}</h2>
         
         {#if isMobile}
             <button class="close-trigger" on:click={closeSidebar} aria-label="Close menu">
@@ -256,6 +264,21 @@
     .highlight { color: white; font-weight: bold; }
     .sys-logs { color: rgba(255,255,255,0.3); display: flex; flex-direction: column; gap: 4px; }
     .version { margin-top: 24px; margin-bottom: 40px; text-align: center; font-size: 11px; color: rgba(255,255,255,0.2); }
+    .offline-badge {
+        display: inline-flex; align-items: center; gap: 5px;
+        margin-left: 8px; font-size: 11px; font-weight: 600;
+        color: #f87171; letter-spacing: 0.5px;
+        vertical-align: middle;
+    }
+    .offline-dot {
+        width: 6px; height: 6px; border-radius: 50%;
+        background: #f87171;
+        animation: offlinePulse 1.5s ease-in-out infinite;
+    }
+    @keyframes offlinePulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.3; }
+    }
     @media (max-width: 768px) {
         aside { position: fixed; top: 0; left: 0; height: 100dvh; transform: translate3d(-110%, 0, 0); z-index: 100005; border-right: none; backface-visibility: hidden; visibility: hidden; transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), visibility 0s 0.3s; transform: translate3d(-105%, 0, 0); 
         will-change: transform;
