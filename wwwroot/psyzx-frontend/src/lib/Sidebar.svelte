@@ -213,7 +213,7 @@
         </div>
     </div>
 
-    <div class="version">psyzx v3.0 - Svelte</div>
+    <div class="version">psyzx v1.0 stable - Svelte</div>
 </aside>
 
 <style>
