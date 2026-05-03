@@ -743,11 +743,14 @@ const startSyntheticClock = () => {
             if (mseActive && msePlayer) {
                 pos = msePlayer.currentTime;
                 const realDur = msePlayer.duration;
-                // FIX: Guard against Infinity/NaN from partial network streams breaking scrubbers
+                const trackDur = get(currentPlaylist)[get(currentIndex)]?.durationSeconds || 0;
+
+                // FIX: Guard against Infinity/NaN and partial network streams breaking scrubbers
                 if (realDur > 0 && realDur !== Infinity && !isNaN(realDur)) {
                     dur = realDur;
-                    if (Math.abs(realDur - pos) < 1.0) {
-                        const trackDur = get(currentPlaylist)[get(currentIndex)]?.durationSeconds;
+                    if (trackDur > 0 && Math.abs(realDur - trackDur) > 2.0) {
+                        dur = trackDur;
+                    } else if (Math.abs(realDur - pos) < 1.0) {
                         if (trackDur > 0) dur = trackDur;
                     }
                     if (get(playerDuration) !== dur) playerDuration.set(dur);
@@ -766,12 +769,18 @@ const startSyntheticClock = () => {
             if (!html5ActivePlayer || html5ActivePlayer.readyState < 1) return;
             pos = html5ActivePlayer.currentTime;
             const realDur = html5ActivePlayer.duration;
+            const trackDur = get(currentPlaylist)[get(currentIndex)]?.durationSeconds || 0;
+
             if (realDur > 0 && realDur !== Infinity && !isNaN(realDur)) {
                 dur = realDur;
-                if (Math.abs(realDur - pos) < 1.0) {
-                    const trackDur = get(currentPlaylist)[get(currentIndex)]?.durationSeconds;
+
+                // FIX: Prevent rolling FLAC duration from constantly overwriting the UI state
+                if (trackDur > 0 && Math.abs(realDur - trackDur) > 2.0) {
+                    dur = trackDur;
+                } else if (Math.abs(realDur - pos) < 1.0) {
                     if (trackDur > 0) dur = trackDur;
                 }
+
                 if (get(playerDuration) !== dur) playerDuration.set(dur);
             } else {
                 dur = get(playerDuration);
@@ -781,22 +790,11 @@ const startSyntheticClock = () => {
         if (pos === lastPos && !get(isBuffering)) {
             stuckTicks++;
 
-            // BUGFIX 3: Use a higher stuck-ticks threshold while an MSE fetch is
-            // still in-flight. SourceBuffer.appendBuffer() legitimately pauses
-            // timeupdate emission at codec boundaries and during chunk appends.
-            // The original flat threshold of 25 (2.5 s) fired false-positive
-            // hardware recovery calls that tore down healthy streams on slow networks.
-            // 60 ticks = 6 s, which is long enough to survive a normal append pause.
             const stuckThreshold = (mseActive && !mseFetchComplete) ? 60 : 25;
 
             if (stuckTicks > stuckThreshold) {
                 stuckTicks = 0;
 
-                // FIX 4: Distinguish a network stall from a session interruption.
-                // A network stall means the media element is loading data but hasn't
-                // buffered enough to continue. A session interruption means the element
-                // is technically ready but the AVAudioSession was revoked underneath it.
-                // Hard recovery (reload stream) is correct for network stalls only.
                 const isNetworkStall = mseActive && msePlayer &&
                     msePlayer.networkState === /* NETWORK_LOADING */ 2 &&
                     msePlayer.readyState <  /* HAVE_FUTURE_DATA */ 3;
@@ -1091,9 +1089,19 @@ export const reinitAudioEngine = async () => {
     const savedPos = get(playerCurrentTime);
     const savedDur = get(playerDuration);
     const wasPlaying = get(isPlaying);
+    const trackId = get(currentPlaylist)[get(currentIndex)]?.id;
 
     await destroyEngine();
     unlockAudioContext();
+
+    if (trackId) {
+        await loadAndPlayUrl(`/api/Tracks/stream/${trackId}`);
+        if (savedPos > 0) activePlayer.currentTime = savedPos;
+        if (!wasPlaying) {
+            if (isWebAudioMode) pauseWebAudio();
+            else if (html5ActivePlayer) html5ActivePlayer.pause();
+        }
+    }
 
     // Restore position state so the UI doesn't flash to 0:00
     playerCurrentTime.set(savedPos);
@@ -1278,18 +1286,41 @@ export const registerAudioElements = (elA, elB) => {
 
         el.addEventListener('loadedmetadata', () => {
             if (el !== html5ActivePlayer) return;
-            const dur = el.duration;
-            // FIX: Guard against Infinity/NaN from partial network streams breaking scrubbers
-            if (dur > 0 && dur !== Infinity && !isNaN(dur)) {
+
+            let dur = el.duration;
+            const trackDur = get(currentPlaylist)[get(currentIndex)]?.durationSeconds || 0;
+
+            // FIX: Guard against Infinity/NaN and Chrome's rolling FLAC duration
+            if (!dur || dur === Infinity || isNaN(dur) || (trackDur > 0 && Math.abs(dur - trackDur) > 2.0)) {
+                dur = trackDur;
+            }
+            if (dur > 0) {
                 playerDuration.set(dur);
                 updateMediaPositionState(el.currentTime, dur);
             }
         }, { passive: true });
 
         el.addEventListener('timeupdate', () => {
-            if (el !== html5ActivePlayer || el.duration <= 0) return;
+            if (el !== html5ActivePlayer) return;
+
+            let dur = el.duration;
+            const trackDur = get(currentPlaylist)[get(currentIndex)]?.durationSeconds || 0;
+
+            // FIX: Override broken or rolling duration with metadata duration
+            if (!dur || dur === Infinity || isNaN(dur) || (trackDur > 0 && Math.abs(dur - trackDur) > 2.0)) {
+                dur = trackDur;
+            }
+
+            if (dur <= 0) {
+                playerCurrentTime.set(el.currentTime);
+                return;
+            }
+
             playerCurrentTime.set(el.currentTime);
-            if (!el._earlyEndFired && el.duration - el.currentTime <= 0.15) {
+            if (!el._earlyEndFired && dur - el.currentTime <= 0.15) {
+                // FIX: If duration is unknown and it's still downloading, it's just a buffer stall. Do not skip.
+                if (trackDur === 0 && el.networkState === /* NETWORK_LOADING */ 2) return;
+
                 el._earlyEndFired = true;
                 window.dispatchEvent(new CustomEvent('track-ended'));
             }
@@ -1328,17 +1359,6 @@ export const registerAudioElements = (elA, elB) => {
             clearTimeout(stallTimeout);
         }, { passive: true });
 
-        // FIX 2: Distinguish user-initiated pauses from system interruptions.
-        //
-        // Previously every `pause` event set isPlaying(false), which made an iOS
-        // AVAudioSession interruption (e.g. incoming call, another app claiming
-        // audio focus) indistinguishable from a deliberate user pause. Recovery
-        // never fired because isPlaying was already false.
-        //
-        // Now: if isPlaying is still true when `pause` fires, the pause was not
-        // initiated by us — it is a system interruption. We schedule a debounced
-        // recovery without flipping isPlaying, giving iOS ~800 ms to complete
-        // the handoff before we attempt to reclaim the session.
         el.addEventListener('pause', () => {
             if (el === html5ActivePlayer) {
                 if (!isWebAudioMode && el.duration > 0) {
@@ -1346,10 +1366,8 @@ export const registerAudioElements = (elA, elB) => {
                 }
 
                 if (get(isPlaying)) {
-                    // Unexpected pause — system interruption. Do not flip isPlaying.
                     scheduleInterruptionRecovery();
                 } else {
-                    // Expected pause — user or engine initiated.
                     isPlaying.set(false);
                 }
             }
@@ -1877,7 +1895,7 @@ export const playNextGlobal = async (api, forceManualCue = false) => {
     // BUGFIX 5: Explicitly rely on the UI flagging this as a manual action,
     // rather than guessing based on floating-point timestamps which desync
     // when physical duration mismatches metadata duration.
-    if (forceManualCue) playSkipCue('next');
+    // NOTE: playSkipCue is now handled directly by UI button clicks.
 
     if (queue.length > 0) {
         const nextTrack = queue[0];
@@ -1957,16 +1975,15 @@ export const playPrevGlobal = () => {
     if (currentPos > 3) {
         if (isWebAudioMode) seekWebAudio(0);
         else if (html5ActivePlayer) html5ActivePlayer.currentTime = 0;
-    } 
+    }
     else {
-        playSkipCue('prev');
-        
+
         if (shuffle && history.length > 0) {
             const prev = history[history.length - 1];
             shuffleFuture.update(f => [index, ...f]);
             shuffleHistory.update(h => h.slice(0, -1));
             currentIndex.set(prev);
-        } 
+        }
         else {
             currentIndex.set((index - 1 + playlist.length) % playlist.length);
         }

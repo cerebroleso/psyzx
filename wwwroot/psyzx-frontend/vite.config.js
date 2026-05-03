@@ -3,19 +3,28 @@ import { svelte } from '@sveltejs/vite-plugin-svelte'
 import fs from 'fs'
 import path from 'path'
 
-const certPath = '../../cachyos-x8664.tailb22187.ts.net.crt';
-const keyPath  = '../../cachyos-x8664.tailb22187.ts.net.key';
+const certPath = '../../server.crt';
+const keyPath  = '../../server.key';
 
-console.log("--- Checking Certificate Files ---");
-console.log("Full Path CRT:", path.resolve(certPath));
-console.log("Exists?", fs.existsSync(certPath));
-console.log("Full Path KEY:", path.resolve(keyPath));
-console.log("Exists?", fs.existsSync(keyPath));
+const getHttpsConfig = () => {
+  const hasCert = fs.existsSync(certPath);
+  const hasKey = fs.existsSync(keyPath);
 
-// Backend is plain HTTP on localhost — this is fine because:
-// - Vite proxy <-> ASP.NET is loopback-only traffic (never leaves the machine)
-// - Security is handled by Tailscale's WireGuard tunnel at the network layer
-// - The HTTPS cert only needs to be on the Vite side for PWA/SW requirements
+  if (hasCert && hasKey) {
+    console.log("✅ SSL Certificates (server.crt/key) located. HTTPS Enabled.");
+    return {
+      key: fs.readFileSync(keyPath),
+      cert: fs.readFileSync(certPath),
+    };
+  }
+  
+  console.warn("⚠️  SSL Certificates NOT FOUND at:");
+  console.warn("   CRT:", path.resolve(certPath));
+  console.warn("   KEY:", path.resolve(keyPath));
+  console.warn("--- Falling back to plain HTTP ---");
+  return false;
+};
+
 const backendTarget = 'http://localhost:5149';
 
 const proxyConfig = {
@@ -23,14 +32,7 @@ const proxyConfig = {
     target: backendTarget,
     changeOrigin: true,
     secure: false,
-    cookieDomainRewrite: "",
     xfwd: true,
-    configure: (proxy) => {
-      proxy.on('proxyRes', (proxyRes) => {
-        proxyRes.headers['Access-Control-Allow-Origin'] = '*';
-        proxyRes.headers['Access-Control-Allow-Credentials'] = 'true';
-      });
-    }
   },
   '/hubs': {
     target: backendTarget,
@@ -42,12 +44,14 @@ const proxyConfig = {
 
 export default defineConfig({
   plugins: [svelte()],
+  build: {
+    // SAFE: Builds to local 'dist' folder to avoid nuking source code
+    outDir: 'dist',
+    emptyOutDir: true,
+  },
   server: {
     host: '0.0.0.0',
-    https: {
-      key: fs.readFileSync(keyPath),
-      cert: fs.readFileSync(certPath),
-    },
+    https: getHttpsConfig(),
     hmr: {
       protocol: 'wss',
       host: 'cachyos-x8664.tailb22187.ts.net',
@@ -56,10 +60,9 @@ export default defineConfig({
   },
   preview: {
     host: '0.0.0.0',
-    https: {
-      key: fs.readFileSync(keyPath),
-      cert: fs.readFileSync(certPath),
-    },
+    port: 4173,
+    // CRITICAL: This prevents the RX_RECORD_TOO_LONG error in preview mode
+    https: getHttpsConfig(),
     proxy: proxyConfig,
   },
 });

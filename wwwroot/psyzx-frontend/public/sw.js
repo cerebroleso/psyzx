@@ -97,10 +97,11 @@ async function deleteTrackFromCache(trackId) {
 // ── UTILS ──
 function getCleanApiRequest(urlStr) {
     const url = new URL(urlStr, self.location.origin);
-    // Keep 'v' parameter for cache busting.
+    url.searchParams.delete('v');
     url.searchParams.delete('token');
     url.searchParams.delete('_');
     url.searchParams.delete('kbps');
+    url.searchParams.delete('format');
     return url.toString();
 }
 
@@ -260,19 +261,6 @@ self.addEventListener('message', async event => {
         processQueue();
     }
 
-    if (data.type === 'PRELOAD_IMAGES') {
-        // Proactively cache album cover images at low quality for offline use.
-        // Accepts an array of { path } objects.
-        if (!noDownload && data.images && Array.isArray(data.images)) {
-            data.images.forEach(img => {
-                if (!img.path) return;
-                const coverUrl = `/api/Tracks/image?path=${encodeURIComponent(img.path)}&quality=low`;
-                downloadQueue.push({ type: 'DATA', cacheKey: getCleanApiRequest(coverUrl), url: coverUrl, trackId: 'img-' + img.path });
-            });
-            processQueue();
-        }
-    }
-
     // ── NEW CACHE MANAGEMENT METHODS ──
     if (data.type === 'SET_CACHE_LIMIT') {
         cacheLimit = data.bytes;
@@ -358,6 +346,10 @@ self.addEventListener('fetch', event => {
 
     // ── MEDIA STREAMS ──
     if (url.pathname.startsWith('/api/Tracks/stream')) {
+        // MSE fragmented MP4 streams bypass SW entirely (they use MediaSource API)
+        if (url.searchParams.get('format') === 'mp4') {
+            return;
+        }
         // Standard MP3/audio stream requests — serve from cache if available,
         // ALWAYS fall back to network. Never block playback.
         if (req.method !== 'GET') return;
@@ -372,8 +364,8 @@ self.addEventListener('fetch', event => {
         return;
     }
 
-    // ── OTHER LOCAL API ──
-    if (url.origin === self.location.origin && url.pathname.startsWith('/api/')) {
+    // ── OTHER API ──
+    if (url.pathname.startsWith('/api/')) {
         event.respondWith(handleApiRequest(req));
         return;
     }
@@ -392,11 +384,7 @@ self.addEventListener('fetch', event => {
         return;
     }
 
-    // ── EVERYTHING ELSE (Third-party, fonts, etc.) ──
-    if (url.origin !== self.location.origin) {
-        return; // Let browser handle cross-origin requests normally
-    }
-
+    // ── EVERYTHING ELSE ──
     event.respondWith(
         caches.match(req).then(cached => {
             if (cached) return cached;
@@ -404,7 +392,7 @@ self.addEventListener('fetch', event => {
                 if (!res.ok) throw new Error('Network fallback failed');
                 if (url.protocol.startsWith('http')) {
                     const cache = await caches.open(CACHE_NAME);
-                    cache.put(req.url, res.clone()); 
+                    cache.put(req.url, res.clone());
                 }
                 return res;
             }).catch(() => new Response("Offline", { status: 503 }));
@@ -541,14 +529,12 @@ async function handleImageRequest(req) {
 // ── MEDIA REQUEST HANDLER ──
 // CRITICAL: This handler MUST never block playback.
 // Strategy: Try cache first → if cache hit, serve with range support.
-//           If ANYTHING fails (cache miss, read error, range error), 
+//           If ANYTHING fails (cache miss, read error, range error),
 //           fall through to network immediately.
 //           Background-cache the network response for next time.
 async function handleMediaRequest(event, req) {
     const url = new URL(req.url);
-    const pathParts = url.pathname.split('/').filter(Boolean);
-    const lastPart = pathParts.pop();
-    const trackId = lastPart ? lastPart.split('?')[0] : 'unknown';
+    const trackId = url.pathname.split('/').filter(Boolean).pop().split('?')[0];
 
     try {
         const cache = await caches.open(MEDIA_CACHE);

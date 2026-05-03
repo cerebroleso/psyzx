@@ -7,38 +7,102 @@ using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using System.Diagnostics;
 using Microsoft.AspNetCore.ResponseCompression;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
+using MySqlConnector;
 
+// ---------------------------------------------------------
+// PSYZX ENGINE PRE-FLIGHT DIAGNOSTICS
+// ---------------------------------------------------------
+Console.WriteLine("=================================================");
+Console.WriteLine("PSYZX CORE ENGINE: INITIALIZING SYSTEM RUNTIME");
+Console.WriteLine($"Boot Time: {DateTime.Now}");
+Console.WriteLine($"Runtime OS: {Environment.OSVersion}");
+Console.WriteLine($"Container ID: {Environment.MachineName}");
+Console.WriteLine($"Execution User: {Environment.UserName}");
+Console.WriteLine($"Deployment Directory: {Directory.GetCurrentDirectory()}");
+Console.WriteLine("=================================================");
 
 var builder = WebApplication.CreateBuilder(args);
 
+// ---------------------------------------------------------
+// STAGE 1: CONFIGURATION
+// ---------------------------------------------------------
+Console.WriteLine("\n[STAGE 1: CONFIGURATION]");
+Console.WriteLine("[CONFIG] Loading config.ini from filesystem...");
+builder.Configuration.AddIniFile("config.ini", optional: true, reloadOnChange: true);
+
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+if (string.IsNullOrEmpty(connectionString))
+{
+    Console.WriteLine("[CONFIG] CRITICAL: DefaultConnection string is null/empty. System failure imminent.");
+}
+else
+{
+    Console.WriteLine("[CONFIG] Connection string successfully parsed.");
+}
+
+// ---------------------------------------------------------
+// STAGE 2: SERVICE REGISTRATION
+// ---------------------------------------------------------
+Console.WriteLine("\n[STAGE 2: SERVICE REGISTRATION]");
+
+Console.WriteLine("[SERVICE] Initializing Response Compression (Brotli/Gzip)...");
 builder.Services.AddResponseCompression(options => {
     options.EnableForHttps = true;
     options.Providers.Add<BrotliCompressionProvider>();
 });
 
-builder.Configuration.AddIniFile("config.ini", optional: true, reloadOnChange: true);
-
-var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
-
+Console.WriteLine("[SERVICE] Configuring MariaDB with Pomelo EF Core...");
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseMySql(connectionString, ServerVersion.AutoDetect(connectionString)));
+{
+    // FIX: Hardcoding the version avoids the eager connection attempt during startup.
+    // 11.4.0 is a stable baseline for modern MariaDB containers.
+    var serverVersion = new MariaDbServerVersion(new Version(11, 4, 0));
+
+    options.UseMySql(connectionString, serverVersion, mysqlOptions =>
+    {
+        // This handles transient failures once the app is running
+        mysqlOptions.EnableRetryOnFailure(
+            maxRetryCount: 15,
+            maxRetryDelay: TimeSpan.FromSeconds(5),
+            errorNumbersToAdd: null);
+    });
+});
+
+Console.WriteLine("[SERVICE] Registering Manual MariaDB Health Probe...");
+builder.Services.AddHealthChecks()
+    .AddAsyncCheck("mariadb_check", async () => 
+    {
+        try 
+        {
+            using var connection = new MySqlConnection(connectionString);
+            await connection.OpenAsync();
+            return HealthCheckResult.Healthy("MariaDB is responding to pings.");
+        }
+        catch (Exception ex) 
+        {
+            return HealthCheckResult.Unhealthy($"MariaDB Ping Failed: {ex.Message}");
+        }
+    });
 
 builder.Services.AddHttpClient();
-
 builder.Services.AddScoped<LibraryScanner>();
 
+Console.WriteLine("[SERVICE] Configuring Authentication Middleware (Cookie-based)...");
 builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
     .AddCookie(options =>
     {
+        options.Cookie.Name = "psyzx_auth";
+        options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
         options.Events.OnRedirectToLogin = context =>
         {
+            Console.WriteLine($"[AUTH] Blocked Unauthorized Request: {context.Request.Path}");
             context.Response.StatusCode = 401;
             return Task.CompletedTask;
         };
     });
 
 builder.Services.AddAuthorization();
-
 builder.Services.AddSignalR();
 builder.Services.AddSingleton<IUserIdProvider, UserIdProvider>();
 
@@ -48,121 +112,159 @@ builder.Services.AddControllers().AddJsonOptions(options =>
 });
 
 builder.Logging.ClearProviders();
-// builder.Logging.AddSimpleConsole(options =>
-// {
-//     options.IncludeScopes = false;
-//     options.TimestampFormat = "[HH:mm:ss] ";
-//     options.SingleLine = true;
-// });
+builder.Logging.AddConsole();
+
+builder.Environment.WebRootPath = "wwwroot/psyzx-frontend/dist";
 
 var app = builder.Build();
 
-var currentPath = app.Configuration["MusicSettings:BasePath"] ?? "";
-if (!string.IsNullOrWhiteSpace(currentPath))
+// ---------------------------------------------------------
+// STAGE 3: DATABASE SCHEMA FORCING (THE BULLETPROOF LOOP)
+// ---------------------------------------------------------
+Console.WriteLine("\n[STAGE 3: DATABASE SCHEMA VERIFICATION]");
+using (var scope = app.Services.CreateScope())
 {
-    currentPath = Path.GetFullPath(currentPath);
-    var lastPathFile = "last_base_path.txt";
-    var lastPath = File.Exists(lastPathFile) ? File.ReadAllText(lastPathFile).Trim() : "";
+    var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    bool dbReady = false;
+    int attempt = 1;
+    int maxAttempts = 25; // Extended for headless cold starts
 
-    if (!string.IsNullOrEmpty(lastPath) && !string.Equals(lastPath, currentPath, StringComparison.OrdinalIgnoreCase))
-    {
-        Console.WriteLine($"\nWARNING: Directory changed from {lastPath} to {currentPath}");
-        Console.Write("Do you want to proceed? (y/n): ");
-        
-        try 
-        {
-            var response = Console.ReadLine();
-            if (response?.ToLower() != "y")
-            {
-                Environment.Exit(0);
-            }
-        }
-        catch (InvalidOperationException)
-        {
-            Console.WriteLine("Non-interactive environment detected. Bypassing prompt.");
-        }
-    }
-    File.WriteAllText(lastPathFile, currentPath);
-
-    if (!Directory.Exists(currentPath))
-    {
-        Directory.CreateDirectory(currentPath);
-    }
-
-    var ytdlpPath = Path.Combine(currentPath, "yt-dlp_linux");
-    var spotdlPath = Path.Combine(currentPath, "spotdl_linux");
-
-    using var httpClient = new HttpClient();
-
-    if (!File.Exists(ytdlpPath))
-    {
-        Console.WriteLine("Downloading yt-dlp_linux...");
-        var bytes = await httpClient.GetByteArrayAsync("https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux");
-        await File.WriteAllBytesAsync(ytdlpPath, bytes);
-    }
-
-    if (!File.Exists(spotdlPath))
-    {
-        Console.WriteLine("Downloading spotdl_linux...");
-        var bytes = await httpClient.GetByteArrayAsync("https://github.com/spotDL/spotify-downloader/releases/latest/download/spotdl-linux");
-        await File.WriteAllBytesAsync(spotdlPath, bytes);
-    }
-
-    try
-    {
-        var ytdlpInfo = new FileInfo(ytdlpPath);
-        ytdlpInfo.UnixFileMode |= UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute;
-        
-        var spotdlInfo = new FileInfo(spotdlPath);
-        spotdlInfo.UnixFileMode |= UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute;
-    }
-    catch
+    while (!dbReady && attempt <= maxAttempts)
     {
         try
         {
-            Process.Start(new ProcessStartInfo { FileName = "chmod", Arguments = $"+x \"{ytdlpPath}\"", CreateNoWindow = true })?.WaitForExit();
-            Process.Start(new ProcessStartInfo { FileName = "chmod", Arguments = $"+x \"{spotdlPath}\"", CreateNoWindow = true })?.WaitForExit();
+            Console.WriteLine($"[DB] Initialization Attempt {attempt}/{maxAttempts}...");
+            
+            // This creates the database and all tables (including Users) 
+            // defined in your DbContext if they do not exist.
+            await context.Database.EnsureCreatedAsync();
+            
+            if (await context.Database.CanConnectAsync())
+            {
+                Console.WriteLine("[DB] Connection confirmed. Schema verified.");
+                dbReady = true;
+            }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] WARNING: MariaDB not ready yet. Sleeping 5s...");
+            Console.WriteLine($"[DB] Diagnostics: {ex.Message}");
+            attempt++;
+            await Task.Delay(5000);
+        }
+    }
+
+    if (!dbReady)
+    {
+        Console.WriteLine("[DB] FATAL: Engine could not reach MariaDB after exhaustive retries. System abort.");
+        return; 
     }
 }
 
-app.UseDefaultFiles();
-app.UseStaticFiles();
+// ---------------------------------------------------------
+// STAGE 4: FILESYSTEM AND BINARY DIAGNOSTICS
+// ---------------------------------------------------------
+Console.WriteLine("\n[STAGE 4: FILESYSTEM DIAGNOSTICS]");
+var musicPath = app.Configuration["MusicSettings:BasePath"] ?? "/app/Music";
+musicPath = Path.GetFullPath(musicPath);
 
-app.UseResponseCompression();
-
-app.UseAuthentication();
-app.UseAuthorization();
-
-app.MapControllers().RequireAuthorization();
-
-app.MapHub<PlaybackHub>("/hubs/playback").RequireAuthorization();
-
-app.MapGet("/api/health", () =>
+if (!Directory.Exists(musicPath))
 {
-    bool ffmpegOk = false;
-    try
+    Console.WriteLine($"[FS] Directory {musicPath} missing. Creating now...");
+    Directory.CreateDirectory(musicPath);
+}
+else
+{
+    Console.WriteLine($"[FS] Music Directory Found: {musicPath}");
+}
+
+string[] binaries = { "yt-dlp_linux", "spotdl_linux" };
+foreach (var bin in binaries)
+{
+    var fullPath = Path.Combine(musicPath, bin);
+    if (File.Exists(fullPath))
     {
-        var process = Process.Start(new ProcessStartInfo { FileName = "ffmpeg", Arguments = "-version", RedirectStandardOutput = true, UseShellExecute = false });
-        process?.WaitForExit();
-        ffmpegOk = process?.ExitCode == 0;
+        Console.WriteLine($"[FS] Binary {bin} located.");
     }
-    catch { }
-    return new { status = "ok", os = "linux", ffmpegInstalled = ffmpegOk };
-}).AllowAnonymous();
+    else
+    {
+        Console.WriteLine($"[FS] CRITICAL: Binary {bin} is missing from {musicPath}");
+    }
+}
 
-_ = Task.Run(async () =>
-{
-    using var scope = app.Services.CreateScope();
-    var scanner = scope.ServiceProvider.GetRequiredService<LibraryScanner>();
-    await scanner.ScanAsync();
-});
+// ---------------------------------------------------------
+// STAGE 5: PIPELINE CONFIGURATION
+// ---------------------------------------------------------
+Console.WriteLine("\n[STAGE 5: PIPELINE CONFIGURATION]");
 
 app.UseCors(policy => policy
     .AllowAnyOrigin()
     .AllowAnyMethod()
     .AllowAnyHeader()
     .WithExposedHeaders("Content-Range", "Content-Length", "Accept-Ranges"));
+
+app.UseDefaultFiles();
+app.UseStaticFiles();
+app.UseResponseCompression();
+app.UseRouting();
+app.UseAuthentication();
+app.UseAuthorization();
+
+// High-detail Request Logger
+app.Use(async (context, next) =>
+{
+    var stopwatch = Stopwatch.StartNew();
+    await next();
+    stopwatch.Stop();
+    Console.WriteLine($"[REQ] {context.Request.Method} {context.Request.Path} -> {context.Response.StatusCode} ({stopwatch.ElapsedMilliseconds}ms)");
+});
+
+// ---------------------------------------------------------
+// STAGE 6: ENDPOINT MAPPING
+// ---------------------------------------------------------
+Console.WriteLine("[PIPELINE] Mapping API Endpoints and SignalR Hubs...");
+app.MapControllers().RequireAuthorization();
+app.MapHub<PlaybackHub>("/hubs/playback").RequireAuthorization();
+app.MapHealthChecks("/health");
+
+app.MapGet("/api/status", async (HealthCheckService healthService) =>
+{
+    var report = await healthService.CheckHealthAsync();
+    var dbEntry = report.Entries.FirstOrDefault(e => e.Key == "mariadb_check");
+    
+    return new 
+    { 
+        status = report.Status.ToString(),
+        db_connection = dbEntry.Value.Status.ToString(),
+        db_detail = dbEntry.Value.Description,
+        timestamp = DateTime.UtcNow
+    };
+}).AllowAnonymous();
+
+app.MapFallbackToFile("index.html");
+
+// ---------------------------------------------------------
+// STAGE 7: BACKGROUND THREADS
+// ---------------------------------------------------------
+_ = Task.Run(async () =>
+{
+    Console.WriteLine("[BG] System background workers idling for 10s...");
+    await Task.Delay(10000); 
+    try 
+    {
+        using var scope = app.Services.CreateScope();
+        var scanner = scope.ServiceProvider.GetRequiredService<LibraryScanner>();
+        Console.WriteLine("[BG] Commencing initial library synchronization...");
+        await scanner.ScanAsync();
+        Console.WriteLine("[BG] Synchronization cycle complete.");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[BG] ERROR: Background scan failed: {ex.Message}");
+    }
+});
+
+Console.WriteLine("\n[SYSTEM] Kestrel server is now listening for incoming connections.");
+Console.WriteLine("=================================================\n");
 
 app.Run();

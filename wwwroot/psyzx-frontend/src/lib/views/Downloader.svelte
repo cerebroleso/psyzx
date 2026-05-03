@@ -2,74 +2,35 @@
     import { onMount, onDestroy } from 'svelte';
     import { fade } from 'svelte/transition';
     import { api } from '../api.js';
-    import { activeDownloads, appSessionVersion } from '../../store.js';
+    import { activeDownloads } from '../../store.js';
 
     let dlUrl = '';
-    let queueStatus = 'Server Ready';
     let dlStatus = '';
-    let isProcessing = false;
-    let queueInterval;
+
+    // This is the magic: it reacts to the global poller in App.svelte
+    $: isProcessing = $activeDownloads.length > 0;
+
+    // Dynamically build the status string based on the store
+    $: queueStatus = isProcessing
+        ? `<div style="color: #fbbf24; margin-bottom: 8px;">⚙️ Processing Track...</div>`
+        : `Server Ready`;
+
     let placeholderInterval;
-    
     let placeholder = "https://open.spotify.com/track/..."
 
     const swap_placeholder = async () => {
-        try {
-            if (placeholder.includes("spotify")) {
-                placeholder = "https://youtube.com/watch?v=..."
-            }
-            else {
-                placeholder = "https://open.spotify.com/track/..."
-            }
-        } catch(e) {}
+        if (placeholder.includes("spotify")) {
+            placeholder = "https://youtube.com/watch?v=..."
+        } else {
+            placeholder = "https://open.spotify.com/track/..."
+        }
     }
 
-    let wasProcessing = false;
-
-    const updateQueue = async () => {
-        try {
-            const data = await api.getQueue();
-            if (data) {
-                if (data.active > 0 || data.queued > 0) {
-                    isProcessing = true;
-                    wasProcessing = true;
-                    queueStatus = `<div style="color: #fbbf24; margin-bottom: 8px;">⚙️ Processing: ${data.active} | ⏳ Queued: ${data.queued}</div><div style"">🎵 Track: ${data.currentTrack || "Fetching metadata..."}</div>`;
-                    
-                    // Update activeDownloads store for Library grid spinners
-                    if (data.currentTrack) {
-                        activeDownloads.update(dl => {
-                            // Prevent duplicates — replace if same track name
-                            const exists = dl.find(d => d.name === data.currentTrack);
-                            if (!exists) {
-                                return [...dl, { id: `dl-${Date.now()}`, name: data.currentTrack, coverPath: null, progress: 0, type: 'album' }];
-                            }
-                            return dl;
-                        });
-                    }
-                } else {
-                    isProcessing = false;
-                    queueStatus = `Server Ready`;
-                    
-                    // Download just finished — trigger library refresh
-                    if (wasProcessing) {
-                        wasProcessing = false;
-                        activeDownloads.set([]); // Clear spinner cards
-                        appSessionVersion.set(Date.now()); // Force reactive image refreshes
-                        window.dispatchEvent(new CustomEvent('library-updated'));
-                    }
-                }
-            }
-        } catch(e) {}
-    };
-
     onMount(() => {
-        updateQueue();
-        queueInterval = setInterval(updateQueue, 1500);
-        placeholderInterval = setInterval(swap_placeholder, 3000);    
+        placeholderInterval = setInterval(swap_placeholder, 3000);
     });
 
     onDestroy(() => {
-        clearInterval(queueInterval);
         clearInterval(placeholderInterval);
     });
 
@@ -78,48 +39,48 @@
         dlStatus = '<span style="color: var(--text-secondary);">Sending to server...</span>';
         try {
             const res = await api.ytdlp({ url: dlUrl });
-            if (res.ok) { 
-                dlStatus = `<span style="color: #1db954;">${res.data.text}</span>`; 
-                dlUrl = ''; 
-                updateQueue(); 
-            } else { 
-                dlStatus = `<span style="color: #ef4444;">Error: ${res.data.text}</span>`; 
+            if (res.ok) {
+                // Tell App.svelte to speed up polling immediately
+                window.dispatchEvent(new CustomEvent('poll-check-immediate'));
+                dlUrl = '';
+                dlStatus = `<span style="color: #1db954;">Added to queue.</span>`;
+            } else {
+                dlStatus = `<span style="color: #ef4444;">Error starting download.</span>`;
             }
-        } catch(e) { 
-            dlStatus = `<span style="color: #ef4444;">Network error.</span>`; 
+        } catch(e) {
+            dlStatus = `<span style="color: #ef4444;">Network error.</span>`;
         }
     };
 
     const stopDownload = async () => {
         try {
-            const data = await api.stopQueue();
-            dlStatus = `<span style="color: #ef4444;">${data.text}</span>`;
-            updateQueue();
-        } catch(e) { 
-            dlStatus = `<span style="color: #ef4444;">Stop action denied.</span>`; 
+            await api.stopQueue();
+            dlStatus = `<span style="color: #ef4444;">Queue cleared.</span>`;
+            // Trigger immediate poll to update UI
+            window.dispatchEvent(new CustomEvent('poll-check-immediate'));
+        } catch(e) {
+            dlStatus = `<span style="color: #ef4444;">Stop action denied.</span>`;
         }
     };
 
     const handleKeyDown = (e) => {
-        if (e.key === 'Enter') {
-            startDownload();
-        }
+        if (e.key === 'Enter') startDownload();
     };
 </script>
 
 <div class="page-container">
     <h2 class="title">Import Music</h2>
     <p class="subtitle">Paste Youtube or Spotify link. <br><br> The server will manage the download and background operations.</p>
-    
+
     <div class="card">
         <div class="input-wrapper">
-            <input 
-                type="text" 
-                bind:value={dlUrl} 
+            <input
+                type="text"
+                bind:value={dlUrl}
                 on:keydown={handleKeyDown}
                 class="main-input"
             >
-            
+
             {#if !dlUrl}
                 <div class="ghost-container">
                     {#key placeholder}
@@ -130,7 +91,7 @@
                 </div>
             {/if}
         </div>
-        
+
         <div class="button-group">
             <button on:click={startDownload} class="btn-primary">
                 <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" x2="12" y1="15" y2="3"></line></svg>
@@ -140,7 +101,7 @@
                 <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect></svg>
             </button>
         </div>
-        
+
         <div class="status-box" style="border-color: {isProcessing ? 'rgba(251, 191, 36, 0.3)' : 'rgba(217, 70, 239, 0.3)'}">
             {@html queueStatus}
         </div>

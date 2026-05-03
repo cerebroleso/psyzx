@@ -8,7 +8,7 @@
     import RightSidebar from './lib/RightSidebar.svelte';
     import Footer from './lib/Footer.svelte';
     import InitialLoader from './lib/InitialLoader.svelte';
-    
+
     import Library from './lib/views/Library.svelte';
     import Artist from './lib/views/Artist.svelte';
     import Album from './lib/views/Album.svelte';
@@ -23,11 +23,12 @@
     import Playlists from './lib/views/Playlists.svelte';
     import Playlist from './lib/views/Playlist.svelte';
     import Auth from './lib/views/Auth.svelte';
-    
+
     import { hasOfflineCredentials } from './lib/offlineAuth.js';
     import { api } from './lib/api.js';
+    import { unlockAudioContext, reinitAudioEngine } from './lib/audio.js';
     import { allTracks, artistsMap, albumsMap, accentColor, isGlobalColorActive, isMaxGlassActive, appSessionVersion, activeDownloads } from './store.js';
-    
+
     let currentHash = '';
     let isMobileSidebarOpen = false;
     let isScrolled = false;
@@ -35,19 +36,19 @@
     let isFirstLoad = false;
     let isFullPlayerOpen = false;
     let apiError = null;
-    
+
     let requiresLogin = false;
     let isLoggingIn = false;
 
     $: routeKey = currentHash.startsWith('#search/') ? '#search' : currentHash;
 
-    $: navContextTitle = currentHash.startsWith('#album/') ? 'Album' 
+    $: navContextTitle = currentHash.startsWith('#album/') ? 'Album'
                        : currentHash.startsWith('#artist/') ? 'Artist'
                        : currentHash.startsWith('#search/') ? 'Search'
                        : currentHash.startsWith('#playlist/') ? 'Playlist'
                        : currentHash === '#playlists' ? 'Playlists'
                        : currentHash === '#account' ? 'My Account'
-                       : currentHash === '#settings' ? 'Settings' 
+                       : currentHash === '#settings' ? 'Settings'
                        : currentHash === '#top' ? 'Top Played'
                        : currentHash === '#wrapped' ? 'My Wrapped'
                        : currentHash === '#all' ? 'The Pool'
@@ -100,15 +101,15 @@
         data.forEach(track => {
             if (!track) return;
             track.playCount = statsMap.get(track.id) || track.playCount || 0;
-            
+
             const album = track.album || { id: 9999, title: 'Unknown Album', coverPath: '' };
             const artist = album.artist || { id: 9999, name: 'Unknown Artist', imagePath: '' };
-            
+
             if (!newArtists.has(artist.id)) newArtists.set(artist.id, { id: artist.id, name: artist.name, imagePath: artist.imagePath, albums: new Set() });
             newArtists.get(artist.id).albums.add(album.id);
-            
+
             if (!newAlbums.has(album.id)) newAlbums.set(album.id, { id: album.id, title: album.title, coverPath: album.coverPath, releaseYear: album.releaseYear, playCount: album.playCount || 0, artistId: artist.id, artistName: artist.name, tracks: [] });
-            
+
             const currentAlbum = newAlbums.get(album.id);
             if (!currentAlbum.tracks.some(t => t.id === track.id)) {
                 currentAlbum.tracks.push(track);
@@ -135,7 +136,7 @@
         bootStatus = "Verifying Identity...";
         console.group('[AUTH DEBUG] bootEngine() Initialization');
         console.log('[AUTH DEBUG] Calling api.checkAuth()...');
-        
+
         let isAuth = false;
         try {
             isAuth = await api.checkAuth();
@@ -158,19 +159,19 @@
         }
         // ──────────────────────────────
 
-        if (!isAuth) { 
+        if (!isAuth) {
             console.warn('[AUTH DEBUG] Not authenticated. Triggering login screen.');
             console.groupEnd();
             clearInterval(trickle);
-            requiresLogin = true; 
-            isLoading = false; 
-            return; 
+            requiresLogin = true;
+            isLoading = false;
+            return;
         }
-        
+
         console.log('[AUTH DEBUG] Authentication confirmed. Booting core...');
         console.groupEnd();
-        
-        bootProgress = 25; 
+
+        bootProgress = 25;
 
         try {
             bootStatus = "Checking core playlists...";
@@ -187,18 +188,18 @@
             const cachedLocal = await localDB.get('psyzx_library_cache');
             if (cachedLocal?.length > 0) {
                 buildLibrary(cachedLocal, null);
-                bootProgress = 45; 
+                bootProgress = 45;
             }
 
             bootStatus = "Syncing tracks from server...";
             let data = await api.getTracks();
-            bootProgress = 85; 
+            bootProgress = 85;
 
             if (data?.length > 0) {
                 bootStatus = "Optimizing library...";
                 localDB.set('psyzx_library_cache', data);
-                bootProgress = 95; 
-                
+                bootProgress = 95;
+
                 let statsData = null;
                 try { statsData = await api.getStats(); } catch(e) {}
                 buildLibrary(data, statsData);
@@ -207,7 +208,7 @@
             console.error(e);
         } finally {
             clearInterval(trickle);
-            bootProgress = 100; 
+            bootProgress = 100;
             bootStatus = "Ready.";
             setTimeout(() => {
                 isLoading = false;
@@ -218,25 +219,25 @@
 
     const handleRefresh = async () => {
         isLoading = true;
-        isFirstLoad = true; 
+        isFirstLoad = true;
         bootProgress = 10;
         bootStatus = "Commanding C# to scan /Music...";
-        
+
         try {
             await api.scanLibrary();
             bootProgress = 50;
-            
+
             bootStatus = "Downloading fresh tracks...";
             let data = await api.getTracks();
             bootProgress = 80;
-            
+
             if (data?.length > 0) {
                 bootStatus = "Rebuilding Library...";
                 await localDB.set('psyzx_library_cache', data);
-                
+
                 let statsData = null;
                 try { statsData = await api.getStats(); } catch(e) {}
-                
+
                 buildLibrary(data, statsData);
             }
         } catch (error) {
@@ -304,12 +305,61 @@
             }
         } catch { /* silent — server may be offline */ }
     };
-    
+
+    const stopPolling = () => {
+        if (globalQueueInterval) {
+            clearInterval(globalQueueInterval);
+            globalQueueInterval = null;
+        }
+    };
+
+    const startPolling = (ms = 5000) => {
+        stopPolling();
+        // Only poll if the user is logged in and the tab is visible
+        if (requiresLogin) return;
+
+        globalQueueInterval = setInterval(async () => {
+            try {
+                const data = await api.getQueue();
+                if (!data) return;
+
+                const hasWork = data.active > 0 || data.queued > 0;
+
+                if (hasWork) {
+                    // If we found work, speed up the polling to 2s if we were slow
+                    if (ms !== 2000) startPolling(2000);
+
+                    activeDownloads.set([{
+                        id: 'current',
+                        name: data.currentTrack || "Downloading...",
+                        progress: 0
+                    }]);
+                } else {
+                    // If no work, slow down to 10s to save battery/bandwidth
+                    if (ms !== 10000) startPolling(10000);
+
+                    if ($activeDownloads.length > 0) {
+                        activeDownloads.set([]);
+                        window.dispatchEvent(new CustomEvent('library-updated'));
+                    }
+                }
+            } catch (e) {
+                // If we hit a 401, stop polling entirely
+                if (e.status === 401) stopPolling();
+            }
+        }, ms);
+    };
+
+    // Start polling only after successful boot/auth
+    $: if (!requiresLogin && !isLoading && !globalQueueInterval) {
+        startPolling(5000); // Start with a conservative 5s check
+    }
+
     onMount(() => {
         currentHash = window.location.hash;
-        const handleHashChange = () => { 
-            currentHash = window.location.hash; 
-            isMobileSidebarOpen = false; 
+        const handleHashChange = () => {
+            currentHash = window.location.hash;
+            isMobileSidebarOpen = false;
             window.scrollTo({ top: 0, behavior: 'smooth' });
         };
         window.addEventListener('hashchange', handleHashChange);
@@ -323,13 +373,25 @@
         window.addEventListener('library-updated', silentLibraryRefresh);
 
         // Start global download queue polling
+        window.addEventListener('poll-check-immediate', () => startPolling(2000));
         pollDownloadQueue();
-        globalQueueInterval = setInterval(pollDownloadQueue, 2000);
+
+        // Aggressive AudioContext unlocking for iOS / first-time playback
+        const bootstrapAudio = () => {
+            unlockAudioContext();
+            reinitAudioEngine();
+            window.removeEventListener('pointerdown', bootstrapAudio, { capture: true });
+            window.removeEventListener('keydown', bootstrapAudio, { capture: true });
+        };
+        window.addEventListener('pointerdown', bootstrapAudio, { capture: true, passive: true });
+        window.addEventListener('keydown', bootstrapAudio, { capture: true, passive: true });
 
         return () => {
             window.removeEventListener('hashchange', handleHashChange);
             window.removeEventListener('ios-hardware-deadlock', triggerWarning);
             window.removeEventListener('library-updated', silentLibraryRefresh);
+            window.removeEventListener('pointerdown', bootstrapAudio, { capture: true });
+            window.removeEventListener('keydown', bootstrapAudio, { capture: true });
             if (globalQueueInterval) clearInterval(globalQueueInterval);
         };
     });
@@ -340,7 +402,7 @@
     // --- HEAVILY MODIFIED AUTH EXECUTION ---
     const executeAuth = async () => {
         console.group(`[AUTH DEBUG] executeAuth() - Mode: ${isRegisterMode ? 'REGISTER' : 'LOGIN'}`);
-        
+
         const trimmedUsername = loginUsername.trim();
         console.log(`[AUTH DEBUG] Raw Input -> User: "${loginUsername}", Trimmed: "${trimmedUsername}", Password Length: ${loginPassword.length}`);
 
@@ -350,10 +412,10 @@
             console.groupEnd();
             return;
         }
-        
+
         isLoggingIn = true;
         loginErrorMsg = '';
-        
+
         const credentials = { username: trimmedUsername, password: loginPassword };
         console.log('[AUTH DEBUG] Sending credentials payload to API...', { username: credentials.username, password: '***' });
 
@@ -372,7 +434,7 @@
                 } else {
                     console.error('[AUTH DEBUG] Registration FAILED.');
                     let errorText = "Username already taken or server error.";
-                    
+
                     // Attempt to parse out exact server error
                     if (res && typeof res.json === 'function') {
                         try {
@@ -399,14 +461,14 @@
                     requiresLogin = false;
                     isLoggingIn = false; // reset cleanly
                     isLoading = true;
-                    
+
                     console.log('[AUTH DEBUG] Re-triggering bootEngine()...');
                     console.groupEnd();
                     bootEngine();
                 } else {
                     console.error('[AUTH DEBUG] Login FAILED. Denied by server.');
                     let errorText = "Invalid credentials. Retry.";
-                    
+
                     // Attempt to parse out exact server error
                     if (res && typeof res.json === 'function') {
                         try {
@@ -463,17 +525,17 @@
             <Sidebar bind:isMobileOpen={isMobileSidebarOpen} {currentHash} />
 
             <main id="main-view" on:scroll={handleScroll}>
-                <Topbar 
-                    {isScrolled} 
-                    navContext={navContextTitle} 
-                    currentHash={currentHash} 
-                    on:toggleSidebar={() => isMobileSidebarOpen = !isMobileSidebarOpen} 
-                    on:refresh={handleRefresh} 
-                />                
+                <Topbar
+                    {isScrolled}
+                    navContext={navContextTitle}
+                    currentHash={currentHash}
+                    on:toggleSidebar={() => isMobileSidebarOpen = !isMobileSidebarOpen}
+                    on:refresh={handleRefresh}
+                />
                 <div id="main-content" style="flex: 1; display: grid; min-width: 0; overflow-x: hidden;">
                     {#key routeKey}
                     <div in:fade={{duration: 250, delay: 100}} out:fade={{duration: 100}} style="grid-area: 1 / 1; display: flex; flex-direction: column; min-height: 100%; min-width: 0;">
-                        
+
                         <div style="flex-grow: 1;">
                             {#if currentHash === '' || currentHash === '#' || currentHash === '#/'}
                                 <Library />
@@ -485,7 +547,7 @@
                                 <Search query={decodeURIComponent(currentHash.substring(8))} />
                             {:else if currentHash === '#playlists'}
                                 <Playlists />
-                            {:else if currentHash.startsWith('#playlist/')} 
+                            {:else if currentHash.startsWith('#playlist/')}
                                 <Playlist playlistId={currentHash.split('/')[1]} />
                             {:else if currentHash === '#account'}
                                 <Account />
@@ -507,7 +569,7 @@
                         </div>
 
                         <Footer />
-                        
+
                     </div>
                     {/key}
                 </div>
@@ -524,13 +586,13 @@
 {/if}
 
 <!-- {#if showDeadlockWarning}
-    <div 
-        class="system-modal-backdrop" 
-        transition:fade={{duration: 200}} 
+    <div
+        class="system-modal-backdrop"
+        transition:fade={{duration: 200}}
         style="position: fixed; inset: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(8px); z-index: 999999; display: flex; align-items: center; justify-content: center; padding: 24px;"
     >
-        <div 
-            class="system-modal-card" 
+        <div
+            class="system-modal-card"
             transition:scale={{start: 0.9, duration: 250, opacity: 0}}
             style="background: #1c1c1e; border: 1px solid rgba(255,255,255,0.1); border-radius: 20px; padding: 24px; text-align: center; max-width: 320px; box-shadow: 0 25px 50px rgba(0,0,0,0.5);"
         >
@@ -541,17 +603,17 @@
                     <line x1="12" y1="17" x2="12.01" y2="17"></line>
                 </svg>
             </div>
-            
+
             <h3 style="margin: 0 0 8px; font-size: 18px; color: white;">Audio System Locked</h3>
-            
+
             <p style="margin: 0 0 16px; font-size: 14px; color: rgba(255,255,255,0.7); line-height: 1.4;">
                 Apple's iOS has locked your device's audio hardware. This is a known WebKit bug that prevents playback.
             </p>
             <p style="margin: 0 0 24px; font-size: 15px; color: white; font-weight: 600;">
                 Please reboot your iPhone to clear the hardware cache.
             </p>
-            
-            <button 
+
+            <button
                 on:click={() => showDeadlockWarning = false}
                 style="background: white; color: black; border: none; border-radius: 12px; padding: 12px 24px; font-weight: 600; font-size: 16px; width: 100%; cursor: pointer;"
             >
@@ -601,7 +663,7 @@
         border-right: 1px solid rgba(255,255,255,0.05);
     }
 
-    :global(.app-row.max-glass-layout > aside), 
+    :global(.app-row.max-glass-layout > aside),
     :global(.app-row.max-glass-layout > main#main-view) {
         border-radius: 24px !important;
         background: rgba(255, 255, 255, 0.05) !important;
@@ -622,10 +684,10 @@
     }
 
     :global(main#main-view) { flex: 1; overflow-y: auto; position: relative; min-width: 0; overflow-x: hidden; }
-    :global(#topbar) { 
-        position: sticky !important; 
-        top: 0 !important; 
-        z-index: 10000 !important; 
+    :global(#topbar) {
+        position: sticky !important;
+        top: 0 !important;
+        z-index: 10000 !important;
         transition: background 0.3s ease, border-bottom 0.3s ease, backdrop-filter 0.3s ease, box-shadow 0.3s ease !important;
     }
 
@@ -662,32 +724,32 @@
 
 
     #loader-overlay {
-        position: fixed; 
-        inset: 0; 
+        position: fixed;
+        inset: 0;
         background: rgba(5, 5, 5, 0.8);
-        backdrop-filter: blur(20px); 
+        backdrop-filter: blur(20px);
         -webkit-backdrop-filter: blur(20px);
-        display: flex; 
-        align-items: center; 
-        justify-content: center; 
+        display: flex;
+        align-items: center;
+        justify-content: center;
         z-index: 999999;
     }
 
     .ios-spinner {
-        position: relative; 
-        width: 36px; 
+        position: relative;
+        width: 36px;
         height: 36px;
         display: inline-block;
     }
 
     .ios-spinner div {
-        position: absolute; 
-        left: 46%; 
+        position: absolute;
+        left: 46%;
         top: 10%;
-        width: 8%; 
+        width: 8%;
         height: 26%;
         background: rgba(255, 255, 255, 0.9);
-        border-radius: 50px; 
+        border-radius: 50px;
         opacity: 0;
         animation: ios-fade 1s linear infinite;
         transform-origin: 50% 150%;
@@ -718,9 +780,9 @@
             height: calc(100dvh - 24px) !important;
             width: calc(100vw - 24px) !important;
             border-radius: 20px !important;
-            
+
             pointer-events: none;
-            transition: pointer-events 0s linear 0.3s; 
+            transition: pointer-events 0s linear 0.3s;
         }
 
         :global(.app-row.max-glass-layout > aside:first-child.open) {
@@ -738,9 +800,9 @@
     }
 
     :global(.max-glass-layout .card),
-    :global(.max-glass-layout .album-card), 
-    :global(.max-glass-layout .artist-card), 
-    :global(.max-glass-layout .playlist-card), 
+    :global(.max-glass-layout .album-card),
+    :global(.max-glass-layout .artist-card),
+    :global(.max-glass-layout .playlist-card),
     :global(.max-glass-layout .grid-item),
     :global(.max-glass-layout .track-item) {
         background: var(--surface-color) !important;
@@ -764,8 +826,8 @@
         overflow: hidden !important;
         pointer-events: none !important; /* Prevents clicking background while player is open */
         filter: brightness(0.6) !important;
-        transition: transform 0.8s cubic-bezier(0.32, 0.72, 0, 1), 
-                    filter 0.8s ease, 
+        transition: transform 0.8s cubic-bezier(0.32, 0.72, 0, 1),
+                    filter 0.8s ease,
                     border-radius 0.8s ease !important;
     }
 

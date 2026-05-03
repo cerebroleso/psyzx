@@ -354,7 +354,7 @@
       preloadNextUrl(streamUrl);
     } else {
       loadAndPlayUrl(streamUrl, track?.id);
-      
+
       if (track && track.durationSeconds > 0) {
         playerDuration.set(track.durationSeconds);
       }
